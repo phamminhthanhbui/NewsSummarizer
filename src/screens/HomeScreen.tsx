@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FEEDS, fetchAllFeeds } from '../services/feeds';
 import type { FeedItem } from '../types';
-import { Color, Font } from '../constants/theme';
+import { Color, Font, Radius, Shadow } from '../constants/theme';
 import ArticleCard from '../components/ArticleCard';
 import FeaturedCard from '../components/FeaturedCard';
 import SourceTabs from '../components/SourceTabs';
@@ -42,32 +43,41 @@ export default function HomeScreen({ navigation }: Props) {
 
   const goArticle = (item: FeedItem) => navigation.navigate('Article', { item });
 
-  // Filter by source
   const filtered = source === 'Tất cả' ? items : items.filter((i) => i.source === source);
-
-  // Rhythm: separate items with images and items without
   const withImg = filtered.filter((i) => i.image);
-  const withoutImg = filtered.filter((i) => !i.image);
-
-  // Hero = first with-image item
   const hero = withImg[0] || null;
-  // Rest for interleaved list
   const rest = filtered.filter((i) => i !== hero);
 
-  // Render item: interleave thumbnail cards every ~5 items
-  const renderItem = ({ item: r, index }: { item: FeedItem; index: number }) => (
-    <ArticleCard item={r} onPress={goArticle} />
-  );
+  const renderSkeleton = () => <SkeletonCard />;
+  const renderItem = ({ item: r }: { item: FeedItem }) => <ArticleCard item={r} onPress={goArticle} />;
+
+  // Header with stats
+  const stats = {
+    total: items.length,
+    sources: new Set(items.map((i) => i.source)).size,
+  };
 
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <View style={styles.brandRow}>
-          <Text style={styles.logo}>📰</Text>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <View style={styles.headerLeft}>
+          <View style={styles.logoBadge}>
+            <Ionicons name="newspaper" size={20} color="#FFF" />
+          </View>
           <Text style={styles.brand}>NewsSummarizer</Text>
         </View>
-        <Text style={styles.date}>{today()}</Text>
+        <View style={styles.headerRight}>
+          <View style={styles.dateWrap}>
+            <Ionicons name="calendar-outline" size={13} color="rgba(255,255,255,0.7)" />
+            <Text style={styles.date}>{today()}</Text>
+          </View>
+          <View style={styles.statsPill}>
+            <Text style={styles.stat}>{stats.total}</Text>
+            <Text style={styles.statDot}>·</Text>
+            <Text style={styles.stat}>{stats.sources} nguồn</Text>
+          </View>
+        </View>
       </View>
 
       {/* Source tabs */}
@@ -83,31 +93,33 @@ export default function HomeScreen({ navigation }: Props) {
           keyExtractor={(item, i) => `${item.link}-${i}`}
           renderItem={renderItem}
           ListHeaderComponent={
-            <View>
+            <View style={styles.listHeader}>
               {/* Hero */}
               {hero && (
-                <>
-                  <View style={{ paddingTop: 10, paddingHorizontal: 12 }}>
-                    <FeaturedCard item={hero} onPress={goArticle} />
-                  </View>
-                  <View style={{ height: 4 }} />
-                </>
+                <View style={styles.heroWrap}>
+                  <FeaturedCard item={hero} onPress={goArticle} />
+                </View>
               )}
               <SectionHeader title="TIN MỚI NHẤT" />
+            </View>
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <View style={styles.emptyIconBadge}>
+                <Ionicons name="file-tray-outline" size={32} color={Color.textMuted} />
+              </View>
+              <Text style={styles.emptyText}>Không có bài báo nào</Text>
+              <Text style={styles.emptySub}>Thay đổi nguồn hoặc kéo để tải lại</Text>
+              <TouchableOpacity style={styles.emptyBtn} onPress={onRefresh} activeOpacity={0.8}>
+                <Ionicons name="refresh" size={15} color="#FFF" />
+                <Text style={styles.emptyBtnText}>Tải lại</Text>
+              </TouchableOpacity>
             </View>
           }
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Color.primary} colors={[Color.primary]} />
           }
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>📭</Text>
-              <Text style={styles.emptyText}>Không có bài báo nào</Text>
-              <TouchableOpacity style={styles.emptyBtn} onPress={load}>
-                <Text style={styles.emptyBtnText}>Thử lại</Text>
-              </TouchableOpacity>
-            </View>
-          }
+          contentContainerStyle={styles.listContent}
         />
       )}
     </View>
@@ -116,22 +128,71 @@ export default function HomeScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Color.bg },
+
+  // Header
   header: {
     backgroundColor: Color.primary,
     paddingHorizontal: 16,
-    paddingBottom: 14,
+    paddingBottom: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  logo: { fontSize: 22 },
-  brand: { fontSize: 20, fontWeight: '800', color: '#FFF', letterSpacing: -0.3 },
-  date: { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
-  skelWrap: { paddingTop: 4 },
-  empty: { paddingTop: 60, alignItems: 'center', gap: 8 },
-  emptyIcon: { fontSize: 32 },
-  emptyText: { fontSize: 14, color: Color.textMuted },
-  emptyBtn: { marginTop: 6, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8, backgroundColor: Color.primary },
-  emptyBtnText: { color: '#FFF', fontWeight: '600', fontSize: 13 },
+  headerLeft: { flex: 1 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  logoBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brand: { fontSize: 22, fontWeight: '800', color: '#FFF', letterSpacing: -0.4, marginTop: 8 },
+  dateWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  date: { fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: '500' },
+  statsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  stat: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+  statDot: { color: 'rgba(255,255,255,0.5)' },
+
+  // Skeleton
+  skelWrap: { paddingTop: 8 },
+
+  // List
+  listContent: { paddingBottom: 24 },
+  listHeader: { paddingHorizontal: 12, paddingTop: 8 },
+  heroWrap: { marginBottom: 8 },
+
+  // Empty
+  empty: { paddingTop: 100, alignItems: 'center', gap: 12 },
+  emptyIconBadge: {
+    width: 80,
+    height: 80,
+    borderRadius: 999,
+    backgroundColor: Color.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyText: { fontSize: 16, fontWeight: '700', color: Color.text },
+  emptySub: { fontSize: 13, color: Color.textMuted },
+  emptyBtn: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: Color.primary,
+    ...Shadow.card,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  emptyBtnText: { color: '#FFF', fontWeight: '700', fontSize: 13 },
 });

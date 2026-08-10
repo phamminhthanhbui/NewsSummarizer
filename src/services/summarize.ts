@@ -1,31 +1,159 @@
-// NVIDIA NIM API — OpenAI-compatible endpoint
-// ponytail: public CORS proxy for web; native app doesn't need it
-const CORS_PROXY = 'https://corsproxy.io/?';
-const NIM_BASE = 'https://integrate.api.nvidia.com/v1';
+// Multi-LLM provider support (OpenAI-compatible endpoints + Anthropic + Google)
+// ponytail: unified interface, minimal branching
 
-export const NIM_MODELS = [
-  { id: 'meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (nhanh, miễn phí)' },
-  { id: 'mistralai/mistral-7b-instruct-v0.3', label: 'Mistral 7B (nhanh)' },
-  { id: 'google/gemma-3-12b-it', label: 'Gemma 3 12B' },
-  { id: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (mạnh)' },
-  { id: 'mistralai/mistral-large-2-instruct', label: 'Mistral Large 2 (mạnh nhất)' },
+import { KEYS } from './storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export type LLMProvider = 'nvidia' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'custom';
+
+export interface ProviderConfig {
+  id: LLMProvider;
+  label: string;
+  baseUrl: string;
+  models: { id: string; label: string }[];
+  needsKey: boolean;
+  keyStorageKey: keyof typeof KEYS;
+  // For custom: user provides baseUrl
+  supportsCustomUrl?: boolean;
+}
+
+export const PROVIDERS: ProviderConfig[] = [
+  {
+    id: 'nvidia',
+    label: 'NVIDIA NIM',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    models: [
+      { id: 'meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (nhanh, miễn phí)' },
+      { id: 'mistralai/mistral-7b-instruct-v0.3', label: 'Mistral 7B (nhanh)' },
+      { id: 'google/gemma-3-12b-it', label: 'Gemma 3 12B' },
+      { id: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (mạnh)' },
+      { id: 'mistralai/mistral-large-2-instruct', label: 'Mistral Large 2 (mạnh nhất)' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'apiKey',
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    models: [
+      { id: 'gpt-4o-mini', label: 'GPT-4o Mini (rẻ, nhanh)' },
+      { id: 'gpt-4o', label: 'GPT-4o (mạnh)' },
+      { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+      { id: 'gpt-4.1', label: 'GPT-4.1' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'openaiKey',
+  },
+  {
+    id: 'anthropic',
+    label: 'Anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    models: [
+      { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku (nhanh, rẻ)' },
+      { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (cân bằng)' },
+      { id: 'claude-3-opus-20240229', label: 'Claude 3 Opus (mạnh nhất)' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'anthropicKey',
+  },
+  {
+    id: 'google',
+    label: 'Google (Gemini)',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    models: [
+      { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (nhanh, miễn phí)' },
+      { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro (mạnh)' },
+      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'googleKey',
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    models: [
+      { id: 'meta-llama/llama-3.1-8b-instruct:free', label: 'Llama 3.1 8B (free)' },
+      { id: 'google/gemma-2-9b-it:free', label: 'Gemma 2 9B (free)' },
+      { id: 'mistralai/mistral-7b-instruct:free', label: 'Mistral 7B (free)' },
+      { id: 'meta-llama/llama-3.1-70b-instruct', label: 'Llama 3.1 70B' },
+      { id: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet' },
+      { id: 'openai/gpt-4o', label: 'GPT-4o' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'openrouterKey',
+  },
+  {
+    id: 'custom',
+    label: 'Custom (OpenAI-compatible)',
+    baseUrl: '',
+    models: [{ id: 'auto', label: 'Tự động (model server)' }],
+    needsKey: true,
+    keyStorageKey: 'customKey',
+    supportsCustomUrl: true,
+  },
 ];
 
-// Core: summarize article text via NVIDIA NIM
-export async function summarizeWithNvidia(
-  articleText: string,
-  apiKey: string,
-  model: string = 'meta/llama-3.1-8b-instruct',
-): Promise<string> {
-  const prompt = `Tóm tắt bài báo sau bằng tiếng Việt. Giữ các ý chính, số liệu quan trọng. Dùng gạch đầu dòng (-). Tối đa 5 ý. Chỉ trả về các ý tóm tắt, không kèm lời dẫn.`;
+export function getProviderConfig(provider: LLMProvider): ProviderConfig | undefined {
+  return PROVIDERS.find((p) => p.id === provider);
+}
 
-  const res = await fetch(`${CORS_PROXY + encodeURIComponent(`${NIM_BASE}/chat/completions`)}`, {
-    method: 'POST',
-    headers: {
+export function getModelsForProvider(provider: LLMProvider): { id: string; label: string }[] {
+  return getProviderConfig(provider)?.models || [];
+}
+
+// Legacy export for backward compat
+export const NIM_MODELS = getModelsForProvider('nvidia');
+
+// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint
+export async function summarizeWithProvider(
+  articleText: string,
+  provider: LLMProvider,
+  apiKey: string,
+  model: string,
+  customBaseUrl?: string,
+): Promise<string> {
+  const prompt = `Bạn là biên tập viên tóm tắt tin tức. Tóm tắt bài báo sau bằng tiếng Việt, đầy đủ và mạch lạc, theo cấu trúc:
+- Mở đầu: 1-2 câu nêu sự kiện chính và bối cảnh.
+- Nội dung chính: dùng gạch đầu dòng (-) liệt kê các ý quan trọng, giữ nguyên số liệu, tên riêng, địa điểm, thời gian.
+- Kết luận: 1-2 câu nêu kết quả hoặc ý nghĩa của sự kiện.
+Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm thông tin không có trong bài. Chỉ trả về nội dung tóm tắt.`;
+
+  const cfg = getProviderConfig(provider);
+  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+
+  const baseUrl = provider === 'custom' ? (customBaseUrl || '') : cfg.baseUrl;
+  if (!baseUrl) throw new Error('Thiếu base URL cho custom provider');
+
+  // Build request based on provider type
+  const isAnthropic = provider === 'anthropic';
+  const isGoogle = provider === 'google';
+
+  let url: string;
+  let headers: Record<string, string>;
+  let body: any;
+
+  if (isAnthropic) {
+    // Anthropic Messages API (not OpenAI-compatible)
+    url = `${baseUrl}/messages`;
+    headers = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    };
+    body = {
+      model,
+      max_tokens: 1024,
+      temperature: 0.3,
+      system: prompt,
+      messages: [{ role: 'user', content: articleText }],
+    };
+  } else if (isGoogle) {
+    // Google Gemini via OpenAI-compatible endpoint
+    url = `${baseUrl}/chat/completions?key=${apiKey}`;
+    headers = { 'Content-Type': 'application/json' };
+    body = {
       model,
       messages: [
         { role: 'system', content: prompt },
@@ -33,39 +161,200 @@ export async function summarizeWithNvidia(
       ],
       max_tokens: 1024,
       temperature: 0.3,
-    }),
-  });
+    };
+  } else {
+    // OpenAI-compatible (NVIDIA, OpenAI, OpenRouter, Custom)
+    url = `${baseUrl}/chat/completions`;
+    headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    };
+    if (provider === 'openrouter') {
+      headers['HTTP-Referer'] = 'https://newssummarizer.app';
+      headers['X-Title'] = 'NewsSummarizer';
+    }
+    body = {
+      model,
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: articleText },
+      ],
+      max_tokens: 1024,
+      temperature: 0.3,
+    };
+  }
+
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const msg = (err as any)?.error?.message || `HTTP ${res.status}`;
-    throw new Error(`Lỗi NIM API: ${msg}`);
+    const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
+    throw new Error(`Lỗi ${cfg.label}: ${msg}`);
   }
 
   const data = await res.json();
+
+  // Parse response based on provider
+  if (isAnthropic) {
+    return data.content?.[0]?.text || '';
+  }
+  // OpenAI-compatible
   return data.choices?.[0]?.message?.content || '';
 }
 
-// Jina Reader: fetch full article content
-export async function fetchArticleContent(url: string): Promise<string> {
+// High-level: fetch key + model from storage, then summarize
+export async function summarizeArticle(articleText: string): Promise<string> {
+  const provider = (await AsyncStorage.getItem(KEYS.provider)) as LLMProvider || 'nvidia';
+  const cfg = getProviderConfig(provider);
+  if (!cfg) throw new Error('Provider không hợp lệ');
+
+  const apiKey = await AsyncStorage.getItem(cfg.keyStorageKey);
+  if (!apiKey && cfg.needsKey) throw new Error(`Thiếu API key cho ${cfg.label}`);
+
+  const model = provider === 'custom'
+    ? (await AsyncStorage.getItem(KEYS.customBaseUrl)) // custom uses model from storage too
+    : (await AsyncStorage.getItem(KEYS.model)) || cfg.models[0]?.id;
+
+  const customBaseUrl = provider === 'custom' ? await AsyncStorage.getItem(KEYS.customBaseUrl) : undefined;
+
+  return summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, customBaseUrl || undefined);
+}
+
+// ----- Article parsing (Jina markdown → text/ảnh/video blocks) -----
+
+export interface ArticleBlock {
+  type: 'text' | 'image' | 'video';
+  text?: string;
+  url?: string;
+  kind?: 'youtube' | 'vimeo' | 'file';
+  videoId?: string;
+}
+
+// Jina Reader trả markdown + header metadata (Title:/URL Source:/Published Time:/"Markdown Content:").
+// Cắt header, giữ lại phần nội dung thật.
+function stripJinaHeader(raw: string): string {
+  let s = raw.replace(/^﻿/, '');
+  const label = s.indexOf('Markdown Content:');
+  if (label >= 0) return s.slice(label + 'Markdown Content:'.length);
+  return s.replace(
+    /^(?:Title|URL Source|URL|Published Time|Source|Comment|Category|Last Updated|Why I) *: *[^\n]*\n+/gi,
+    '',
+  );
+}
+
+// Bỏ markup markdown còn sót trong 1 đoạn text → text đọc được.
+function cleanMarkdownText(s: string): string {
+  return s
+    .replace(/!?\[[^\]]*\]\(javascript:[^)\n]*/g, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/!?\[\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^#{1,6}[ \t]+/gm, '')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(\*|_)([^*_\n]+)\1/g, '$2')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^\s*(?:[*+-]|\d+[.)])[ \t]+/gm, '')
+    .replace(/^[ \t]*\[[ xXoO]?\][ \t]*/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// host/ad-network chèn player giả vào bài (bỏ qua để không hiện video quảng cáo)
+const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\.com|taboola\.com|outbrain\.com|adservice\.google\.)/i;
+
+// Chỉ giữ ảnh NỘI DUNG thật của bài; bỏ mọi thứ là UI của trang báo:
+// - svg/gif (icon, loading), đường path /restruct/ /graphics/ /icons/
+// - thumbnail nhỏ (sidebar "tin liên quan", "đọc nhiều") của bài báo khác (w nhỏ)
+// VnExpress ảnh bài thật = w=1020&h=0 (h=0 là auto, đừng chặn), thumbnail khác = w=180/300.
+function isEditorialImage(url: string): boolean {
+  if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
+  if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
+  const w = url.match(/[?&]w=(\d+)/i);
+  if (w && +w[1] < 400) return false;
+  return true;
+}
+
+function classifyVideo(url: string): ArticleBlock | null {
+  if (AD_VIDEO_HOSTS.test(url)) return null;
+  const yt = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/))([\w-]{6,})/);
+  if (yt) return { type: 'video', url, kind: 'youtube', videoId: yt[1] };
+  const vm = url.match(/vimeo\.com\/(\d+)/);
+  if (vm) return { type: 'video', url, kind: 'vimeo', videoId: vm[1] };
+  if (/\.(mp4|webm|mov|ogv)(\?|#|$)/i.test(url)) return { type: 'video', url, kind: 'file' };
+  return null;
+}
+
+// Parse markdown → mảng block giữ nguyên vị trí text/ảnh/video (để render xen kẽ "dưới mỗi text").
+export function parseArticleBlocks(raw: string): ArticleBlock[] {
+  const s = stripJinaHeader(raw);
+  const blocks: ArticleBlock[] = [];
+
+  // Đánh dấu vị trí ảnh và video trong text
+  const markers: { index: number; end: number; block: ArticleBlock }[] = [];
+  const seenUrl = new Set<string>(); // bỏ media bị lặp lại (VnExpress trả image ~2 lần)
+  const imgRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let m;
+  while ((m = imgRe.exec(s)) !== null) {
+    if (AD_VIDEO_HOSTS.test(m[2])) continue;
+    if (!isEditorialImage(m[2])) continue;
+    if (seenUrl.has(m[2])) continue;
+    seenUrl.add(m[2]);
+    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url: m[2] } });
+  }
+  // Site lazy-load / tối ưu SEO → Jina giữ <img src="..."> raw thay vì ![alt](url). Bắt cả 2 định dạng.
+  const htmlImgRe = /<img\s[^>]*(?:(?:\bsrc=["']([^"']+)["'])|(?:\bdata-src=["']([^"']+)["']))/g;
+  while ((m = htmlImgRe.exec(s)) !== null) {
+    const url = m[1] || m[2];
+    if (!url || AD_VIDEO_HOSTS.test(url)) continue;
+    if (!isEditorialImage(url)) continue;
+    if (seenUrl.has(url)) continue;
+    seenUrl.add(url);
+    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url } });
+  }
+  const vidRe = /\[[^\]]*\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)\]]+)/g;
+  while ((m = vidRe.exec(s)) !== null) {
+    const url = m[1] || m[2];
+    if (!url || seenUrl.has(url)) continue;
+    seenUrl.add(url);
+    const v = classifyVideo(url);
+    if (v) markers.push({ index: m.index, end: m.index + m[0].length, block: v });
+  }
+  markers.sort((a, b) => a.index - b.index);
+
+  // Dựng dãy block: text giữa các marker, rồi đến media
+  let last = 0;
+  for (const mk of markers) {
+    if (mk.index < last) continue;
+    const text = cleanMarkdownText(s.slice(last, mk.index));
+    if (text) blocks.push({ type: 'text', text });
+    blocks.push(mk.block);
+    last = mk.end;
+  }
+  const rest = cleanMarkdownText(s.slice(last));
+  if (rest) blocks.push({ type: 'text', text: rest });
+  return blocks;
+}
+
+// Gộp các block text thành 1 chuỗi (nguồn cho AI tóm tắt + đếm thời gian đọc).
+export function blocksToText(blocks: ArticleBlock[]): string {
+  return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
+}
+
+// Jina Reader: fetch nội dung bài, trả về block text/ảnh/video
+export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {
   const encoded = encodeURIComponent(url);
   const res = await fetch(`https://r.jina.ai/${encoded}`, {
     headers: {
       'Accept': 'text/markdown',
-      // Strip page chrome server-side — VnExpress/etc. headers bleed into result
       'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',
     },
   });
   if (!res.ok) throw new Error(`Không thể đọc bài báo (HTTP ${res.status})`);
-  const text = await res.text()
-    // Drop residual JS-only links (location dropdowns, nav menus) that slipped through
-    .replace(/\[[^\]]+\]\(javascript:[^)]+\)/g, '')
-    // Drop React/Reddit styled-component comment divs (css-/r-prop- hash classes)
-    .replace(/<div\b[^>]*class="[^"]*\bcss-[a-z0-9]+\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
-    .replace(/<div\b[^>]*class="[^"]*\br-[a-z]+-[a-z0-9]+\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  if (text.length < 200) throw new Error('Bài báo quá ngắn hoặc không có nội dung');
-  return text;
+  const raw = await res.text();
+  const blocks = parseArticleBlocks(raw);
+  if (blocksToText(blocks).length < LIMITS.articleMinLength) throw new Error('Bài báo quá ngắn hoặc không có nội dung');
+  return blocks;
 }
+
+import { LIMITS } from './storage';

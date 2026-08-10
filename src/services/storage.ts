@@ -1,36 +1,28 @@
-// AsyncStorage helpers — simple CRUD
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// AsyncStorage keys — centralized so callers don't magic-string
 
 export const KEYS = {
+  provider: '@llm_provider',
   apiKey: '@nim_key',
+  openaiKey: '@openai_key',
+  anthropicKey: '@anthropic_key',
+  googleKey: '@google_key',
+  openrouterKey: '@openrouter_key',
+  customKey: '@custom_key',
+  customBaseUrl: '@custom_base_url',
   model: '@nim_model',
   saved: '@saved_articles',
   history: '@summary_history',
-};
+  voice: '@voice',          // giọng đọc cũ (expo-speech voice identifier)
+  voiceGender: '@voice_gender', // Edge TTS gender: 'nam' | 'nu'
+  pitch: '@voice_pitch',
+  rate: '@voice_rate',
+} as const;
 
-export async function getItem<T>(key: string): Promise<T | null> {
-  try {
-    const raw = await AsyncStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function setItem(key: string, value: any): Promise<void> {
-  await AsyncStorage.setItem(key, JSON.stringify(value));
-}
-
-export async function removeItem(key: string): Promise<void> {
-  await AsyncStorage.removeItem(key);
-}
-
-// Convenience: get raw string values
-export async function getString(key: string): Promise<string | null> {
-  return AsyncStorage.getItem(key);
-}
-
-export async function setString(key: string, value: string): Promise<void> {
-  await AsyncStorage.setItem(key, value);
-}
+// Storage limits — single source of truth for cache trimming
+export const LIMITS = {
+  savedMax: 100,
+  historyMax: 50,
+  descriptionMax: 200,
+  relatedMax: 8,
+  articleMinLength: 200,
+} as const;

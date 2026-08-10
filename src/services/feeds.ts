@@ -3,6 +3,7 @@
 
 import { Platform } from 'react-native';
 import type { FeedItem } from '../types';
+import { LIMITS } from '../services/storage';
 
 // Self-hosted Vercel proxy — free, reliable, no rate limit
 const PROXY = 'https://api-proxy-liart-ten.vercel.app/api/proxy?url=';
@@ -34,14 +35,19 @@ function extractImage(block: string): string | undefined {
   const decode = (url: string) => url.replace(/&amp;/g, '&');
   const enc = block.match(/<enclosure[^>]+url="([^"]+)"/i);
   if (enc) return decode(enc[1]);
-  const cdata = block.match(/<!\[CDATA\[(.*?)\]\]/s);
-  const haystack = cdata ? cdata[1] : block;
-  const img = haystack.match(/<img[^>]+src="([^"]+)"/i);
-  return img ? decode(img[1]) : undefined;
+  // Chỉ tìm ảnh trong <description> — CDATA đầu tiên của item là <title> (không ảnh)
+  // nếu title wrap CDATA (Thanh Niên...) thì lấy nhầm. data-src cho site lazy-load.
+  const desc = block.match(/<description[^>]*>([\s\S]*?)<\/description>/i);
+  const haystack = desc ? desc[1] : block;
+  const img = haystack.match(/<img[^>]+(?:src|data-src)="([^"]+)"/i);
+  if (img) return decode(img[1]);
+  // Media RSS: BBC <media:thumbnail url>, NYT <media:content ... url> — ảnh nằm ngoài description.
+  const media = block.match(/<media:(?:thumbnail|content)[^>]+url="([^"]+)"/i);
+  return media ? decode(media[1]) : undefined;
 }
 
-function parseXml(xml: string): Partial<FeedItem>[] {
-  const items: Partial<FeedItem>[] = [];
+function parseXml(xml: string): FeedItem[] {
+  const items: FeedItem[] = [];
   const itemRe = /<item>[\s\S]*?<\/item>/gi;
   let m;
   while ((m = itemRe.exec(xml)) !== null) {
@@ -51,7 +57,7 @@ function parseXml(xml: string): Partial<FeedItem>[] {
       .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1').trim();
     const pubDate = (block.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i) || [])[1] || '';
     const descRaw = (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) || [])[1] || '';
-    const description = stripHtml(descRaw).slice(0, 200);
+    const description = stripHtml(descRaw).slice(0, LIMITS.descriptionMax);
     const image = extractImage(block);
     if (title && link) items.push({ title, link, description, pubDate, image, source: '' });
   }
@@ -91,6 +97,3 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
   });
 }
 
-export function getCategories(): string[] {
-  return Array.from(new Set(FEEDS.map((d) => d.category)));
-}

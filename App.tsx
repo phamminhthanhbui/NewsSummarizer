@@ -2,7 +2,8 @@ import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Text, Pressable, View, StyleSheet } from "react-native";
+import { Pressable, View, StyleSheet } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { Color, Font } from "./src/constants/theme";
 import HomeScreen from "./src/screens/HomeScreen";
 import ArticleScreen from "./src/screens/ArticleScreen";
@@ -37,7 +38,7 @@ function TabBarBtn(props: any) {
         pressed && { opacity: 0.7 },
       ]}
     >
-      {focused && <View style={s.activeDot} />}
+      {focused ? <View style={s.activeDot} /> : null}
       {children}
     </Pressable>
   );
@@ -75,10 +76,8 @@ export default function App() {
             backgroundColor: Color.card,
             borderTopColor: Color.border,
             borderTopWidth: StyleSheet.hairlineWidth,
-            height: 52,
-            padding: 0,
-            // borderTopLeftRadius: 16,
-            // borderTopRightRadius: 16,
+            height: 58,
+            paddingTop: 4,
             elevation: 8,
             shadowColor: "#000",
             shadowOffset: { width: 0, height: -2 },
@@ -101,10 +100,8 @@ export default function App() {
           component={HomeStackScreen}
           options={{
             tabBarLabel: "Trang chủ",
-            tabBarIcon: ({ focused }) => (
-              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>
-                🏠
-              </Text>
+            tabBarIcon: ({ focused, color }) => (
+              <Ionicons name={focused ? "newspaper" : "newspaper-outline"} size={22} color={color} />
             ),
           }}
         />
@@ -113,10 +110,8 @@ export default function App() {
           component={HistoryScreen}
           options={{
             tabBarLabel: "Lịch sử",
-            tabBarIcon: ({ focused }) => (
-              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>
-                📄
-              </Text>
+            tabBarIcon: ({ focused, color }) => (
+              <Ionicons name={focused ? "time" : "time-outline"} size={22} color={color} />
             ),
           }}
         />
@@ -125,10 +120,8 @@ export default function App() {
           component={SavedScreen}
           options={{
             tabBarLabel: "Đã lưu",
-            tabBarIcon: ({ focused }) => (
-              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>
-                ❤
-              </Text>
+            tabBarIcon: ({ focused, color }) => (
+              <Ionicons name={focused ? "heart" : "heart-outline"} size={22} color={color} />
             ),
           }}
         />
@@ -137,10 +130,8 @@ export default function App() {
           component={SettingsScreen}
           options={{
             tabBarLabel: "Cài đặt",
-            tabBarIcon: ({ focused }) => (
-              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>
-                ⚙
-              </Text>
+            tabBarIcon: ({ focused, color }) => (
+              <Ionicons name={focused ? "settings" : "settings-outline"} size={22} color={color} />
             ),
           }}
         />

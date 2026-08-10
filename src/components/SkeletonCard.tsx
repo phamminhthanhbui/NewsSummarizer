@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet } from 'react-native';
-import { Color } from '../constants/theme';
+import { Color, Radius } from '../constants/theme';
 
 export default function SkeletonCard() {
   const pulse = useRef(new Animated.Value(0)).current;
@@ -21,8 +21,8 @@ export default function SkeletonCard() {
     <View style={s.row}>
       <Animated.View style={[s.thumb, { backgroundColor: bg }]} />
       <View style={s.body}>
-        <Animated.View style={[s.line, { backgroundColor: bg, width: '85%' }]} />
-        <Animated.View style={[s.line, { backgroundColor: bg, width: '65%' }]} />
+        <Animated.View style={[s.line, { backgroundColor: bg, width: '88%' }]} />
+        <Animated.View style={[s.line, { backgroundColor: bg, width: '60%' }]} />
         <Animated.View style={[s.lineSm, { backgroundColor: bg }]} />
       </View>
     </View>
@@ -30,9 +30,9 @@ export default function SkeletonCard() {
 }
 
 const s = StyleSheet.create({
-  row: { flexDirection: 'row', backgroundColor: Color.card, padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
-  thumb: { width: 120, height: 80, borderRadius: 6, marginRight: 12 },
-  body: { flex: 1, gap: 6 },
+  row: { flexDirection: 'row', backgroundColor: Color.card, paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
+  thumb: { width: 118, height: 84, borderRadius: Radius.sm, marginRight: 12 },
+  body: { flex: 1, gap: 7, justifyContent: 'center' },
   line: { height: 12, borderRadius: 4 },
   lineSm: { height: 8, borderRadius: 4, width: '35%' },
 });
