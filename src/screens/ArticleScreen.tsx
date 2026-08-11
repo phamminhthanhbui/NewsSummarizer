@@ -148,6 +148,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // State for synchronized highlighting - use paragraphs (matches renderSummaryNodes)
   const [highlightIndex, setHighlightIndex] = useState(-1);
   const [summaryParas, setSummaryParas] = useState<string[]>([]);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Split summary into paragraphs for highlighting
   useEffect(() => {
@@ -167,6 +168,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   const toggleSpeak = async () => {
     if (speaking) {
       if (audioRef.current) { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); audioRef.current = null; }
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
       setSpeaking(false);
       setHighlightIndex(-1);
@@ -191,14 +193,18 @@ export default function ArticleScreen({ navigation, route }: any) {
             if (status.isLoaded && status.didJustFinish) {
               setSpeaking(false);
               setHighlightIndex(-1);
+              if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
               revokeAudioUrl(url);
             }
           }
         );
         audioRef.current = sound;
         // Approximate highlighting by advancing index based on speech progress
-        const progressInterval = setInterval(() => {
-          if (!speaking) { clearInterval(progressInterval); return; }
+        intervalRef.current = setInterval(() => {
+          if (!speaking) {
+            if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+            return;
+          }
           sound.getStatusAsync().then(st => {
             if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
               const progress = st.positionMillis / st.durationMillis;
@@ -208,7 +214,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           });
         }, 500);
         await sound.playAsync();
-        clearInterval(progressInterval);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         setHighlightIndex(-1);
         setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightIndex(-1); } }, 60000);
         return;
@@ -217,27 +223,38 @@ export default function ArticleScreen({ navigation, route }: any) {
       }
 
       // Fallback: expo-speech (system TTS) - approximate highlighting by time
-      const interval = setInterval(() => {
-        if (!speaking) { clearInterval(interval); return; }
+      intervalRef.current = setInterval(() => {
+        if (!speaking) {
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          return;
+        }
         setHighlightIndex(prev => {
-          if (prev >= summaryParas.length - 1) { clearInterval(interval); return prev; }
+          if (prev >= summaryParas.length - 1) {
+            if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+            return prev;
+          }
           return prev + 1;
         });
       }, 2500);
 
       await speakSystem(text, { pitch, rate });
-      clearInterval(interval);
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setSpeaking(false);
       setHighlightIndex(-1);
     } catch (e) {
       console.error('[TTS Article] error:', e);
       setSpeaking(false);
       setHighlightIndex(-1);
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     }
   };
 
   // Dọn dẹp khi rời màn hình: không để giọng nói tiếp tục phát
-  useEffect(() => () => { if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); } stopSystem(); }, []);
+  useEffect(() => () => {
+    if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); }
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    stopSystem();
+  }, []);
 
   const goArticle = (feedItem: FeedItem) =>
     navigation.push('Article', { item: feedItem });
@@ -404,7 +421,11 @@ export default function ArticleScreen({ navigation, route }: any) {
             <TouchableOpacity onPress={closeImageModal} style={styles.imageModalClose} activeOpacity={0.7}>
               <Ionicons name="close" size={28} color="#FFF" />
             </TouchableOpacity>
-            <Image source={{ uri: imageModal.url }} style={styles.imageModalImg} resizeMode="contain" />
+            <Image
+              source={{ uri: imageModal.url }}
+              style={styles.imageModalImg}
+              resizeMode="contain"
+            />
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
@@ -686,7 +707,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   imageModalImg: {
+    width: '100%',
+    maxHeight: '85%',
     maxWidth: '100%',
-    maxHeight: '90%',
   },
 });
