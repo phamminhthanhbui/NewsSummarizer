@@ -115,13 +115,21 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
       return items.map((i) => ({ ...i, source: d.name }));
     }),
   );
-  return results.flat().sort((a, b) => {
+  const all = results.flat().sort((a, b) => {
     const da = new Date(a.pubDate).getTime();
     const db = new Date(b.pubDate).getTime();
     if (isNaN(da) && isNaN(db)) return 0;
     if (isNaN(da)) return 1;
     if (isNaN(db)) return -1;
     return db - da;
+  });
+
+  // Deduplicate by link (keep first occurrence = latest)
+  const seen = new Set<string>();
+  return all.filter((item) => {
+    if (seen.has(item.link)) return false;
+    seen.add(item.link);
+    return true;
   });
 }
 

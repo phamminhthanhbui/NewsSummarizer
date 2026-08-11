@@ -1,6 +1,7 @@
 // Multi-LLM provider support (OpenAI-compatible endpoints + Anthropic + Google)
 // ponytail: unified interface, minimal branching
 
+import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -184,7 +185,35 @@ Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm th
     };
   }
 
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  // Use proxy on web to bypass CORS
+  const isWeb = Platform.OS === 'web';
+
+  // Providers that support CORS natively on web
+  const supportsCorsNatively = ['openrouter', 'google'];
+  const useNativeCors = isWeb && supportsCorsNatively.includes(provider);
+
+  // Local proxy server (server/proxy.js) — runs on localhost:3001
+  // Configure via EXPO_PUBLIC_PROXY_URL env var or default to localhost
+  const localProxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (isWeb ? 'http://localhost:3001' : '');
+
+  // Use CORS Anywhere proxy for providers that don't support CORS
+  const corsProxy = isWeb && !useNativeCors && localProxyUrl
+    ? `${localProxyUrl}/api/llm`
+    : undefined;
+
+  const finalUrl = corsProxy || url;
+  const finalHeaders = corsProxy
+    ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+    : headers;
+  const finalBody = corsProxy
+    ? JSON.stringify({ url, method: 'POST', body, headers })
+    : JSON.stringify(body);
+
+  const res = await fetch(finalUrl, {
+    method: 'POST',
+    headers: finalHeaders,
+    body: finalBody,
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
