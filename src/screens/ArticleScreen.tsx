@@ -26,6 +26,51 @@ import { fetchAllFeeds } from '../services/feeds';
 import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, type EdgeGender } from '../services/edgeTts';
 import ArticleCard from '../components/ArticleCard';
 
+// Web Speech API (word boundary events) — only on web
+const useWebSpeech = () => {
+  const synthRef = useRef<SpeechSynthesis | null>(null);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const onWordRef = useRef<((wordIndex: number) => void) | null>(null);
+  const onEndRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      synthRef.current = window.speechSynthesis;
+    }
+    return () => { if (synthRef.current) synthRef.current.cancel(); };
+  }, []);
+
+  const speak = (text: string, opts: { lang?: string; rate?: number; pitch?: number; voice?: SpeechSynthesisVoice | null } = {}) => {
+    return new Promise<void>((resolve, reject) => {
+      if (!synthRef.current) { reject(new Error('Web Speech API not available')); return; }
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = opts.lang || 'vi-VN';
+      u.rate = opts.rate ?? 1.0;
+      u.pitch = opts.pitch ?? 1.0;
+      u.voice = opts.voice || null;
+      u.onend = () => { onEndRef.current?.(); resolve(); };
+      u.onerror = (e) => reject(e);
+      // Word boundary event: gives charIndex, charLength, elapsedTime
+      u.onboundary = (e) => {
+        if (e.name === 'word' && onWordRef.current) {
+          onWordRef.current(e.charIndex);
+        }
+      };
+      utteranceRef.current = u;
+      synthRef.current.speak(u);
+    });
+  };
+
+  const stop = () => {
+    if (synthRef.current) { synthRef.current.cancel(); }
+  };
+
+  const setWordCallback = (cb: (wordIndex: number) => void) => { onWordRef.current = cb; };
+  const setEndCallback = (cb: () => void) => { onEndRef.current = cb; };
+
+  return { speak, stop, setWordCallback, setEndCallback };
+};
+
 // ponytail: magic numbers centralized in storage.LIMITS
 import { LIMITS } from '../services/storage';
 
@@ -44,7 +89,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   const audioRef = useRef<Audio.Sound | null>(null);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
-  const openImageModal = (url: string) => setImageModal({ visible: true, url });
+  const openImageModal = (url: string) => { console.log('openImageModal:', url); setImageModal({ visible: true, url }); };
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
 
   // Auto-fetch article + summarize + load related + saved state
@@ -425,6 +470,8 @@ export default function ArticleScreen({ navigation, route }: any) {
               source={{ uri: imageModal.url }}
               style={styles.imageModalImg}
               resizeMode="contain"
+              onLoad={() => console.log('Modal Image loaded:', imageModal.url)}
+              onError={(e) => console.warn('Modal Image error:', imageModal.url, e)}
             />
           </TouchableOpacity>
         </TouchableOpacity>
@@ -498,7 +545,7 @@ function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
   if (failed) return null;
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-      <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />
+      <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} onLoad={() => console.log('SafeImg loaded:', url)} />
     </TouchableOpacity>
   );
 }
@@ -693,6 +740,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
+    backgroundColor: 'rgba(0,0,0,0.1)',
   },
   imageModalClose: {
     position: 'absolute',
@@ -708,7 +756,7 @@ const styles = StyleSheet.create({
   },
   imageModalImg: {
     width: '100%',
-    maxHeight: '85%',
-    maxWidth: '100%',
+    height: '85%',
+    resizeMode: 'contain',
   },
 });
