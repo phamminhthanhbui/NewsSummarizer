@@ -92,6 +92,9 @@ export default function ArticleScreen({ navigation, route }: any) {
   const openImageModal = (url: string) => { console.log('openImageModal:', url); setImageModal({ visible: true, url }); };
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
 
+  // Web Speech API hook for word-level highlighting (web only)
+  const webSpeech = useWebSpeech();
+
   // Auto-fetch article + summarize + load related + saved state
   useEffect(() => {
     // Restore persisted save state (syncs with SavedScreen)
@@ -190,45 +193,83 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   const copySummary = () => Clipboard.setStringAsync(summary);
 
-  // State for synchronized highlighting - use paragraphs (matches renderSummaryNodes)
-  const [highlightIndex, setHighlightIndex] = useState(-1);
+  // State for synchronized highlighting - word-level on web, paragraph-level on native
+  const [highlightWordIndex, setHighlightWordIndex] = useState(-1);
+  const [highlightParaIndex, setHighlightParaIndex] = useState(-1);
+  const [summaryWords, setSummaryWords] = useState<string[]>([]);
   const [summaryParas, setSummaryParas] = useState<string[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Split summary into paragraphs for highlighting
+  // Build word array for karaoke-style highlighting
   useEffect(() => {
     if (summary) {
+      // Split into words (keeping spaces as separate "words" for proper spacing)
+      const words = summary
+        .split(/(\s+)/)
+        .filter(w => w.trim().length > 0 || w.match(/\s/));
+      setSummaryWords(words);
       const paras = summary
         .split(/\n+/)
         .map(s => s.trim())
         .filter(s => s.length > 0);
       setSummaryParas(paras);
     } else {
+      setSummaryWords([]);
       setSummaryParas([]);
     }
-    setHighlightIndex(-1);
+    setHighlightWordIndex(-1);
+    setHighlightParaIndex(-1);
   }, [summary]);
 
-  // Giọng đọc: Chỉ đọc TÓM TẮT, highlight từng đoạn đang đọc
+  // Giọng đọc: Word-level highlight on web, paragraph fallback on native
   const toggleSpeak = async () => {
     if (speaking) {
       if (audioRef.current) { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); audioRef.current = null; }
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
       setSpeaking(false);
-      setHighlightIndex(-1);
+      setHighlightWordIndex(-1);
+      setHighlightParaIndex(-1);
       return;
     }
-    if (!summary || summaryParas.length === 0) return;
+    if (!summary) return;
     setSpeaking(true);
-    setHighlightIndex(0);
+    setHighlightWordIndex(0);
+    setHighlightParaIndex(0);
     try {
       const gender = (await AsyncStorage.getItem(KEYS.voiceGender)) as EdgeGender || 'nu';
       const rate = parseFloat((await AsyncStorage.getItem(KEYS.rate)) || '') || 1.0;
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
       const text = summary.replace(/\n+/g, '， ');
+      const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-      // Try Edge TTS first
+      if (isWeb) {
+        // WEB: true word-level sync via Web Speech API
+        try {
+          webSpeech.setWordCallback((charIndex) => {
+            // Map charIndex to word index in summaryWords
+            let charCount = 0;
+            for (let i = 0; i < summaryWords.length; i++) {
+              charCount += summaryWords[i].length;
+              if (charCount > charIndex) {
+                setHighlightWordIndex(i);
+                break;
+              }
+            }
+          });
+          webSpeech.setEndCallback(() => {
+            setSpeaking(false);
+            setHighlightWordIndex(-1);
+            setHighlightParaIndex(-1);
+          });
+          await webSpeech.speak(text, { lang: 'vi-VN', rate, pitch });
+          return;
+        } catch (webErr) {
+          console.warn('Web Speech failed, trying Edge TTS:', webErr);
+        }
+      }
+
+      // Try Edge TTS (native + web fallback)
       try {
         const url = await speakEdge(text, gender);
         const { sound } = await Audio.Sound.createAsync(
@@ -237,47 +278,36 @@ export default function ArticleScreen({ navigation, route }: any) {
           (status) => {
             if (status.isLoaded && status.didJustFinish) {
               setSpeaking(false);
-              setHighlightIndex(-1);
               if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
               revokeAudioUrl(url);
             }
           }
         );
         audioRef.current = sound;
-        // Approximate highlighting by advancing index based on speech progress
         intervalRef.current = setInterval(() => {
-          if (!speaking) {
-            if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-            return;
-          }
+          if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
           sound.getStatusAsync().then(st => {
             if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
               const progress = st.positionMillis / st.durationMillis;
               const targetIdx = Math.min(Math.floor(progress * summaryParas.length), summaryParas.length - 1);
-              setHighlightIndex(targetIdx);
+              setHighlightParaIndex(targetIdx);
             }
           });
         }, 500);
         await sound.playAsync();
         if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-        setHighlightIndex(-1);
-        setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightIndex(-1); } }, 60000);
+        setHighlightParaIndex(-1);
+        setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightParaIndex(-1); } }, 60000);
         return;
       } catch (edgeErr) {
         console.warn('Edge TTS failed, falling back to system TTS:', edgeErr);
       }
 
-      // Fallback: expo-speech (system TTS) - approximate highlighting by time
+      // Fallback: expo-speech (system TTS) - approximate paragraph highlighting
       intervalRef.current = setInterval(() => {
-        if (!speaking) {
-          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-          return;
-        }
-        setHighlightIndex(prev => {
-          if (prev >= summaryParas.length - 1) {
-            if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-            return prev;
-          }
+        if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
+        setHighlightParaIndex(prev => {
+          if (prev >= summaryParas.length - 1) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return prev; }
           return prev + 1;
         });
       }, 2500);
@@ -285,11 +315,12 @@ export default function ArticleScreen({ navigation, route }: any) {
       await speakSystem(text, { pitch, rate });
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setSpeaking(false);
-      setHighlightIndex(-1);
+      setHighlightParaIndex(-1);
     } catch (e) {
       console.error('[TTS Article] error:', e);
       setSpeaking(false);
-      setHighlightIndex(-1);
+      setHighlightWordIndex(-1);
+      setHighlightParaIndex(-1);
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     }
   };
@@ -299,6 +330,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); }
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
+    webSpeech.stop();
   }, []);
 
   const goArticle = (feedItem: FeedItem) =>
@@ -308,9 +340,11 @@ export default function ArticleScreen({ navigation, route }: any) {
   const READ_WPM = 250;
   const readTime = Math.max(1, Math.ceil((content || item.description).length / READ_WPM));
 
+  const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
   // Render 1 media block: ảnh/video
   const renderMedia = (b: ArticleBlock, key: string) => {
-    if (!b.url) return null; // ponytail: media thiếu url → bỏ qua, tránh thẻ rỗng
+    if (!b.url) return null;
     if (b.type === 'image') {
       return <SafeImg key={key} url={b.url} onPress={() => openImageModal(b.url!)} />;
     }
@@ -327,23 +361,41 @@ export default function ArticleScreen({ navigation, route }: any) {
     const media = blocks.filter((b) => b.type === 'video' || b.type === 'image');
     const paras = summary.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     const nodes: any[] = [];
+
+    if (isWeb && summaryWords.length > 0) {
+      // WEB: word-level karaoke highlighting
+      // Use nested Text components for proper wrapping (like HTML spans)
+      return (
+        <Text style={styles.summaryText}>
+          {summaryWords.map((word, i) => (
+            <Text
+              key={'w' + i}
+              style={[
+                i === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+              ]}
+            >{word}</Text>
+          ))}
+        </Text>
+      );
+    }
+
+    // NATIVE: paragraph-level highlighting
     if (!media.length) {
       return paras.map((p, i) =>
         <Text key={'p' + i} style={[
           styles.summaryText,
-          highlightIndex === i && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+          highlightParaIndex === i && { backgroundColor: Color.primarySoft, borderRadius: 3 }
         ]}>{p}</Text>
       );
     }
     let cur = 0;
     media.forEach((mb, mi) => {
-      // rải đều: media thứ mi chèn sau ~ (tiến độ) phần tóm tắt
       const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
       while (cur < at) {
         nodes.push(
           <Text key={'p' + cur} style={[
             styles.summaryText,
-            highlightIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+            highlightParaIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
           ]}>{paras[cur]}</Text>
         );
         cur++;
@@ -354,7 +406,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       nodes.push(
         <Text key={'p' + cur} style={[
           styles.summaryText,
-          highlightIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+          highlightParaIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
         ]}>{paras[cur]}</Text>
       );
       cur++;
