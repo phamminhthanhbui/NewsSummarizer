@@ -295,12 +295,21 @@ const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\
 // Chỉ giữ ảnh NỘI DUNG thật của bài; bỏ mọi thứ là UI của trang báo:
 // - svg/gif (icon, loading), đường path /restruct/ /graphics/ /icons/
 // - thumbnail nhỏ (sidebar "tin liên quan", "đọc nhiều") của bài báo khác (w nhỏ)
+// - UI icons: ava_inter, ggr/x2, social icons, tracking pixels
 // VnExpress ảnh bài thật = w=1020&h=0 (h=0 là auto, đừng chặn), thumbnail khác = w=180/300.
 function isEditorialImage(url: string): boolean {
   if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
   if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
+  // Filter thumbnail patterns: /zoom/328_205/, /zoom/205_128/, /thumb_w/
+  if (/\/zoom\/\d+_\d+\/|\/thumb_w\//i.test(url)) return false;
+  // Filter UI icon filenames common in VN news sites
+  if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
+  // Filter very small images (likely tracking/ads)
   const w = url.match(/[?&]w=(\d+)/i);
   if (w && +w[1] < 400) return false;
+  // Filter by height param if present
+  const h = url.match(/[?&]h=(\d+)/i);
+  if (h && +h[1] < 300) return false;
   return true;
 }
 

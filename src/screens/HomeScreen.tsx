@@ -10,6 +10,8 @@ import {
   Easing,
   Keyboard,
   Platform,
+  TextInput,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -64,6 +66,8 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [selectedSource, setSelectedSource] = useState('Tất cả');
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
@@ -108,8 +112,12 @@ export default function HomeScreen({ navigation }: Props) {
     if (selectedSource !== 'Tất cả') {
       result = result.filter((i) => i.source === selectedSource);
     }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      result = result.filter((i) => i.title.toLowerCase().includes(q) || i.description.toLowerCase().includes(q));
+    }
     return result;
-  }, [items, selectedCategory, selectedSource]);
+  }, [items, selectedCategory, selectedSource, searchQuery]);
 
   const withImg = filtered.filter((i) => i.image);
   const hero = withImg[0] || null;
@@ -181,7 +189,7 @@ export default function HomeScreen({ navigation }: Props) {
             </View>
             <Text style={styles.brand}>NewsSummarizer</Text>
           </View>
-          <TouchableOpacity style={styles.searchBtn} onPress={() => { /* TODO: search */ }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
+          <TouchableOpacity style={styles.searchBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
             <Ionicons name="search-outline" size={22} color="#FFF" />
           </TouchableOpacity>
         </View>
@@ -240,23 +248,22 @@ export default function HomeScreen({ navigation }: Props) {
       <TouchableOpacity style={styles.sourceTrigger} onPress={() => { Keyboard.dismiss(); setShowSourceModal(true); }} activeOpacity={0.8} accessibilityLabel="Chọn nguồn tin">
         <View style={styles.sourceTriggerLeft}>
           <Ionicons name="filter-outline" size={18} color={Color.primary} />
-          <Text style={styles.sourceTriggerText}>
-            Nguồn: <Text style={styles.sourceTriggerValue}>{selectedSource}</Text>
-          </Text>
+          <Text style={styles.sourceTriggerText}>Nguồn: </Text>
+          <Text style={styles.sourceTriggerValue}>{selectedSource}</Text>
         </View>
         <Ionicons name="chevron-down" size={18} color={Color.textMuted} />
       </TouchableOpacity>
 
       {/* Source Modal */}
       {showSourceModal && (
-        <View style={styles.modalOverlay} onTouchStart={() => setShowSourceModal(false)} accessible={false}>
-          <Animated.View
+        <Pressable style={styles.modalOverlay} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true}>
+          <Pressable
             style={[
               styles.modalContent,
               { marginBottom: insets.bottom },
-              // animate translateY for enter/exit
               { transform: [{ translateY: showSourceModal ? 0 : 400 }] },
             ]}
+            onPress={(e) => e.stopPropagation()}
           >
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
@@ -277,8 +284,51 @@ export default function HomeScreen({ navigation }: Props) {
               )}
               contentContainerStyle={styles.modalListContent}
             />
-          </Animated.View>
-        </View>
+          </Pressable>
+        </Pressable>
+      )}
+
+      {/* Search Modal */}
+      {showSearchModal && (
+        <Pressable style={styles.modalOverlay} onPress={() => setShowSearchModal(false)} accessibilityElementsHidden={true}>
+          <Pressable
+            style={[
+              styles.modalContent,
+              { marginBottom: insets.bottom },
+              { transform: [{ translateY: showSearchModal ? 0 : 400 }] },
+            ]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Tìm kiếm</Text>
+              <TouchableOpacity onPress={() => setShowSearchModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
+                <Ionicons name="close" size={22} color={Color.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.searchInputWrap}>
+              <Ionicons name="search-outline" size={20} color={Color.textMuted} style={styles.searchInputIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Tìm tiêu đề, nội dung bài viết..."
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoFocus
+                autoComplete="off"
+                placeholderTextColor={Color.textMuted}
+              />
+              {searchQuery && (
+                <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearBtn} accessibilityLabel="Xóa">
+                  <Ionicons name="close-circle" size={22} color={Color.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.searchHint}>
+              <Ionicons name="information-circle-outline" size={13} color={Color.textMuted} />
+              <Text style={styles.searchHintText}>Kết quả: {filtered.length} bài</Text>
+            </View>
+          </Pressable>
+        </Pressable>
       )}
 
       {/* Content */}
@@ -432,6 +482,14 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text },
   modalClose: { padding: 8 },
   modalListContent: { paddingHorizontal: 4, gap: 8, paddingBottom: 20 },
+
+  // Search Modal
+  searchInputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.surfaceAlt, borderRadius: Radius.md, paddingHorizontal: 12, paddingVertical: 4, marginBottom: 12 },
+  searchInputIcon: { marginRight: 8 },
+  searchInput: { flex: 1, fontSize: Font.body, color: Color.text, paddingVertical: 8 },
+  searchClearBtn: { padding: 4 },
+  searchHint: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  searchHintText: { fontSize: Font.caption, color: Color.textMuted },
 
   // Source Chips (in modal)
   sourceChip: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: Color.surfaceAlt, borderWidth: 1, borderColor: Color.border },

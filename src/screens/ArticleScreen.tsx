@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Linking,
   Share,
+  Modal,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
@@ -22,7 +23,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds } from '../services/feeds';
-import { speakEdge, revokeAudioUrl, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, type EdgeGender } from '../services/edgeTts';
 import ArticleCard from '../components/ArticleCard';
 
 // ponytail: magic numbers centralized in storage.LIMITS
@@ -39,8 +40,12 @@ export default function ArticleScreen({ navigation, route }: any) {
   const [error, setError] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [related, setRelated] = useState<FeedItem[]>([]);
-  const [speaking, setSpeaking] = useState(false); // giọng đọc summary đang phát
+  const [speaking, setSpeaking] = useState(false);
   const audioRef = useRef<Audio.Sound | null>(null);
+  const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
+
+  const openImageModal = (url: string) => setImageModal({ visible: true, url });
+  const closeImageModal = () => setImageModal({ visible: false, url: '' });
 
   // Auto-fetch article + summarize + load related + saved state
   useEffect(() => {
@@ -140,40 +145,99 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   const copySummary = () => Clipboard.setStringAsync(summary);
 
-  // Giọng đọc summary: dùng Edge TTS (cloud) theo cài đặt giọng/ngữ điệu trong Settings
+  // State for synchronized highlighting - use paragraphs (matches renderSummaryNodes)
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [summaryParas, setSummaryParas] = useState<string[]>([]);
+
+  // Split summary into paragraphs for highlighting
+  useEffect(() => {
+    if (summary) {
+      const paras = summary
+        .split(/\n+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+      setSummaryParas(paras);
+    } else {
+      setSummaryParas([]);
+    }
+    setHighlightIndex(-1);
+  }, [summary]);
+
+  // Giọng đọc: Chỉ đọc TÓM TẮT, highlight từng đoạn đang đọc
   const toggleSpeak = async () => {
     if (speaking) {
       if (audioRef.current) { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); audioRef.current = null; }
+      stopSystem();
       setSpeaking(false);
+      setHighlightIndex(-1);
       return;
     }
-    if (!summary) return;
+    if (!summary || summaryParas.length === 0) return;
     setSpeaking(true);
+    setHighlightIndex(0);
     try {
       const gender = (await AsyncStorage.getItem(KEYS.voiceGender)) as EdgeGender || 'nu';
       const rate = parseFloat((await AsyncStorage.getItem(KEYS.rate)) || '') || 1.0;
-      const url = await speakEdge((content || summary).replace(/\n+/g, '， '), gender);
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: url },
-        { rate, volume: 1.0 },
-        (status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setSpeaking(false);
-            revokeAudioUrl(url);
+      const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
+      const text = summary.replace(/\n+/g, '， ');
+
+      // Try Edge TTS first
+      try {
+        const url = await speakEdge(text, gender);
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: url },
+          { rate, volume: 1.0 },
+          (status) => {
+            if (status.isLoaded && status.didJustFinish) {
+              setSpeaking(false);
+              setHighlightIndex(-1);
+              revokeAudioUrl(url);
+            }
           }
-        }
-      );
-      audioRef.current = sound;
-      await sound.playAsync();
-      setTimeout(() => { if (speaking) { if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); } setSpeaking(false); } }, 30000);
-    } catch (e) {
-      console.error('[Edge TTS Article] error:', e);
+        );
+        audioRef.current = sound;
+        // Approximate highlighting by advancing index based on speech progress
+        const progressInterval = setInterval(() => {
+          if (!speaking) { clearInterval(progressInterval); return; }
+          sound.getStatusAsync().then(st => {
+            if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
+              const progress = st.positionMillis / st.durationMillis;
+              const targetIdx = Math.min(Math.floor(progress * summaryParas.length), summaryParas.length - 1);
+              setHighlightIndex(targetIdx);
+            }
+          });
+        }, 500);
+        await sound.playAsync();
+        clearInterval(progressInterval);
+        setHighlightIndex(-1);
+        setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightIndex(-1); } }, 60000);
+        return;
+      } catch (edgeErr) {
+        console.warn('Edge TTS failed, falling back to system TTS:', edgeErr);
+      }
+
+      // Fallback: expo-speech (system TTS) - approximate highlighting by time
+      const interval = setInterval(() => {
+        if (!speaking) { clearInterval(interval); return; }
+        setHighlightIndex(prev => {
+          if (prev >= summaryParas.length - 1) { clearInterval(interval); return prev; }
+          return prev + 1;
+        });
+      }, 2500);
+
+      await speakSystem(text, { pitch, rate });
+      clearInterval(interval);
       setSpeaking(false);
+      setHighlightIndex(-1);
+    } catch (e) {
+      console.error('[TTS Article] error:', e);
+      setSpeaking(false);
+      setHighlightIndex(-1);
     }
   };
 
   // Dọn dẹp khi rời màn hình: không để giọng nói tiếp tục phát
-  useEffect(() => () => { if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); } }, []);
+  useEffect(() => () => { if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); } stopSystem(); }, []);
 
   const goArticle = (feedItem: FeedItem) =>
     navigation.push('Article', { item: feedItem });
@@ -186,7 +250,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   const renderMedia = (b: ArticleBlock, key: string) => {
     if (!b.url) return null; // ponytail: media thiếu url → bỏ qua, tránh thẻ rỗng
     if (b.type === 'image') {
-      return <SafeImg key={key} url={b.url} />;
+      return <SafeImg key={key} url={b.url} onPress={() => openImageModal(b.url!)} />;
     }
     if (b.type === 'video') {
       return <BlockVideo key={key} block={b} />;
@@ -202,16 +266,37 @@ export default function ArticleScreen({ navigation, route }: any) {
     const paras = summary.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     const nodes: any[] = [];
     if (!media.length) {
-      return paras.map((p, i) => <Text key={'p' + i} style={styles.summaryText}>{p}</Text>);
+      return paras.map((p, i) =>
+        <Text key={'p' + i} style={[
+          styles.summaryText,
+          highlightIndex === i && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+        ]}>{p}</Text>
+      );
     }
     let cur = 0;
     media.forEach((mb, mi) => {
       // rải đều: media thứ mi chèn sau ~ (tiến độ) phần tóm tắt
       const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
-      while (cur < at) { nodes.push(<Text key={'p' + cur} style={styles.summaryText}>{paras[cur]}</Text>); cur++; }
+      while (cur < at) {
+        nodes.push(
+          <Text key={'p' + cur} style={[
+            styles.summaryText,
+            highlightIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+          ]}>{paras[cur]}</Text>
+        );
+        cur++;
+      }
       nodes.push(renderMedia(mb, 'm' + mi));
     });
-    while (cur < paras.length) { nodes.push(<Text key={'p' + cur} style={styles.summaryText}>{paras[cur]}</Text>); cur++; }
+    while (cur < paras.length) {
+      nodes.push(
+        <Text key={'p' + cur} style={[
+          styles.summaryText,
+          highlightIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+        ]}>{paras[cur]}</Text>
+      );
+      cur++;
+    }
     return nodes;
   };
 
@@ -312,6 +397,18 @@ export default function ArticleScreen({ navigation, route }: any) {
         )}
       </ScrollView>
 
+      {/* Full-screen Image Modal */}
+      <Modal visible={imageModal.visible} transparent animationType="fade">
+        <TouchableOpacity style={styles.imageModalOverlay} onPress={closeImageModal} activeOpacity={1}>
+          <TouchableOpacity style={styles.imageModalContent} onPress={(e) => e.stopPropagation()} activeOpacity={1}>
+            <TouchableOpacity onPress={closeImageModal} style={styles.imageModalClose} activeOpacity={0.7}>
+              <Ionicons name="close" size={28} color="#FFF" />
+            </TouchableOpacity>
+            <Image source={{ uri: imageModal.url }} style={styles.imageModalImg} resizeMode="contain" />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Floating bar */}
       <View style={[styles.floatBar, { bottom: insets.bottom + 12 }]}>
         <TouchableOpacity
@@ -375,10 +472,14 @@ function FileVideo({ url }: { url: string }) {
 }
 
 // Ảnh mà không load được (url hỏng/đổi trang) → trả về null, không để lại ô trống rác
-function SafeImg({ url }: { url: string }) {
+function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
   const [failed, setFailed] = useState(false);
   if (failed) return null;
-  return <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />;
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+      <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />
+    </TouchableOpacity>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -558,4 +659,34 @@ const styles = StyleSheet.create({
   },
   fabRoundOn: { backgroundColor: '#FFEBEE' },
   fabRoundText: { fontSize: 20 },
+  // Image Modal
+  imageModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageModalContent: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  imageModalClose: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    zIndex: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageModalImg: {
+    maxWidth: '100%',
+    maxHeight: '90%',
+  },
 });
