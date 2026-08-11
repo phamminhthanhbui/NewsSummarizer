@@ -9,12 +9,40 @@ import { LIMITS } from '../services/storage';
 const PROXY = 'https://api-proxy-liart-ten.vercel.app/api/proxy?url=';
 
 export const FEEDS = [
+  // Việt Nam
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Thanh Niên', url: 'https://thanhnien.vn/rss/home.rss', category: 'Việt Nam' },
+
+  // Thế giới
   { name: 'BBC News', url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'Thế giới' },
   { name: 'NYT', url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', category: 'Thế giới' },
   { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml', category: 'Thế giới' },
+
+  // Công nghệ
+  { name: 'VNExpress Công nghệ', url: 'https://vnexpress.net/rss/so-hoa.rss', category: 'Công nghệ' },
+  { name: 'Tuổi Trẻ CN', url: 'https://tuoitre.vn/rss/cong-nghe.rss', category: 'Công nghệ' },
+  { name: 'GenK', url: 'https://genk.vn/rss/home.rss', category: 'Công nghệ' },
+
+  // Kinh doanh
+  { name: 'VNExpress Kinh doanh', url: 'https://vnexpress.net/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'Tuổi Trẻ KD', url: 'https://tuoitre.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'Cafebiz', url: 'https://cafebiz.vn/rss/home.rss', category: 'Kinh doanh' },
+
+  // Thể thao
+  { name: 'VNExpress Thể thao', url: 'https://vnexpress.net/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'Tuổi Trẻ TT', url: 'https://tuoitre.vn/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'BongDaPlus', url: 'https://bongdaplus.vn/rss/24h.rss', category: 'Thể thao' },
+
+  // Giải trí
+  { name: 'VNExpress Giải trí', url: 'https://vnexpress.net/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'Tuổi Trẻ GT', url: 'https://tuoitre.vn/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'Kenh14', url: 'https://kenh14.vn/rss/home.rss', category: 'Giải trí' },
+
+  // Sức khỏe
+  { name: 'VNExpress Sức khỏe', url: 'https://vnexpress.net/rss/suc-khoe.rss', category: 'Sức khỏe' },
+  { name: 'Tuổi Trẻ SK', url: 'https://tuoitre.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
+  { name: 'HelloBacSi', url: 'https://hellobacsi.com/rss.xml', category: 'Sức khỏe' },
 ];
 
 function stripHtml(s: string): string {

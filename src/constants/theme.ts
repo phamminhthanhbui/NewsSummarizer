@@ -16,6 +16,8 @@ export const Color = {
   skeletonAnim: '#DFE3EA',   // placeholder pulse
   success: '#2E7D32',
   successSoft: '#E7F4E8',
+  danger: '#C62828',
+  dangerSoft: '#FCE9E9',
   scrim: 'rgba(10,15,25,0.55)',
   white: '#FFFFFF',
 } as const;
@@ -38,12 +40,27 @@ export const Radius = {
 
 export const Shadow = {
   card: {
-    // web (RNW): thường gặp deprecation "shadow*" → dùng boxShadow song song
     boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.06,
     shadowRadius: 12,
     elevation: 2,
-  } as const,
+  },
+  button: {
+    boxShadow: '0 4px 12px rgba(198, 40, 40, 0.15)',
+    shadowColor: '#C62828',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  level4: {
+    boxShadow: '0 16px 32px rgba(15, 23, 42, 0.1)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.1,
+    shadowRadius: 32,
+    elevation: 8,
+  },
 } as const;

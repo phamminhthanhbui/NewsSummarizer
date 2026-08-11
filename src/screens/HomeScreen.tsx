@@ -30,13 +30,13 @@ const SOURCES = ['Tất cả', ...new Set(FEEDS.map((f) => f.name))];
 
 const CATEGORY_ICONS: Record<string, string> = {
   'Tất cả': 'grid-outline',
-  'Việt Nam': 'flag',
-  'Thế giới': 'earth',
-  'Công nghệ': 'laptop',
-  'Kinh doanh': 'briefcase',
-  'Thể thao': 'basketball',
-  'Giải trí': 'film',
-  'Sức khỏe': 'medkit',
+  'Việt Nam': 'flag-outline',
+  'Thế giới': 'earth-outline',
+  'Công nghệ': 'laptop-outline',
+  'Kinh doanh': 'briefcase-outline',
+  'Thể thao': 'basketball-outline',
+  'Giải trí': 'film-outline',
+  'Sức khỏe': 'medkit-outline',
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -171,7 +171,6 @@ export default function HomeScreen({ navigation }: Props) {
         style={[
           styles.header,
           { paddingTop: insets.top + 8, paddingBottom: 10 },
-          { transform: [{ translateY: headerHidden ? -100 : 0 }] },
         ]}
       >
         {/* Row 1: Brand + Search */}

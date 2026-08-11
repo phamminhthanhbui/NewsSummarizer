@@ -7,8 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
-  Alert,
-  Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -27,9 +25,9 @@ const GENDERS: { key: EdgeGender; label: string; icon: string }[] = [
 ];
 
 const PROVIDER_ICONS: Record<LLMProvider, string> = {
-  nvidia: 'logo-nvidia',
-  openai: 'logo-openai',
-  anthropic: 'logo-anthropic',
+  nvidia: 'cube',
+  openai: 'logo-github',
+  anthropic: 'flame',
   google: 'logo-google',
   openrouter: 'globe',
   custom: 'settings',
@@ -48,7 +46,6 @@ export default function SettingsScreen() {
   const [previewing, setPreviewing] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
-  const [providerOpen, setProviderOpen] = useState(false);
   const audioRef = useRef<Audio.Sound | null>(null);
   const webUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -149,7 +146,7 @@ export default function SettingsScreen() {
         const url = await speakEdge(text, gender);
         const { sound } = await Audio.Sound.createAsync(
           { uri: url },
-          { rate, pitch, volume: 1.0 },
+          { volume: 1.0 },
           (status) => {
             if (status.isLoaded && status.didJustFinish) {
               setPreviewing(false);
@@ -158,6 +155,7 @@ export default function SettingsScreen() {
           }
         );
         audioRef.current = sound;
+        await sound.setRateAsync(rate, true);
         await sound.playAsync();
         setTimeout(() => {
           if (previewing) {
@@ -171,13 +169,6 @@ export default function SettingsScreen() {
       alert('Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown'));
       setPreviewing(false);
     }
-  };
-
-  const step = (key: 'pitch' | 'rate', dir: 1 | -1, min: number, max: number) => {
-    const delta = 0.1;
-    const setter = key === 'pitch' ? setPitch : setRate;
-    const next = key === 'pitch' ? pitch : rate;
-    setter(Math.round(Math.min(max, Math.max(min, next + delta * dir)) * 10) / 10);
   };
 
   const handleClear = async () => {
@@ -195,7 +186,7 @@ export default function SettingsScreen() {
   const SectionHeader = ({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) => (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
-        <Ionicons name={icon} size={18} color={Color.primary} />
+        <Ionicons name={icon as any} size={18} color={Color.primary} />
         <Text style={styles.sectionTitle}>{title}</Text>
       </View>
       {children}
@@ -232,7 +223,7 @@ export default function SettingsScreen() {
       activeOpacity={0.6}
     >
       <View style={styles.providerCardIcon}>
-        <Ionicons name={PROVIDER_ICONS[p.id]} size={24} color={active ? '#FFF' : Color.primary} />
+        <Ionicons name={PROVIDER_ICONS[p.id] as any} size={24} color={active ? '#FFF' : Color.primary} />
       </View>
       <View style={styles.providerCardContent}>
         <Text style={[styles.providerCardLabel, active && styles.providerCardLabelActive]}>{p.label}</Text>
