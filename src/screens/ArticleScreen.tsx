@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -362,24 +362,70 @@ export default function ArticleScreen({ navigation, route }: any) {
     const paras = summary.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     const nodes: any[] = [];
 
+    // Shared interpolation logic: distribute media evenly across paragraphs
+    const getInsertPoints = () => {
+      const points: number[] = [];
+      media.forEach((_, mi) => {
+        const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
+        points.push(at);
+      });
+      return points;
+    };
+
     if (isWeb && summaryWords.length > 0) {
-      // WEB: word-level karaoke highlighting
-      // Use nested Text components for proper wrapping (like HTML spans)
-      return (
-        <Text style={styles.summaryText}>
-          {summaryWords.map((word, i) => (
-            <Text
-              key={'w' + i}
-              style={[
-                i === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }
-              ]}
-            >{word}</Text>
-          ))}
-        </Text>
-      );
+      // WEB: word-level karaoke highlighting PER PARAGRAPH + interleaved media
+      if (!media.length) {
+        // No media: render all paragraphs with word highlighting
+        return paras.map((p, pi) => (
+          <Text key={'wp' + pi} style={styles.summaryText}>
+            {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
+              <Text
+                key={'w' + pi + '_' + wi}
+                style={[wi === highlightWordIndex && pi === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
+              >{word}</Text>
+            ))}
+          </Text>
+        ));
+      }
+      // With media: interleave like native, but each paragraph has word-level highlighting
+      const insertPoints = getInsertPoints();
+      let cur = 0;
+      media.forEach((mb, mi) => {
+        const at = insertPoints[mi];
+        while (cur < at) {
+          const p = paras[cur];
+          nodes.push(
+            <Text key={'wp' + cur} style={styles.summaryText}>
+              {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
+                <Text
+                  key={'w' + cur + '_' + wi}
+                  style={[wi === highlightWordIndex && cur === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
+                >{word}</Text>
+              ))}
+            </Text>
+          );
+          cur++;
+        }
+        nodes.push(renderMedia(mb, 'm' + mi));
+      });
+      while (cur < paras.length) {
+        const p = paras[cur];
+        nodes.push(
+          <Text key={'wp' + cur} style={styles.summaryText}>
+            {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
+              <Text
+                key={'w' + cur + '_' + wi}
+                style={[wi === highlightWordIndex && cur === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
+              >{word}</Text>
+            ))}
+          </Text>
+        );
+        cur++;
+      }
+      return nodes;
     }
 
-    // NATIVE: paragraph-level highlighting
+    // NATIVE: paragraph-level highlighting with interleaved media
     if (!media.length) {
       return paras.map((p, i) =>
         <Text key={'p' + i} style={[

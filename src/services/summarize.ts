@@ -298,20 +298,25 @@ const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\
 // - UI icons: ava_inter, ggr/x2, social icons, tracking pixels
 // VnExpress ảnh bài thật = w=1020&h=0 (h=0 là auto, đừng chặn), thumbnail khác = w=180/300.
 function isEditorialImage(url: string): boolean {
-  if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
-  if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
-  // Filter thumbnail patterns: /zoom/328_205/, /zoom/205_128/, /thumb_w/
-  if (/\/zoom\/\d+_\d+\/|\/thumb_w\//i.test(url)) return false;
-  // Filter UI icon filenames common in VN news sites
-  if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
-  // Filter very small images (likely tracking/ads)
-  const w = url.match(/[?&]w=(\d+)/i);
-  if (w && +w[1] < 400) return false;
-  // Filter by height param if present
-  const h = url.match(/[?&]h=(\d+)/i);
-  if (h && +h[1] < 300) return false;
-  return true;
-}
+    if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
+    if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
+    // Filter thumbnail patterns: /zoom/328_205/, /zoom/205_128/, /thumb_w/, /thumb/, /crop/, /resize/, /small/, /medium/
+    if (/\/zoom\/\d+_\d+\/|\/thumb_w\//i.test(url)) return false;
+    if (/(^|\/)(thumb|crop|resize|small|medium|avatar|avatar-|icon-|logo-|sprite|tracking|pixel|beacon)(\/|_|-|\.)/i.test(url)) return false;
+    // Filter UI icon filenames common in VN news sites
+    if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
+    // Filter social/share icons
+    if (/(facebook|twitter|zalo|tiktok|instagram|youtube|share|send|comment|like|view|print|email|sms|copy|link|download)[_-]?(icon|btn|button)?/i.test(url)) return false;
+    // Filter very small images (likely tracking/ads)
+    const w = url.match(/[?&]w=(\d+)/i);
+    if (w && +w[1] < 400) return false;
+    // Filter by height param if present
+    const h = url.match(/[?&]h=(\d+)/i);
+    if (h && +h[1] < 300) return false;
+    // Filter 1x1, 2x2 tracking pixels
+    if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
+    return true;
+  }
 
 function classifyVideo(url: string): ArticleBlock | null {
   if (AD_VIDEO_HOSTS.test(url)) return null;
@@ -350,7 +355,8 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
     seenUrl.add(url);
     markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url } });
   }
-  const vidRe = /\[[^\]]*\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)\]]+)/g;
+  // Chỉ bắt link/video có pattern YouTube, Vimeo, hoặc đuôi file video - bỏ qua link bài báo khác
+  const vidRe = /\[[^\]]*\]\((https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^)]+\.(?:mp4|webm|mov|ogv))[^)]*)\)|(https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^\s)\]]+\.(?:mp4|webm|mov|ogv)))/gi;
   while ((m = vidRe.exec(s)) !== null) {
     const url = m[1] || m[2];
     if (!url || seenUrl.has(url)) continue;
