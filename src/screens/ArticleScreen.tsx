@@ -559,11 +559,18 @@ export default function ArticleScreen({ navigation, route }: any) {
 
       {/* Full-screen Image Modal */}
       <Modal visible={imageModal.visible} transparent animationType="fade">
-        <TouchableOpacity style={styles.imageModalOverlay} onPress={closeImageModal} activeOpacity={1}>
-          <TouchableOpacity style={styles.imageModalContent} onPress={(e) => e.stopPropagation()} activeOpacity={1}>
-            <TouchableOpacity onPress={closeImageModal} style={styles.imageModalClose} activeOpacity={0.7}>
-              <Ionicons name="close" size={28} color="#FFF" />
-            </TouchableOpacity>
+        <View style={styles.imageModalOverlay}>
+          {/* Close button - top right */}
+          <TouchableOpacity
+            style={styles.imageModalCloseBtn}
+            onPress={closeImageModal}
+            accessibilityLabel="Đóng hình ảnh"
+            hitSlop={{ top: 20, left: 20, right: 20, bottom: 20 }}
+          >
+            <Ionicons name="close-sharp" size={28} color="#FFF" />
+          </TouchableOpacity>
+          {/* Image content */}
+          <View style={styles.imageModalContent}>
             <Image
               source={{ uri: imageModal.url }}
               style={styles.imageModalImg}
@@ -571,8 +578,8 @@ export default function ArticleScreen({ navigation, route }: any) {
               onLoad={() => console.log('Modal Image loaded:', imageModal.url)}
               onError={(e) => console.warn('Modal Image error:', imageModal.url, e)}
             />
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Floating bar */}
@@ -832,6 +839,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  imageModalCloseBtn: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 10,
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+  },
   imageModalContent: {
     flex: 1,
     width: '100%',
@@ -839,18 +855,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     backgroundColor: 'rgba(0,0,0,0.1)',
-  },
-  imageModalClose: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    zIndex: 10,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   imageModalImg: {
     width: '100%',

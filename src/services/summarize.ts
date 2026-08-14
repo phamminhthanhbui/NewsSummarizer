@@ -292,6 +292,29 @@ function cleanMarkdownText(s: string): string {
 // host/ad-network chèn player giả vào bài (bỏ qua để không hiện video quảng cáo)
 const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\.com|taboola\.com|outbrain\.com|adservice\.google\.)/i;
 
+// General patterns for non-editorial media (applies to ALL news sites)
+// Thumbnail/CDN patterns: zoom/W_H, thumb, crop, resize
+const THUMBNAIL_PATH_PATTERNS = [
+  /\/zoom\/\d+_\d+\//i,           // zoom/600_315/, zoom/320_180/, etc.
+  /\/thumb\//i,                    // /thumb/ path
+  /\/crop\//i,                     // /crop/ path
+  /\/resize\//i,                   // /resize/ path
+  /\/(small|medium|large)\//i,     // /small/, /medium/, /large/ paths
+];
+// Filename patterns for non-content images
+const NON_EDITORIAL_FILENAME_PATTERNS = [
+  /brand.?content/i,              // brandcontent, brand-content (native ads)
+  /sponsored|advertorial|native.?ad/i, // sponsored content
+  /logo/i,                        // site logos
+  /avatar/i,                      // author/profile avatars
+  /icon/i,                        // UI icons
+  /sprite/i,                      // CSS sprites
+  /tracking|pixel|beacon/i,       // tracking pixels
+  /social|share|fb|zalo|tw|ig|yt/i, // social icons (when standalone)
+];
+// Fake video: .gif.mp4, .webp.mp4 = animated images, not real videos
+const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
+
 // Chỉ giữ ảnh NỘI DUNG thật của bài; bỏ mọi thứ là UI của trang báo:
 // - svg/gif (icon, loading), đường path /restruct/ /graphics/ /icons/
 // - thumbnail nhỏ (sidebar "tin liên quan", "đọc nhiều") của bài báo khác (w nhỏ)
@@ -303,28 +326,46 @@ function isEditorialImage(url: string): boolean {
     // Filter thumbnail patterns: /zoom/328_205/, /zoom/205_128/, /thumb_w/, /thumb/, /crop/, /resize/, /small/, /medium/
     if (/\/zoom\/\d+_\d+\/|\/thumb_w\//i.test(url)) return false;
     if (/(^|\/)(thumb|crop|resize|small|medium|avatar|avatar-|icon-|logo-|sprite|tracking|pixel|beacon)(\/|_|-|\.)/i.test(url)) return false;
+    // Filter related articles/sidebar thumbnails: /related/, /sidebar/, /widget/, /recommend/, /more-news/, /box-/, /list-/
+    if (/(related|sidebar|widget|recommend|more.?news|box.|list.|also.?read|xem.?them|tin.?lien.?quan|doc.?nhieu|khac.?bai)(\/|_|-|\.)/i.test(url)) return false;
+    // Filter thumbnail suffixes: -thumb, _thumb, -small, _small, -preview, _preview
+    if (/(-|_)(thumb|small|preview|teaser|crop)\d*(\/|_|-|\.|$)/i.test(url)) return false;
+    // Filter by aspect ratio hints: square/portrait thumbnails often have h~w, main images are landscape (w > h*1.2)
+    const wParam = url.match(/[?&]w=(\d+)/i);
+    const hParam = url.match(/[?&]h=(\d+)/i);
+    if (wParam && hParam) {
+      const w = +wParam[1], h = +hParam[1];
+      if (w > 0 && h > 0 && w / h < 1.2) return false; // square/portrait = likely thumbnail
+    }
+    // Filter very small images (likely tracking/ads)
+    if (wParam && +wParam[1] < 400) return false;
+    if (hParam && +hParam[1] < 300) return false;
+    // Filter 1x1, 2x2 tracking pixels
+    if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
     // Filter UI icon filenames common in VN news sites
     if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
     // Filter social/share icons
     if (/(facebook|twitter|zalo|tiktok|instagram|youtube|share|send|comment|like|view|print|email|sms|copy|link|download)[_-]?(icon|btn|button)?/i.test(url)) return false;
-    // Filter very small images (likely tracking/ads)
-    const w = url.match(/[?&]w=(\d+)/i);
-    if (w && +w[1] < 400) return false;
-    // Filter by height param if present
-    const h = url.match(/[?&]h=(\d+)/i);
-    if (h && +h[1] < 300) return false;
-    // Filter 1x1, 2x2 tracking pixels
-    if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
+    // General non-editorial patterns (all sites): thumbnail paths, sponsored/ad content, logos, avatars
+    for (const pattern of THUMBNAIL_PATH_PATTERNS) {
+      if (pattern.test(url)) return false;
+    }
+    for (const pattern of NON_EDITORIAL_FILENAME_PATTERNS) {
+      if (pattern.test(url)) return false;
+    }
     return true;
   }
 
 function classifyVideo(url: string): ArticleBlock | null {
   if (AD_VIDEO_HOSTS.test(url)) return null;
+  // Fake videos: .gif.mp4, .webp.mp4 = animated images, not real video content (all sites)
+  if (FAKE_VIDEO_PATTERN.test(url)) return null;
   const yt = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/))([\w-]{6,})/);
   if (yt) return { type: 'video', url, kind: 'youtube', videoId: yt[1] };
   const vm = url.match(/vimeo\.com\/(\d+)/);
   if (vm) return { type: 'video', url, kind: 'vimeo', videoId: vm[1] };
-  if (/\.(mp4|webm|mov|ogv)(\?|#|$)/i.test(url)) return { type: 'video', url, kind: 'file' };
+  // Real video files (not animated GIFs served as MP4)
+  if (/\.(mp4|webm|mov|ogv)(\?|#|$)/i.test(url) && !FAKE_VIDEO_PATTERN.test(url)) return { type: 'video', url, kind: 'file' };
   return null;
 }
 
