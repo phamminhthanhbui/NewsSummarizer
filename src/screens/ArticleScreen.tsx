@@ -841,8 +841,8 @@ const styles = StyleSheet.create({
   },
   imageModalCloseBtn: {
     position: 'absolute',
-    top: 40,
-    right: 20,
+    top: 10,
+    right: 10,
     zIndex: 10,
     padding: 8,
     backgroundColor: 'rgba(0,0,0,0.5)',
