@@ -24,6 +24,7 @@ import { fetchArticleContent, summarizeArticle, blocksToText } from '../services
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds } from '../services/feeds';
 import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, type EdgeGender } from '../services/edgeTts';
+import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 
 // Web Speech API (word boundary events) — only on web
@@ -196,26 +197,20 @@ export default function ArticleScreen({ navigation, route }: any) {
   // State for synchronized highlighting - word-level on web, paragraph-level on native
   const [highlightWordIndex, setHighlightWordIndex] = useState(-1);
   const [highlightParaIndex, setHighlightParaIndex] = useState(-1);
-  const [summaryWords, setSummaryWords] = useState<string[]>([]);
-  const [summaryParas, setSummaryParas] = useState<string[]>([]);
+  // wordOffsets[i] = char offset của từ thứ i (flat) trong `summary`; paraWords[pi] = các từ của đoạn pi kèm index flat
+  const [wordOffsets, setWordOffsets] = useState<number[]>([]);
+  const [paraWords, setParaWords] = useState<{ text: string; flat: number }[][]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Build word array for karaoke-style highlighting
+  // Build word offsets (flat, trong `summary`) + từ theo đoạn cho karaoke-style highlighting
   useEffect(() => {
     if (summary) {
-      // Split into words (keeping spaces as separate "words" for proper spacing)
-      const words = summary
-        .split(/(\s+)/)
-        .filter(w => w.trim().length > 0 || w.match(/\s/));
-      setSummaryWords(words);
-      const paras = summary
-        .split(/\n+/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-      setSummaryParas(paras);
+      const { offsets, paras } = buildWordMap(summary);
+      setWordOffsets(offsets);
+      setParaWords(paras);
     } else {
-      setSummaryWords([]);
-      setSummaryParas([]);
+      setWordOffsets([]);
+      setParaWords([]);
     }
     setHighlightWordIndex(-1);
     setHighlightParaIndex(-1);
@@ -240,19 +235,26 @@ export default function ArticleScreen({ navigation, route }: any) {
       const gender = (await AsyncStorage.getItem(KEYS.voiceGender)) as EdgeGender || 'nu';
       const rate = parseFloat((await AsyncStorage.getItem(KEYS.rate)) || '') || 1.0;
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
-      const text = summary.replace(/\n+/g, '， ');
       const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
       if (isWeb) {
-        // WEB: true word-level sync via Web Speech API
+        // WEB: true word-level sync via Web Speech API.
+        // Đọc `summary` nguyên bản (KHÔNG replace \n) để charIndex của onboundary
+        // khớp 1:1 với wordOffsets build từ chính `summary`.
         try {
           webSpeech.setWordCallback((charIndex) => {
-            // Map charIndex to word index in summaryWords
-            let charCount = 0;
-            for (let i = 0; i < summaryWords.length; i++) {
-              charCount += summaryWords[i].length;
-              if (charCount > charIndex) {
-                setHighlightWordIndex(i);
+            // charIndex → flat word index (binary search trên wordOffsets)
+            let lo = 0, hi = wordOffsets.length - 1, flat = 0;
+            while (lo <= hi) {
+              const mid = (lo + hi) >> 1;
+              if (wordOffsets[mid] <= charIndex) { flat = mid; lo = mid + 1; } else { hi = mid - 1; }
+            }
+            setHighlightWordIndex(flat);
+            // flat → đoạn đang đọc (paraWords đã sort theo flat tăng dần)
+            for (let pi = 0; pi < paraWords.length; pi++) {
+              const pw = paraWords[pi];
+              if (pw.length && flat >= pw[0].flat && flat <= pw[pw.length - 1].flat) {
+                setHighlightParaIndex(pi);
                 break;
               }
             }
@@ -262,12 +264,17 @@ export default function ArticleScreen({ navigation, route }: any) {
             setHighlightWordIndex(-1);
             setHighlightParaIndex(-1);
           });
-          await webSpeech.speak(text, { lang: 'vi-VN', rate, pitch });
+          await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch });
           return;
         } catch (webErr) {
           console.warn('Web Speech failed, trying Edge TTS:', webErr);
         }
       }
+
+      // Native + web fallback: Edge TTS blob audio — không có word timing,
+      // chỉ highlight theo đoạn (ponytail: muốn word-level native phải parse
+      // WordBoundary events từ Edge TTS websocket — chưa cần)
+      const text = summary.replace(/\n+/g, '， ');
 
       // Try Edge TTS (native + web fallback)
       try {
@@ -289,7 +296,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           sound.getStatusAsync().then(st => {
             if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
               const progress = st.positionMillis / st.durationMillis;
-              const targetIdx = Math.min(Math.floor(progress * summaryParas.length), summaryParas.length - 1);
+              const targetIdx = Math.min(Math.floor(progress * paraWords.length), paraWords.length - 1);
               setHighlightParaIndex(targetIdx);
             }
           });
@@ -307,7 +314,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       intervalRef.current = setInterval(() => {
         if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
         setHighlightParaIndex(prev => {
-          if (prev >= summaryParas.length - 1) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return prev; }
+          if (prev >= paraWords.length - 1) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return prev; }
           return prev + 1;
         });
       }, 2500);
@@ -372,56 +379,28 @@ export default function ArticleScreen({ navigation, route }: any) {
       return points;
     };
 
-    if (isWeb && summaryWords.length > 0) {
+    if (isWeb && paraWords.length > 0) {
       // WEB: word-level karaoke highlighting PER PARAGRAPH + interleaved media
-      if (!media.length) {
-        // No media: render all paragraphs with word highlighting
-        return paras.map((p, pi) => (
-          <Text key={'wp' + pi} style={styles.summaryText}>
-            {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
-              <Text
-                key={'w' + pi + '_' + wi}
-                style={[wi === highlightWordIndex && pi === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
-              >{word}</Text>
-            ))}
-          </Text>
-        ));
-      }
+      const renderPara = (pi: number) => (
+        <Text key={'wp' + pi} style={styles.summaryText}>
+          {paraWords[pi].map((w, wi) => (
+            <Text
+              key={'w' + pi + '_' + wi}
+              style={[w.flat === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3, fontWeight: '700', color: Color.primary }]}
+            >{wi > 0 ? ' ' : ''}{w.text}</Text>
+          ))}
+        </Text>
+      );
+      if (!media.length) return paraWords.map((_, pi) => renderPara(pi));
       // With media: interleave like native, but each paragraph has word-level highlighting
       const insertPoints = getInsertPoints();
       let cur = 0;
       media.forEach((mb, mi) => {
         const at = insertPoints[mi];
-        while (cur < at) {
-          const p = paras[cur];
-          nodes.push(
-            <Text key={'wp' + cur} style={styles.summaryText}>
-              {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
-                <Text
-                  key={'w' + cur + '_' + wi}
-                  style={[wi === highlightWordIndex && cur === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
-                >{word}</Text>
-              ))}
-            </Text>
-          );
-          cur++;
-        }
+        while (cur < at) { nodes.push(renderPara(cur)); cur++; }
         nodes.push(renderMedia(mb, 'm' + mi));
       });
-      while (cur < paras.length) {
-        const p = paras[cur];
-        nodes.push(
-          <Text key={'wp' + cur} style={styles.summaryText}>
-            {p.split(/(\s+)/).filter(w => w.trim().length > 0 || w.match(/\s/)).map((word, wi) => (
-              <Text
-                key={'w' + cur + '_' + wi}
-                style={[wi === highlightWordIndex && cur === highlightParaIndex && { backgroundColor: Color.primarySoft, borderRadius: 3 }]}
-              >{word}</Text>
-            ))}
-          </Text>
-        );
-        cur++;
-      }
+      while (cur < paraWords.length) { nodes.push(renderPara(cur)); cur++; }
       return nodes;
     }
 
