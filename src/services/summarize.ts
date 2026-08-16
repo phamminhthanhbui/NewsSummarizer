@@ -426,15 +426,19 @@ export function blocksToText(blocks: ArticleBlock[]): string {
   return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
 }
 
-// Jina Reader: fetch nội dung bài, trả về block text/ảnh/video
+// Jina Reader: fetch nội dung bài, trả về block text/ảnh/video.
+// Ưu tiên qua proxy local (không dính CORS + có retry khi Jina 503);
+// fallback gọi thẳng nếu không có proxy.
 export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {
-  const encoded = encodeURIComponent(url);
-  const res = await fetch(`https://r.jina.ai/${encoded}`, {
-    headers: {
-      'Accept': 'text/markdown',
-      'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',
-    },
-  });
+  const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (Platform.OS === 'web' ? 'http://localhost:3001' : '');
+  const jinaHeaders = {
+    'Accept': 'text/markdown',
+    'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',
+  };
+
+  const res = proxyUrl
+    ? await fetch(`${proxyUrl}/api/jina?url=${encodeURIComponent(url)}`)
+    : await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, { headers: jinaHeaders });
   if (!res.ok) throw new Error(`Không thể đọc bài báo (HTTP ${res.status})`);
   const raw = await res.text();
   const blocks = parseArticleBlocks(raw);

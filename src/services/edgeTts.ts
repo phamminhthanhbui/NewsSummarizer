@@ -17,17 +17,31 @@ export async function speakEdge(text: string, gender: EdgeGender): Promise<strin
   const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (typeof window !== 'undefined' ? 'http://localhost:3001' : '');
   const endpoint = proxyUrl ? `${proxyUrl}/api/edge-tts` : '/api/edge-tts';
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  });
-  if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`Edge TTS error: ${res.status} ${err}`);
+  // Upstream Edge TTS chập chờn → retry 2 lần nếu lỗi mạng hoặc 5xx
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let retryable = true;
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+      }
+      const errText = await res.text().catch(() => '');
+      lastErr = new Error(`Edge TTS error: ${res.status} ${errText}`);
+      // 4xx (trừ 408/429) là lỗi request, retry vô ích
+      retryable = !(res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429);
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+    }
+    if (!retryable) break;
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
   }
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  throw lastErr ?? new Error('Edge TTS failed');
 }
 
 export function revokeAudioUrl(url: string) {

@@ -128,8 +128,7 @@ export default function SettingsScreen() {
           setPreviewing(false);
           webUtteranceRef.current = null;
         };
-        utterance.onerror = (e) => {
-          console.error('[Web Speech] error:', e);
+        utterance.onerror = () => {
           setPreviewing(false);
           webUtteranceRef.current = null;
         };
@@ -165,7 +164,6 @@ export default function SettingsScreen() {
         }, 15000);
       }
     } catch (e) {
-      console.error('[Edge TTS] error:', e);
       alert('Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown'));
       setPreviewing(false);
     }

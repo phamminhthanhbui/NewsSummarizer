@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -90,7 +90,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   const audioRef = useRef<Audio.Sound | null>(null);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
-  const openImageModal = (url: string) => { console.log('openImageModal:', url); setImageModal({ visible: true, url }); };
+  const openImageModal = (url: string) => setImageModal({ visible: true, url });
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
 
   // Web Speech API hook for word-level highlighting (web only)
@@ -197,21 +197,17 @@ export default function ArticleScreen({ navigation, route }: any) {
   // State for synchronized highlighting - word-level on web, paragraph-level on native
   const [highlightWordIndex, setHighlightWordIndex] = useState(-1);
   const [highlightParaIndex, setHighlightParaIndex] = useState(-1);
-  // wordOffsets[i] = char offset của từ thứ i (flat) trong `summary`; paraWords[pi] = các từ của đoạn pi kèm index flat
-  const [wordOffsets, setWordOffsets] = useState<number[]>([]);
-  const [paraWords, setParaWords] = useState<{ text: string; flat: number }[][]>([]);
+  // wordMap tính đồng bộ theo summary (useMemo, KHÔNG phải state+effect) —
+  // tránh render lệch khi summary đổi (tóm nhanh → nâng cấp bản đầy đủ)
+  const { wordOffsets, paraWords } = useMemo(() => {
+    if (!summary) return { wordOffsets: [] as number[], paraWords: [] as { text: string; flat: number }[][] };
+    const { offsets, paras } = buildWordMap(summary);
+    return { wordOffsets: offsets, paraWords: paras };
+  }, [summary]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Build word offsets (flat, trong `summary`) + từ theo đoạn cho karaoke-style highlighting
+  // Reset highlight khi summary đổi
   useEffect(() => {
-    if (summary) {
-      const { offsets, paras } = buildWordMap(summary);
-      setWordOffsets(offsets);
-      setParaWords(paras);
-    } else {
-      setWordOffsets([]);
-      setParaWords([]);
-    }
     setHighlightWordIndex(-1);
     setHighlightParaIndex(-1);
   }, [summary]);
@@ -266,8 +262,8 @@ export default function ArticleScreen({ navigation, route }: any) {
           });
           await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch });
           return;
-        } catch (webErr) {
-          console.warn('Web Speech failed, trying Edge TTS:', webErr);
+        } catch {
+          // Web Speech failed → fall through to Edge TTS
         }
       }
 
@@ -306,8 +302,8 @@ export default function ArticleScreen({ navigation, route }: any) {
         setHighlightParaIndex(-1);
         setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightParaIndex(-1); } }, 60000);
         return;
-      } catch (edgeErr) {
-        console.warn('Edge TTS failed, falling back to system TTS:', edgeErr);
+      } catch {
+        // Edge TTS failed → fall back to system TTS
       }
 
       // Fallback: expo-speech (system TTS) - approximate paragraph highlighting
@@ -323,8 +319,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setSpeaking(false);
       setHighlightParaIndex(-1);
-    } catch (e) {
-      console.error('[TTS Article] error:', e);
+    } catch {
       setSpeaking(false);
       setHighlightWordIndex(-1);
       setHighlightParaIndex(-1);
@@ -332,12 +327,21 @@ export default function ArticleScreen({ navigation, route }: any) {
     }
   };
 
-  // Dọn dẹp khi rời màn hình: không để giọng nói tiếp tục phát
-  useEffect(() => () => {
-    if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); }
+  // Dừng đọc khi rời màn hình. Bottom-tabs KHÔNG unmount khi chuyển tab
+  // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
+  const stopSpeaking = () => {
+    if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; }
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
     webSpeech.stop();
+    setSpeaking(false);
+    setHighlightWordIndex(-1);
+    setHighlightParaIndex(-1);
+  };
+
+  useEffect(() => {
+    const unsub = navigation.addListener('blur', stopSpeaking);
+    return () => { unsub(); stopSpeaking(); };
   }, []);
 
   const goArticle = (feedItem: FeedItem) =>
@@ -381,16 +385,20 @@ export default function ArticleScreen({ navigation, route }: any) {
 
     if (isWeb && paraWords.length > 0) {
       // WEB: word-level karaoke highlighting PER PARAGRAPH + interleaved media
-      const renderPara = (pi: number) => (
-        <Text key={'wp' + pi} style={styles.summaryText}>
-          {paraWords[pi].map((w, wi) => (
-            <Text
-              key={'w' + pi + '_' + wi}
-              style={[w.flat === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3, fontWeight: '700', color: Color.primary }]}
-            >{wi > 0 ? ' ' : ''}{w.text}</Text>
-          ))}
-        </Text>
-      );
+      const renderPara = (pi: number) => {
+        const words = paraWords[pi];
+        if (!words) return null; // guard: index lệch (không xảy ra khi wordMap là useMemo, nhưng chặn crash)
+        return (
+          <Text key={'wp' + pi} style={styles.summaryText}>
+            {words.map((w, wi) => (
+              <Text
+                key={'w' + pi + '_' + wi}
+                style={[w.flat === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3, fontWeight: '700', color: Color.primary }]}
+              >{wi > 0 ? ' ' : ''}{w.text}</Text>
+            ))}
+          </Text>
+        );
+      };
       if (!media.length) return paraWords.map((_, pi) => renderPara(pi));
       // With media: interleave like native, but each paragraph has word-level highlighting
       const insertPoints = getInsertPoints();
@@ -554,8 +562,6 @@ export default function ArticleScreen({ navigation, route }: any) {
               source={{ uri: imageModal.url }}
               style={styles.imageModalImg}
               resizeMode="contain"
-              onLoad={() => console.log('Modal Image loaded:', imageModal.url)}
-              onError={(e) => console.warn('Modal Image error:', imageModal.url, e)}
             />
           </View>
         </View>
@@ -629,7 +635,7 @@ function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
   if (failed) return null;
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-      <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} onLoad={() => console.log('SafeImg loaded:', url)} />
+      <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />
     </TouchableOpacity>
   );
 }
