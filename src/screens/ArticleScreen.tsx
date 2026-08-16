@@ -23,7 +23,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds } from '../services/feeds';
-import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, type EdgeGender } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 
@@ -242,7 +242,10 @@ export default function ArticleScreen({ navigation, route }: any) {
         // WEB: true word-level sync via Web Speech API.
         // Đọc `summary` nguyên bản (KHÔNG replace \n) để charIndex của onboundary
         // khớp 1:1 với wordOffsets build từ chính `summary`.
-        try {
+        // Browser không có giọng đúng gender (vd Chrome chỉ có giọng nam)
+        // → bỏ qua Web Speech, fall through xuống Edge TTS bên dưới.
+        const webVoice = await resolveWebVoice(gender);
+        if (webVoice) try {
           webSpeech.setWordCallback((charIndex) => {
             // charIndex → flat word index (binary search trên wordOffsets)
             let lo = 0, hi = wordOffsets.length - 1, flat = 0;
@@ -265,7 +268,8 @@ export default function ArticleScreen({ navigation, route }: any) {
             setHighlightWordIndex(-1);
             setHighlightParaIndex(-1);
           });
-          await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch });
+          // Truyền voice đã resolve theo gender (không truyền = giọng mặc định)
+          await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch, voice: webVoice });
           return;
         } catch {
           // Web Speech failed → fall through to Edge TTS

@@ -48,6 +48,28 @@ export function revokeAudioUrl(url: string) {
   try { URL.revokeObjectURL(url); } catch {}
 }
 
+// Web Speech API: tên giọng vi khác nhau theo trình duyệt (Edge: "Microsoft HoaiMy Neural"
+// nữ / "Microsoft NamMinh Neural" nam; Chrome thường chỉ có 1 giọng nam) và getVoices()
+// trả [] ở lần gọi đầu (load async). Trả về giọng khớp gender, hoặc null nếu trình duyệt
+// KHÔNG CÓ giọng đó → caller tự fallback sang Edge TTS (đảm bảo đúng giọng đã chọn).
+export async function resolveWebVoice(gender: EdgeGender): Promise<SpeechSynthesisVoice | null> {
+  if (typeof speechSynthesis === 'undefined') return null;
+  const voices = await new Promise<SpeechSynthesisVoice[]>((resolve) => {
+    const list = speechSynthesis.getVoices();
+    if (list.length) return resolve(list);
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(speechSynthesis.getVoices()); } };
+    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
+    setTimeout(done, 1000);
+  });
+  const vi = voices.filter((v) => v.lang.toLowerCase().startsWith('vi'));
+  const tokens = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/);
+  const FEMALE = ['hoaomy', 'lan'];
+  const MALE = ['namminh', 'an'];
+  const hints = gender === 'nam' ? MALE : FEMALE;
+  return vi.find((v) => tokens(v.name).some((t) => hints.includes(t))) || null;
+}
+
 // Fallback: use expo-speech (system TTS, no network needed)
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';

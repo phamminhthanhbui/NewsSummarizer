@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { PROVIDERS, type LLMProvider, getModelsForProvider } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakEdge, revokeAudioUrl, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, resolveWebVoice, type EdgeGender } from '../services/edgeTts';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
@@ -94,10 +94,12 @@ export default function SettingsScreen() {
   };
 
   const stopAudio = () => {
+    // Web có thể dùng Web Speech HOẶC Edge TTS fallback → dừng cả 2 đường
     if (isWeb) {
       speechSynthesis.cancel();
       webUtteranceRef.current = null;
-    } else if (audioRef.current) {
+    }
+    if (audioRef.current) {
       audioRef.current.stopAsync();
       audioRef.current.unloadAsync();
       audioRef.current = null;
@@ -114,55 +116,58 @@ export default function SettingsScreen() {
     try {
       const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
       if (isWeb) {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'vi-VN';
-        utterance.rate = rate;
-        utterance.pitch = pitch;
-
-        const voices = speechSynthesis.getVoices();
-        const voiceName = gender === 'nam' ? 'Nam Minh' : 'Hoai My';
-        const matched = voices.find((v) => v.name.includes(voiceName) || v.lang === 'vi-VN');
-        if (matched) utterance.voice = matched;
-
-        utterance.onend = () => {
-          setPreviewing(false);
-          webUtteranceRef.current = null;
-        };
-        utterance.onerror = () => {
-          setPreviewing(false);
-          webUtteranceRef.current = null;
-        };
-        webUtteranceRef.current = utterance;
-        speechSynthesis.speak(utterance);
-
-        setTimeout(() => {
-          if (previewing) {
-            stopAudio();
+        // Browser có giọng khớp gender → Web Speech (offline, tức thì)
+        const matched = await resolveWebVoice(gender);
+        if (matched) {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = 'vi-VN';
+          utterance.rate = rate;
+          utterance.pitch = pitch;
+          utterance.voice = matched;
+          utterance.onend = () => {
             setPreviewing(false);
-          }
-        }, 15000);
-      } else {
-        const url = await speakEdge(text, gender);
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: url },
-          { volume: 1.0 },
-          (status) => {
-            if (status.isLoaded && status.didJustFinish) {
+            webUtteranceRef.current = null;
+          };
+          utterance.onerror = () => {
+            setPreviewing(false);
+            webUtteranceRef.current = null;
+          };
+          webUtteranceRef.current = utterance;
+          speechSynthesis.speak(utterance);
+
+          setTimeout(() => {
+            if (previewing) {
+              stopAudio();
               setPreviewing(false);
-              revokeAudioUrl(url);
             }
-          }
-        );
-        audioRef.current = sound;
-        await sound.setRateAsync(rate, true);
-        await sound.playAsync();
-        setTimeout(() => {
-          if (previewing) {
-            stopAudio();
-            setPreviewing(false);
-          }
-        }, 15000);
+          }, 15000);
+          return;
+        }
+        // Browser KHÔNG có giọng đúng (vd Chrome chỉ có giọng nam "Microsoft An")
+        // → fall through xuống Edge TTS để đảm bảo đúng giọng đã chọn
       }
+
+      // Edge TTS (native + web fallback khi browser thiếu giọng)
+      const url = await speakEdge(text, gender);
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: url },
+        { volume: 1.0 },
+        (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setPreviewing(false);
+            revokeAudioUrl(url);
+          }
+        }
+      );
+      audioRef.current = sound;
+      await sound.setRateAsync(rate, true);
+      await sound.playAsync();
+      setTimeout(() => {
+        if (previewing) {
+          stopAudio();
+          setPreviewing(false);
+        }
+      }, 15000);
     } catch (e) {
       alert('Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown'));
       setPreviewing(false);
