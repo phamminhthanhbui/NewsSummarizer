@@ -88,6 +88,9 @@ export default function ArticleScreen({ navigation, route }: any) {
   const [related, setRelated] = useState<FeedItem[]>([]);
   const [speaking, setSpeaking] = useState(false);
   const audioRef = useRef<Audio.Sound | null>(null);
+  // Guard async continuation: thoát/dừng khi speakEdge đang fetch dở
+  // thì không cho continuation phát audio bài cũ sau khi fetch xong
+  const cancelledRef = useRef(false);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
   const openImageModal = (url: string) => setImageModal({ visible: true, url });
@@ -215,6 +218,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Giọng đọc: Word-level highlight on web, paragraph fallback on native
   const toggleSpeak = async () => {
     if (speaking) {
+      cancelledRef.current = true; // chặn continuation của speakEdge đang fetch dở
       if (audioRef.current) { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); audioRef.current = null; }
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
@@ -224,6 +228,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       return;
     }
     if (!summary) return;
+    cancelledRef.current = false;
     setSpeaking(true);
     setHighlightWordIndex(0);
     setHighlightParaIndex(0);
@@ -275,6 +280,8 @@ export default function ArticleScreen({ navigation, route }: any) {
       // Try Edge TTS (native + web fallback)
       try {
         const url = await speakEdge(text, gender);
+        // Đã dừng/thoát trong lúc fetch → bỏ kết quả, không phát nữa
+        if (cancelledRef.current) { revokeAudioUrl(url); return; }
         const { sound } = await Audio.Sound.createAsync(
           { uri: url },
           { rate, volume: 1.0 },
@@ -307,6 +314,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       }
 
       // Fallback: expo-speech (system TTS) - approximate paragraph highlighting
+      if (cancelledRef.current) return; // Edge TTS fail nhưng đã dừng/thoát rồi
       intervalRef.current = setInterval(() => {
         if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
         setHighlightParaIndex(prev => {
@@ -330,6 +338,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Dừng đọc khi rời màn hình. Bottom-tabs KHÔNG unmount khi chuyển tab
   // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
   const stopSpeaking = () => {
+    cancelledRef.current = true; // chặn continuation của speakEdge/speakSystem đang chờ
     if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; }
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
