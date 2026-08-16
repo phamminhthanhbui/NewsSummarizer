@@ -7,7 +7,7 @@ import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 
-export default function ArticleCard({ item, onPress }: Props) {
+function ArticleCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
 
   return (
@@ -41,6 +41,9 @@ export default function ArticleCard({ item, onPress }: Props) {
     </TouchableOpacity>
   );
 }
+
+// memo: FlatList re-render (scroll, filter đổi) không kéo theo re-render từng card
+export default React.memo(ArticleCard);
 
 const s = StyleSheet.create({
   row: {

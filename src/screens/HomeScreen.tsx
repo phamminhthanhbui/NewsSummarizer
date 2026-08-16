@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -58,6 +58,41 @@ const today = () => {
   return `${days[d.getDay()]}, ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 };
 
+// Chip components ở module scope (KHÔNG trong HomeScreen) — định nghĩa trong
+// component tạo type mới mỗi lần render, phá memo và remount toàn bộ chip
+const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => {
+  const color = CATEGORY_COLORS[category] || Color.primary;
+  const icon = CATEGORY_ICONS[category] || 'grid-outline';
+  return (
+    <TouchableOpacity
+      style={[
+        styles.categoryChip,
+        active && styles.categoryChipActive,
+        { backgroundColor: active ? color : Color.surfaceAlt, borderColor: active ? color : Color.border },
+      ]}
+      onPress={() => onPress(category)}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+    >
+      <Ionicons name={icon as any} size={15} color={active ? '#FFF' : color} />
+      <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{category}</Text>
+    </TouchableOpacity>
+  );
+});
+
+const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => (
+  <TouchableOpacity
+    style={[styles.sourceChip, active && styles.sourceChipActive]}
+    onPress={() => onPress(source)}
+    activeOpacity={0.7}
+    accessibilityRole="button"
+    accessibilityState={{ selected: active }}
+  >
+    <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]}>{source}</Text>
+  </TouchableOpacity>
+));
+
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [items, setItems] = useState<FeedItem[]>([]);
@@ -71,8 +106,6 @@ export default function HomeScreen({ navigation }: Props) {
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
-  const lastContentOffset = useRef(0);
-  const [headerHidden, setHeaderHidden] = useState(false);
 
   const load = useCallback(async () => {
     const data = await fetchAllFeeds();
@@ -81,10 +114,10 @@ export default function HomeScreen({ navigation }: Props) {
 
   useEffect(() => {
     load().finally(() => setLoading(false));
-    // Staggered entrance animations
+    // Staggered entrance animations — native driver: chạy UI thread, không giật khi JS bận
     Animated.sequence([
-      Animated.timing(headerAnim, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(categoryAnim, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
+      Animated.timing(headerAnim, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(categoryAnim, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start();
   }, [load]);
 
@@ -99,10 +132,10 @@ export default function HomeScreen({ navigation }: Props) {
     }
   }, [load]);
 
-  const goArticle = (item: FeedItem) => {
+  const goArticle = useCallback((item: FeedItem) => {
     Keyboard.dismiss();
     navigation.navigate('Article', { item });
-  };
+  }, [navigation]);
 
   const filtered = useMemo(() => {
     let result = items;
@@ -119,9 +152,10 @@ export default function HomeScreen({ navigation }: Props) {
     return result;
   }, [items, selectedCategory, selectedSource, searchQuery]);
 
-  const withImg = filtered.filter((i) => i.image);
-  const hero = withImg[0] || null;
-  const rest = filtered.filter((i) => i !== hero);
+  const { hero, rest } = useMemo(() => {
+    const hero = filtered.find((i) => i.image) || null;
+    return { hero, rest: hero ? filtered.filter((i) => i !== hero) : filtered };
+  }, [filtered]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -129,48 +163,18 @@ export default function HomeScreen({ navigation }: Props) {
     categories: new Set(items.map((i) => FEEDS.find((f) => f.name === i.source)?.category).filter(Boolean)).size,
   }), [items]);
 
-  const handleScroll = useCallback(({ nativeEvent }: any) => {
-    const offset = nativeEvent.contentOffset.y;
-    const delta = offset - lastContentOffset.current;
-    if (delta > 10 && !headerHidden) setHeaderHidden(true);
-    else if (delta < -10 && headerHidden) setHeaderHidden(false);
-    lastContentOffset.current = offset;
-  }, [headerHidden]);
+  const renderItem = useCallback(({ item }: { item: FeedItem }) => <ArticleCard item={item} onPress={goArticle} />, [goArticle]);
 
-  const CategoryChip = ({ category, active, onPress }: { category: string; active: boolean; onPress: () => void }) => {
-    const color = CATEGORY_COLORS[category] || Color.primary;
-    const icon = CATEGORY_ICONS[category] || 'grid-outline';
-    return (
-      <TouchableOpacity
-        style={[
-          styles.categoryChip,
-          active && styles.categoryChipActive,
-          { backgroundColor: active ? color : Color.surfaceAlt, borderColor: active ? color : Color.border },
-        ]}
-        onPress={onPress}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-      >
-        <Ionicons name={icon as any} size={15} color={active ? '#FFF' : color} />
-        <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{category}</Text>
-      </TouchableOpacity>
-    );
-  };
-
-  const SourceChip = ({ source, active, onPress }: { source: string; active: boolean; onPress: () => void }) => (
-    <TouchableOpacity
-      style={[styles.sourceChip, active && styles.sourceChipActive]}
-      onPress={onPress}
-      activeOpacity={0.7}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-    >
-      <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]}>{source}</Text>
-    </TouchableOpacity>
-  );
-
-  const renderItem = ({ item }: { item: FeedItem }) => <ArticleCard item={item} onPress={goArticle} />;
+  // Callback ổn định cho chip (memo chỉ hiệu quả khi onPress không đổi)
+  const handleCategoryPress = useCallback((category: string) => {
+    setSelectedCategory(category);
+    setSelectedSource('Tất cả');
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+  const handleSourcePress = useCallback((source: string) => {
+    setSelectedSource(source);
+    setShowSourceModal(false);
+  }, []);
 
   return (
     <Animated.View style={[styles.root, { opacity: headerAnim }]}>
@@ -231,15 +235,7 @@ export default function HomeScreen({ navigation }: Props) {
           contentContainerStyle={styles.categoryContent}
           keyExtractor={(item) => item}
           renderItem={({ item }) => (
-            <CategoryChip
-              category={item}
-              active={selectedCategory === item}
-              onPress={() => {
-                setSelectedCategory(item);
-                setSelectedSource('Tất cả');
-                if (flatListRef.current) flatListRef.current.scrollToOffset({ offset: 0, animated: true });
-              }}
-            />
+            <CategoryChip category={item} active={selectedCategory === item} onPress={handleCategoryPress} />
           )}
         />
       </Animated.View>
@@ -276,11 +272,7 @@ export default function HomeScreen({ navigation }: Props) {
               data={SOURCES}
               keyExtractor={(item) => item}
               renderItem={({ item }) => (
-                <SourceChip
-                  source={item}
-                  active={selectedSource === item}
-                  onPress={() => { setSelectedSource(item); setShowSourceModal(false); }}
-                />
+                <SourceChip source={item} active={selectedSource === item} onPress={handleSourcePress} />
               )}
               contentContainerStyle={styles.modalListContent}
             />
@@ -342,8 +334,6 @@ export default function HomeScreen({ navigation }: Props) {
           data={rest}
           keyExtractor={(item, i) => `${item.link}-${i}`}
           renderItem={renderItem}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
           ListHeaderComponent={
             <View style={styles.listHeader}>
               {hero && (

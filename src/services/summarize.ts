@@ -311,6 +311,7 @@ const NON_EDITORIAL_FILENAME_PATTERNS = [
   /sprite/i,                      // CSS sprites
   /tracking|pixel|beacon/i,       // tracking pixels
   /social|share|fb|zalo|tw|ig|yt/i, // social icons (when standalone)
+  /newslette|newsletter/i,          // newsletter signup banners
 ];
 // Fake video: .gif.mp4, .webp.mp4 = animated images, not real videos
 const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
@@ -321,11 +322,18 @@ const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
 // - UI icons: ava_inter, ggr/x2, social icons, tracking pixels
 // VnExpress ảnh bài thật = w=1020&h=0 (h=0 là auto, đừng chặn), thumbnail khác = w=180/300.
 function isEditorialImage(url: string): boolean {
+    // blob:/data: = object URL của trình duyệt render, không phải ảnh thật của bài
+    if (!/^(https?:)?\/\//i.test(url)) return false;
     if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
     if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
-    // Filter thumbnail patterns: /zoom/328_205/, /zoom/205_128/, /thumb_w/, /thumb/, /crop/, /resize/, /small/, /medium/
-    if (/\/zoom\/\d+_\d+\/|\/thumb_w\//i.test(url)) return false;
-    if (/(^|\/)(thumb|crop|resize|small|medium|avatar|avatar-|icon-|logo-|sprite|tracking|pixel|beacon)(\/|_|-|\.)/i.test(url)) return false;
+    // /zoom/W_H/ luôn là thumbnail (sidebar/tin liên quan). /thumb_w/N/ chỉ chặn N nhỏ:
+    // Thanh Niên/Tuổi Trẻ trả ảnh bài thật qua /thumb_w/640|730/ — chặn hết là mất ảnh nội dung.
+    if (/\/zoom\/\d+_\d+\//i.test(url)) return false;
+    const thumbW = url.match(/\/thumb_w\/(\d+)\//i);
+    if (thumbW && +thumbW[1] < 400) return false;
+    // Static assets của tòa soạn (avatar tác giả, banner promo, logo): /web_images/
+    if (/\/web_images\//i.test(url)) return false;
+    if (/(^|\/)(crop|resize|small|medium|avatar|avatar-|icon-|logo-|sprite|tracking|pixel|beacon)(\/|_|-|\.)/i.test(url)) return false;
     // Filter related articles/sidebar thumbnails: /related/, /sidebar/, /widget/, /recommend/, /more-news/, /box-/, /list-/
     if (/(related|sidebar|widget|recommend|more.?news|box.|list.|also.?read|xem.?them|tin.?lien.?quan|doc.?nhieu|khac.?bai)(\/|_|-|\.)/i.test(url)) return false;
     // Filter thumbnail suffixes: -thumb, _thumb, -small, _small, -preview, _preview
@@ -337,9 +345,9 @@ function isEditorialImage(url: string): boolean {
       const w = +wParam[1], h = +hParam[1];
       if (w > 0 && h > 0 && w / h < 1.2) return false; // square/portrait = likely thumbnail
     }
-    // Filter very small images (likely tracking/ads)
-    if (wParam && +wParam[1] < 400) return false;
-    if (hParam && +hParam[1] < 300) return false;
+    // Filter very small images (likely tracking/ads). w=0/h=0 là "auto" (VnExpress), đừng chặn.
+    if (wParam && +wParam[1] > 0 && +wParam[1] < 400) return false;
+    if (hParam && +hParam[1] > 0 && +hParam[1] < 300) return false;
     // Filter 1x1, 2x2 tracking pixels
     if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
     // Filter UI icon filenames common in VN news sites

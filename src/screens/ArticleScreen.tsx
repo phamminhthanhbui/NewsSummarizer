@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -353,8 +353,8 @@ export default function ArticleScreen({ navigation, route }: any) {
     return () => { unsub(); stopSpeaking(); };
   }, []);
 
-  const goArticle = (feedItem: FeedItem) =>
-    navigation.push('Article', { item: feedItem });
+  const goArticle = useCallback((feedItem: FeedItem) =>
+    navigation.push('Article', { item: feedItem }), [navigation]);
 
   // Read time estimate (chars → minutes); degrades to stub until content loads
   const READ_WPM = 250;

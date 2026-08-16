@@ -7,7 +7,7 @@ import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 
-export default function FeaturedCard({ item, onPress }: Props) {
+function FeaturedCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
 
   return (
@@ -36,6 +36,8 @@ export default function FeaturedCard({ item, onPress }: Props) {
     </TouchableOpacity>
   );
 }
+
+export default React.memo(FeaturedCard);
 
 const s = StyleSheet.create({
   card: { width: '100%', height: 210, borderRadius: Radius.lg, overflow: 'hidden' },
