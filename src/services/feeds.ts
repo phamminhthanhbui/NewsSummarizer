@@ -17,7 +17,6 @@ export const SOURCE_COLORS: Record<string, string> = {
   'Dân Trí': '#0066B3',
   'Người Lao Động': '#C4161C',
   'Tiền Phong': '#E31E24',
-  'Pháp Luật TP.HCM': '#1B75BC',
   'Sài Gòn Giải Phóng': '#D42020',
   'CAND': '#1A4B8C',
   'An ninh Thủ đô': '#8B0000',
@@ -44,11 +43,10 @@ export const FEEDS = [
   { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'Người Lao Động', url: 'https://nld.com.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/home.rss', category: 'Việt Nam' },
-  { name: 'Pháp Luật TP.HCM', url: 'https://plo.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'Sài Gòn Giải Phóng', url: 'https://sggp.org.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'CAND', url: 'https://cand.com.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'An ninh Thủ đô', url: 'https://anninhthudo.vn/rss/home.rss', category: 'Việt Nam' },
-  { name: 'Báo Chính phủ', url: 'https://baochinhphu.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Báo Chính phủ', url: 'https://baochinhphu.vn/rss', category: 'Việt Nam' },
   { name: 'Báo Giao Thông', url: 'https://baogiaothong.vn/rss/home.rss', category: 'Việt Nam' },
 
   // Công nghệ

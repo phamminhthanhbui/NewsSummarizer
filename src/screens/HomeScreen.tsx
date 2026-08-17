@@ -51,6 +51,16 @@ const CATEGORY_COLORS: Record<string, string> = {
   'Sức khỏe': '#26DE81',
 };
 
+const CATEGORY_ICONS: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+  'Tất cả': 'apps',
+  'Việt Nam': 'flag',
+  'Công nghệ': 'hardware-chip',
+  'Kinh doanh': 'briefcase',
+  'Thể thao': 'football',
+  'Giải trí': 'film',
+  'Sức khỏe': 'medkit',
+};
+
 const today = () => {
   const d = new Date();
   const days = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
@@ -59,7 +69,7 @@ const today = () => {
 
 // Chip components ở module scope (KHÔNG trong HomeScreen) — định nghĩa trong
 // component tạo type mới mỗi lần render, phá memo và remount toàn bộ chip
-// Tab kiểu báo điện tử (CafeBiz): chữ đỏ gạch chân, không icon
+// Tab kiểu báo điện tử (CafeBiz): chữ đỏ gạch chân, kèm icon theo category
 const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => (
   <TouchableOpacity
     style={[styles.categoryTab, active && styles.categoryTabActive]}
@@ -68,6 +78,12 @@ const CategoryChip = React.memo(({ category, active, onPress }: { category: stri
     accessibilityRole="button"
     accessibilityState={{ selected: active }}
   >
+    <Ionicons
+      name={CATEGORY_ICONS[category] || 'newspaper'}
+      size={15}
+      color={active ? Color.hot : Color.textSecondary}
+      style={styles.categoryTabIcon}
+    />
     <Text style={[styles.categoryTabText, active && styles.categoryTabTextActive]}>{category}</Text>
   </TouchableOpacity>
 ));
@@ -490,8 +506,9 @@ const styles = StyleSheet.create({
   // Category Bar — tab gạch chân cam kiểu menu báo điện tử
   categoryBar: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
   categoryContent: { paddingHorizontal: 12 },
-  categoryTab: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 3, borderBottomColor: 'transparent' },
+  categoryTab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 3, borderBottomColor: 'transparent' },
   categoryTabActive: { borderBottomColor: Color.hot },
+  categoryTabIcon: { marginRight: 5 },
   categoryTabText: { fontSize: Font.body, fontWeight: '600', color: Color.textSecondary },
   categoryTabTextActive: { color: Color.hot, fontWeight: '800' },
 
