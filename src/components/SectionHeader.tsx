@@ -17,7 +17,7 @@ export default function SectionHeader({ title }: Props) {
 }
 
 const s = StyleSheet.create({
-  wrap: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 20, paddingBottom: 10, backgroundColor: Color.bg },
+  wrap: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 20, paddingBottom: 10, backgroundColor: Color.card },
   mark: { width: 5, height: 20, backgroundColor: Color.primary, borderRadius: Radius.sm, marginRight: 10 },
   titleWrap: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   title: { fontSize: 14, fontWeight: '800', color: Color.primary, textTransform: 'uppercase', letterSpacing: 0.8 },

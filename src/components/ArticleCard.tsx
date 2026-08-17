@@ -20,22 +20,15 @@ function ArticleCard({ item, onPress }: Props) {
         </View>
       )}
       <View style={s.body}>
+        {/* Nhãn chuyên mục đỏ kiểu CafeBiz */}
+        {item.category ? <Text style={s.category}>{item.category}</Text> : null}
         <Text style={s.title} numberOfLines={2}>{item.title}</Text>
         {item.description ? (
           <Text style={s.desc} numberOfLines={1}>{item.description}</Text>
         ) : null}
         <View style={s.meta}>
-          <View style={s.srcPill}>
-            <Ionicons name="radio-button-on" size={9} color={Color.primary} />
-            <Text style={s.source} numberOfLines={1}>{item.source}</Text>
-          </View>
-          {t ? (
-            <View style={s.timeWrap}>
-              <Text style={s.time}>·</Text>
-              <Ionicons name="time-outline" size={11} color={Color.textMuted} />
-              <Text style={s.time}>{t} trước</Text>
-            </View>
-          ) : null}
+          <Text style={s.source} numberOfLines={1}>{item.source}</Text>
+          {t ? <Text style={s.time}>· {t} trước</Text> : null}
         </View>
       </View>
     </TouchableOpacity>
@@ -57,20 +50,10 @@ const s = StyleSheet.create({
   thumb: { width: 118, height: 84, borderRadius: Radius.sm, marginRight: 12, backgroundColor: Color.skeleton },
   thumbPh: { alignItems: 'center', justifyContent: 'center' },
   body: { flex: 1, justifyContent: 'center' },
+  category: { fontSize: Font.tiny, fontWeight: '800', color: Color.primary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
   title: { fontSize: Font.headline, fontWeight: '700', color: Color.text, lineHeight: 22, marginBottom: 4 },
   desc: { fontSize: Font.body, color: Color.textSecondary, lineHeight: 19, marginBottom: 7 },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  srcPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: Color.primarySoft,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 20,
-    maxWidth: 150,
-  },
-  source: { fontSize: Font.tiny, color: Color.primary, fontWeight: '700' },
-  timeWrap: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  source: { fontSize: Font.tiny, color: Color.textSecondary, fontWeight: '600', maxWidth: 150 },
   time: { fontSize: Font.tiny, color: Color.textMuted },
 });

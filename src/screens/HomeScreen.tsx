@@ -35,16 +35,6 @@ const HERO_W = Dimensions.get('window').width - 24; // listHeader paddingHorizon
 const CATEGORIES = ['Tất cả', ...new Set(FEEDS.map((f) => f.category))];
 const SOURCES = ['Tất cả', ...new Set(FEEDS.map((f) => f.name))];
 
-const CATEGORY_ICONS: Record<string, string> = {
-  'Tất cả': 'grid-outline',
-  'Việt Nam': 'flag-outline',
-  'Thế giới': 'earth-outline',
-  'Công nghệ': 'laptop-outline',
-  'Kinh doanh': 'briefcase-outline',
-  'Thể thao': 'basketball-outline',
-  'Giải trí': 'film-outline',
-  'Sức khỏe': 'medkit-outline',
-};
 
 const CATEGORY_COLORS: Record<string, string> = {
   'Tất cả': Color.primary,
@@ -65,26 +55,18 @@ const today = () => {
 
 // Chip components ở module scope (KHÔNG trong HomeScreen) — định nghĩa trong
 // component tạo type mới mỗi lần render, phá memo và remount toàn bộ chip
-const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => {
-  const color = CATEGORY_COLORS[category] || Color.primary;
-  const icon = CATEGORY_ICONS[category] || 'grid-outline';
-  return (
-    <TouchableOpacity
-      style={[
-        styles.categoryChip,
-        active && styles.categoryChipActive,
-        { backgroundColor: active ? color : Color.surfaceAlt, borderColor: active ? color : Color.border },
-      ]}
-      onPress={() => onPress(category)}
-      activeOpacity={0.7}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-    >
-      <Ionicons name={icon as any} size={15} color={active ? '#FFF' : color} />
-      <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{category}</Text>
-    </TouchableOpacity>
-  );
-});
+// Tab kiểu báo điện tử (CafeBiz): chữ đỏ gạch chân, không icon
+const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => (
+  <TouchableOpacity
+    style={[styles.categoryTab, active && styles.categoryTabActive]}
+    onPress={() => onPress(category)}
+    activeOpacity={0.7}
+    accessibilityRole="button"
+    accessibilityState={{ selected: active }}
+  >
+    <Text style={[styles.categoryTabText, active && styles.categoryTabTextActive]}>{category}</Text>
+  </TouchableOpacity>
+));
 
 const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => (
   <TouchableOpacity
@@ -212,39 +194,31 @@ export default function HomeScreen({ navigation }: Props) {
           { paddingTop: insets.top + 8, paddingBottom: 10 },
         ]}
       >
-        {/* Row 1: Brand + Search */}
+        {/* Row 1: Brand + actions — masthead trắng kiểu báo điện tử */}
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <View style={styles.logoBadge}>
-              <Ionicons name="newspaper" size={24} color="#FFF" />
+              <Ionicons name="newspaper" size={20} color="#FFF" />
             </View>
             <Text style={styles.brand}>NewsSummarizer</Text>
           </View>
-          <TouchableOpacity style={styles.searchBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
-            <Ionicons name="search-outline" size={22} color="#FFF" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Row 2: Date + Stats + Refresh */}
-        <View style={styles.headerRow2}>
-          <View style={styles.dateWrap}>
-            <Ionicons name="calendar-outline" size={13} color="rgba(255,255,255,0.7)" />
-            <Text style={styles.date}>{today()}</Text>
-          </View>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.total}</Text>
-              <Text style={styles.statLabel}>bài</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.sources}</Text>
-              <Text style={styles.statLabel}>nguồn</Text>
-            </View>
-            <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
-              <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color="#FFF" style={refreshing ? styles.refreshSpin : {}} />
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
+              <Ionicons name="search-outline" size={20} color={Color.text} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconBtn} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
+              <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color={Color.text} style={refreshing ? styles.refreshSpin : {}} />
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Row 2: Date + stats */}
+        <View style={styles.headerRow2}>
+          <View style={styles.dateWrap}>
+            <Ionicons name="calendar-outline" size={13} color={Color.textMuted} />
+            <Text style={styles.date}>{today()}</Text>
+          </View>
+          <Text style={styles.statsText}>{stats.total} bài · {stats.sources} nguồn</Text>
         </View>
       </Animated.View>
 
@@ -270,11 +244,11 @@ export default function HomeScreen({ navigation }: Props) {
       {/* Source Selector Trigger */}
       <TouchableOpacity style={styles.sourceTrigger} onPress={() => { Keyboard.dismiss(); setShowSourceModal(true); }} activeOpacity={0.8} accessibilityLabel="Chọn nguồn tin">
         <View style={styles.sourceTriggerLeft}>
-          <Ionicons name="filter-outline" size={18} color={Color.primary} />
-          <Text style={styles.sourceTriggerText}>Nguồn: </Text>
+          <Ionicons name="funnel-outline" size={15} color={Color.primary} />
+          <Text style={styles.sourceTriggerText}>Nguồn:</Text>
           <Text style={styles.sourceTriggerValue}>{selectedSource}</Text>
         </View>
-        <Ionicons name="chevron-down" size={18} color={Color.textMuted} />
+        <Ionicons name="chevron-down" size={16} color={Color.textMuted} />
       </TouchableOpacity>
 
       {/* Source Modal */}
@@ -435,61 +409,42 @@ export default function HomeScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Color.bg },
+  root: { flex: 1, backgroundColor: Color.card },
 
-  // Header
+  // Header — masthead trắng kiểu báo điện tử (CafeBiz): brand đỏ, icon đen
   header: {
-    backgroundColor: Color.primary,
+    backgroundColor: Color.card,
     paddingHorizontal: 16,
-    paddingBottom: 12,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 },
-      android: { elevation: 4 },
-      default: { boxShadow: '0 2px 8px rgba(15, 23, 42, 0.1)' },
-    }),
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Color.border,
   },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerRow2: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  headerLeft: { flex: 1 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  searchBtn: { padding: 6, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.18)' },
+  headerRow2: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  iconBtn: { padding: 8, borderRadius: 999, backgroundColor: Color.surfaceAlt },
   logoBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.md,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    width: 34,
+    height: 34,
+    borderRadius: Radius.sm,
+    backgroundColor: Color.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  brand: { fontSize: 24, fontWeight: '800', color: '#FFF', letterSpacing: -0.5, marginTop: 6 },
+  brand: { fontSize: 21, fontWeight: '800', color: Color.primary, letterSpacing: -0.5 },
   dateWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  date: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
-  statsRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  statItem: { alignItems: 'center' },
-  statNumber: { fontSize: 16, fontWeight: '800', color: '#FFF' },
-  statLabel: { fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase' },
-  statDivider: { width: 1, height: 24, backgroundColor: 'rgba(255,255,255,0.2)' },
-  statsPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  stat: { fontSize: 11, fontWeight: '700', color: '#FFF' },
-  statDot: { color: 'rgba(255,255,255,0.4)' },
-  refreshBtn: { padding: 6, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.18)' },
+  date: { fontSize: 12, color: Color.textMuted, fontWeight: '500' },
+  statsText: { fontSize: 12, color: Color.textMuted, fontWeight: '500' },
   refreshSpin: { transform: [{ rotate: '360deg' }] },
 
-  // Category Bar
-  categoryBar: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: Color.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
-  categoryContent: { paddingHorizontal: 4, gap: 8 },
-  categoryChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999, borderWidth: 1 },
-  categoryChipActive: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 3 },
-  categoryChipText: { fontSize: Font.caption, fontWeight: '600', color: Color.textSecondary },
-  categoryChipTextActive: { color: '#FFF', fontWeight: '700' },
+  // Category Bar — tab gạch chân đỏ kiểu menu báo điện tử
+  categoryBar: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
+  categoryContent: { paddingHorizontal: 12 },
+  categoryTab: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 3, borderBottomColor: 'transparent' },
+  categoryTabActive: { borderBottomColor: Color.primary },
+  categoryTabText: { fontSize: Font.body, fontWeight: '600', color: Color.textSecondary },
+  categoryTabTextActive: { color: Color.primary, fontWeight: '800' },
 
   // Source Trigger
   sourceTrigger: {
@@ -497,15 +452,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingVertical: 11,
     backgroundColor: Color.card,
-    borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
-  sourceTriggerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sourceTriggerLeft: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   sourceTriggerText: { fontSize: Font.caption, color: Color.textSecondary },
-  sourceTriggerValue: { fontWeight: '700', color: Color.text },
+  sourceTriggerValue: { fontWeight: '700', color: Color.primary },
 
   // Modal
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end', zIndex: 100 },
