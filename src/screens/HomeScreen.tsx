@@ -14,18 +14,21 @@ import {
   TextInput,
   Pressable,
   Dimensions,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FEEDS, fetchAllFeeds } from '../services/feeds';
-import type { FeedItem } from '../types';
+import { fetchVideos } from '../services/videos';
+import type { FeedItem, VideoItem } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 import ArticleCard from '../components/ArticleCard';
 import FeaturedCard from '../components/FeaturedCard';
 import SectionHeader from '../components/SectionHeader';
 import SkeletonCard from '../components/SkeletonCard';
+import VideoCard from '../components/VideoCard';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
 
@@ -85,6 +88,7 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [items, setItems] = useState<FeedItem[]>([]);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
@@ -97,8 +101,9 @@ export default function HomeScreen({ navigation }: Props) {
   const flatListRef = useRef<FlatList<FeedItem>>(null);
 
   const load = useCallback(async () => {
-    const data = await fetchAllFeeds();
+    const [data, vids] = await Promise.all([fetchAllFeeds(), fetchVideos()]);
     setItems(data);
+    setVideos(vids);
   }, []);
 
   useEffect(() => {
@@ -125,6 +130,11 @@ export default function HomeScreen({ navigation }: Props) {
     Keyboard.dismiss();
     navigation.navigate('Article', { item });
   }, [navigation]);
+
+  // CDN chặn phát trực tiếp (mp4 400, hls.mediacdn.vn IP private) nên mở trang gốc
+  const goVideo = useCallback((v: VideoItem) => {
+    Linking.openURL(v.link);
+  }, []);
 
   const filtered = useMemo(() => {
     let result = items;
@@ -269,6 +279,26 @@ export default function HomeScreen({ navigation }: Props) {
               <TouchableOpacity key={h.link} style={styles.hotItem} onPress={() => goArticle(h)} activeOpacity={0.7}>
                 <Text style={styles.hotItemText} numberOfLines={1}>{h.title}</Text>
               </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Section VIDEO — crawl từ video.kenh14.vn, RSS không có video/live */}
+      {videos.length > 0 && (
+        <View style={styles.videoSection}>
+          <View style={styles.videoHeader}>
+            <View style={styles.videoLabel}>
+              <Ionicons name="videocam" size={13} color="#FFF" />
+              <Text style={styles.videoLabelText}>VIDEO</Text>
+            </View>
+            <Text style={styles.videoSub}>mở tại nguồn</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
+            {videos.map((v) => (
+              <View key={v.link} style={styles.videoCardWrap}>
+                <VideoCard item={v} onPress={goVideo} />
+              </View>
             ))}
           </ScrollView>
         </View>
@@ -488,6 +518,15 @@ const styles = StyleSheet.create({
   hotScroll: { gap: 16, paddingRight: 16, alignItems: 'center' },
   hotItem: { maxWidth: 260 },
   hotItemText: { fontSize: Font.caption, fontWeight: '600', color: Color.text },
+
+  // Section VIDEO
+  videoSection: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border, paddingTop: 12, paddingBottom: 14 },
+  videoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, marginBottom: 10 },
+  videoLabel: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Color.hotDark, paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.sm },
+  videoLabelText: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.5 },
+  videoSub: { fontSize: Font.tiny, color: Color.textMuted },
+  videoScroll: { paddingHorizontal: 12, gap: 10 },
+  videoCardWrap: { width: 220 },
 
   // Modal
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end', zIndex: 100 },

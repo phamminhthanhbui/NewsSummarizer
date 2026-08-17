@@ -57,6 +57,86 @@ app.get('/api/fetch', async (req, res) => {
   }
 });
 
+// Crawl danh sách video từ trang video của các báo — RSS không có video/live.
+// Kenh14: <li class="swiper-slide"> mang data-title, data-share, data-thumb, duration.
+//   KHÔNG dùng data-htmlcode: mọi item trỏ về cùng video đầu tiên (bug phía site).
+// Soha: <article class="box-category-item"> — href relative, thumb ở poster/img,
+//   ngày giờ trong comment time-ago.
+const decodeHtml = (s) => s
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+
+const UA = { 'User-Agent': 'Mozilla/5.0 (compatible; NewsSummarizer RSS reader)' };
+
+async function crawlKenh14() {
+  const response = await fetch('https://video.kenh14.vn/', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<li class="swiper-slide"').slice(1)) {
+    const attr = (name) => {
+      const m = block.match(new RegExp(name + '="([^"]*)"'));
+      return m ? decodeHtml(m[1]) : '';
+    };
+    const title = attr('data-title');
+    const link = attr('data-share');
+    if (!title || !link || seen.has(link)) continue;
+    seen.add(link);
+    videos.push({
+      title,
+      link,
+      // data-thumb là bản to (zoom 980x551); background-image chỉ là thumb 80px
+      thumb: attr('data-thumb') || (block.match(/background-image:\s*url\('([^']+)'\)/) || [])[1] || '',
+      duration: (block.match(/ava_duration">([^<]+)</) || [])[1] || '',
+      pubDate: attr('data-distribution-date'),
+      zone: attr('data-zone-name'),
+      source: 'Kenh14',
+    });
+  }
+  return videos;
+}
+
+async function crawlSoha() {
+  const response = await fetch('https://soha.vn/video.htm', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<article class="box-category-item').slice(1)) {
+    const title = decodeHtml((block.match(/title="([^"]+)"/) || [])[1] || '');
+    const href = (block.match(/href="(\/video\/[^"]+)"/) || [])[1] || '';
+    if (!title || !href) continue;
+    const link = 'https://soha.vn' + href;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    videos.push({
+      title,
+      link,
+      thumb: (block.match(/poster="([^"]+)"/) || block.match(/<img[^>]+src="([^"]+)"/) || [])[1] || '',
+      duration: '',
+      pubDate: (block.match(/time-ago" title="([^"]+)"/) || [])[1] || '',
+      zone: '',
+      source: 'Soha',
+    });
+  }
+  return videos;
+}
+
+app.get('/api/videos', async (req, res) => {
+  try {
+    // Nguồn nào chết thì trả list rỗng, không kéo sập cả endpoint
+    const [kenh14, soha] = await Promise.all([
+      crawlKenh14().catch(() => []),
+      crawlSoha().catch(() => []),
+    ]);
+    res.json({ videos: [...kenh14, ...soha] });
+  } catch (e) {
+    res.status(502).json({ error: 'Video crawl failed', message: e.message });
+  }
+});
+
 // Jina Reader proxy — fetch phía server nên không dính CORS của trình duyệt,
 // kèm retry khi Jina chập chờn (503).
 const JINA_REMOVE_SELECTOR = 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]';

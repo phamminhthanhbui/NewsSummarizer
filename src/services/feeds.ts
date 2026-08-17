@@ -22,6 +22,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   'BongDaPlus': '#E30613',
   'Kenh14': '#FB512A',
   'HelloBacSi': '#00A99D',
+  'Soha': '#F26522',
 };
 
 // name = tên tờ báo (publisher) — "Chọn nguồn tin" lọc theo tờ báo, không theo kênh con.
