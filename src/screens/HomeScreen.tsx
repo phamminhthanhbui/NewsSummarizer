@@ -44,7 +44,6 @@ const SOURCES = ['Tất cả', ...new Set(FEEDS.map((f) => f.name))];
 const CATEGORY_COLORS: Record<string, string> = {
   'Tất cả': Color.primary,
   'Việt Nam': '#DA1E37',
-  'Thế giới': '#1A73E8',
   'Công nghệ': '#6C5CE7',
   'Kinh doanh': '#00C896',
   'Thể thao': '#FFA502',

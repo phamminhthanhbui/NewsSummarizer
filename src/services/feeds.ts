@@ -14,9 +14,16 @@ export const SOURCE_COLORS: Record<string, string> = {
   'Tuổi Trẻ': '#ED1C24',
   'Thanh Niên': '#0072BC',
   'VietNamNet': '#D31E26',
-  'BBC News': '#B80000',
-  'NYT': '#1A1A1A',
-  'Al Jazeera': '#F5A100',
+  'Dân Trí': '#0066B3',
+  'Người Lao Động': '#C4161C',
+  'Tiền Phong': '#E31E24',
+  'Pháp Luật TP.HCM': '#1B75BC',
+  'Sài Gòn Giải Phóng': '#D42020',
+  'CAND': '#1A4B8C',
+  'An ninh Thủ đô': '#8B0000',
+  'Sức khỏe & Đời sống': '#009639',
+  'Báo Chính phủ': '#C8102E',
+  'Báo Giao Thông': '#F7941D',
   'GenK': '#00A651',
   'Cafebiz': '#F0642A',
   'BongDaPlus': '#E30613',
@@ -27,17 +34,22 @@ export const SOURCE_COLORS: Record<string, string> = {
 
 // name = tên tờ báo (publisher) — "Chọn nguồn tin" lọc theo tờ báo, không theo kênh con.
 // Một tờ báo có thể có nhiều feed (mỗi feed 1 category); item mang cả source lẫn category.
+// CHỈ báo Việt Nam (đã bỏ BBC/NYT/Al Jazeera). Mọi URL RSS dưới đây đã verify trả item thật.
 export const FEEDS = [
-  // Việt Nam
+  // Việt Nam (tin tổng hợp)
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Thanh Niên', url: 'https://thanhnien.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'VietNamNet', url: 'https://vietnamnet.vn/rss/thoi-su.rss', category: 'Việt Nam' },
-
-  // Thế giới
-  { name: 'BBC News', url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'Thế giới' },
-  { name: 'NYT', url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', category: 'Thế giới' },
-  { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml', category: 'Thế giới' },
+  { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Người Lao Động', url: 'https://nld.com.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Pháp Luật TP.HCM', url: 'https://plo.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Sài Gòn Giải Phóng', url: 'https://sggp.org.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'CAND', url: 'https://cand.com.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'An ninh Thủ đô', url: 'https://anninhthudo.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Báo Chính phủ', url: 'https://baochinhphu.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Báo Giao Thông', url: 'https://baogiaothong.vn/rss/home.rss', category: 'Việt Nam' },
 
   // Công nghệ
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/so-hoa.rss', category: 'Công nghệ' },
@@ -50,21 +62,33 @@ export const FEEDS = [
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
   { name: 'VietNamNet', url: 'https://vietnamnet.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
   { name: 'Cafebiz', url: 'https://cafebiz.vn/rss/home.rss', category: 'Kinh doanh' },
+  { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'Người Lao Động', url: 'https://nld.com.vn/rss/kinh-te.rss', category: 'Kinh doanh' },
+  { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/kinh-te.rss', category: 'Kinh doanh' },
 
   // Thể thao
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/the-thao.rss', category: 'Thể thao' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/the-thao.rss', category: 'Thể thao' },
   { name: 'BongDaPlus', url: 'https://bongdaplus.vn/rss/24h.rss', category: 'Thể thao' },
+  { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'Người Lao Động', url: 'https://nld.com.vn/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'Báo Giao Thông', url: 'https://baogiaothong.vn/rss/the-thao.rss', category: 'Thể thao' },
 
   // Giải trí
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/giai-tri.rss', category: 'Giải trí' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/giai-tri.rss', category: 'Giải trí' },
   { name: 'Kenh14', url: 'https://kenh14.vn/rss/home.rss', category: 'Giải trí' },
+  { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'Người Lao Động', url: 'https://nld.com.vn/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/giai-tri.rss', category: 'Giải trí' },
 
   // Sức khỏe
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/suc-khoe.rss', category: 'Sức khỏe' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
   { name: 'HelloBacSi', url: 'https://hellobacsi.com/rss.xml', category: 'Sức khỏe' },
+  { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
+  { name: 'Sức khỏe & Đời sống', url: 'https://suckhoedoisong.vn/rss/home.rss', category: 'Sức khỏe' },
 ];
 
 function stripHtml(s: string): string {
