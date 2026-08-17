@@ -299,26 +299,6 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      {/* Section VIDEO — crawl từ video.kenh14.vn, RSS không có video/live */}
-      {videos.length > 0 && (
-        <View style={styles.videoSection}>
-          <View style={styles.videoHeader}>
-            <View style={styles.videoLabel}>
-              <Ionicons name="videocam" size={13} color="#FFF" />
-              <Text style={styles.videoLabelText}>VIDEO</Text>
-            </View>
-            <Text style={styles.videoSub}>mở tại nguồn</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
-            {videos.map((v) => (
-              <View key={v.link} style={styles.videoCardWrap}>
-                <VideoCard item={v} onPress={goVideo} />
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
       {/* Source Modal */}
       {showSourceModal && (
         <Pressable style={styles.modalOverlay} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true}>
@@ -405,6 +385,26 @@ export default function HomeScreen({ navigation }: Props) {
           renderItem={renderItem}
           ListHeaderComponent={
             <View style={styles.listHeader}>
+              {/* Section VIDEO — crawl từ video.kenh14.vn, RSS không có video/live.
+                  Nằm trong ListHeaderComponent để cuộn cùng danh sách tin. */}
+              {videos.length > 0 && (
+                <View style={styles.videoSection}>
+                  <View style={styles.videoHeader}>
+                    <View style={styles.videoLabel}>
+                      <Ionicons name="videocam" size={13} color="#FFF" />
+                      <Text style={styles.videoLabelText}>VIDEO</Text>
+                    </View>
+                    <Text style={styles.videoSub}>mở tại nguồn</Text>
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
+                    {videos.map((v) => (
+                      <View key={v.link} style={styles.videoCardWrap}>
+                        <VideoCard item={v} onPress={goVideo} />
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
               {heroes.length > 0 && (
                 <View style={styles.heroWrap}>
                   <FlatList
