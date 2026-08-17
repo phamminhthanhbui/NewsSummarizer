@@ -12,6 +12,7 @@ import {
   Platform,
   TextInput,
   Pressable,
+  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +26,10 @@ import SectionHeader from '../components/SectionHeader';
 import SkeletonCard from '../components/SkeletonCard';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
+
+// Slide carousel phải width pixel explicit — '100%' trong horizontal FlatList
+// là circular (content container tính width theo children) → collapse 0
+const HERO_W = Dimensions.get('window').width - 24; // listHeader paddingHorizontal 12
 
 // Unified categories from feeds
 const CATEGORIES = ['Tất cả', ...new Set(FEEDS.map((f) => f.category))];
@@ -152,10 +157,32 @@ export default function HomeScreen({ navigation }: Props) {
     return result;
   }, [items, selectedCategory, selectedSource, searchQuery]);
 
-  const { hero, rest } = useMemo(() => {
-    const hero = filtered.find((i) => i.image) || null;
-    return { hero, rest: hero ? filtered.filter((i) => i !== hero) : filtered };
+  // Carousel tin nổi bật: top 5 bài mới nhất có ảnh; phần còn lại xuống list
+  const { heroes, rest } = useMemo(() => {
+    const heroes = filtered.filter((i) => i.image).slice(0, 5);
+    const heroSet = new Set(heroes);
+    return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
   }, [filtered]);
+  const [heroIdx, setHeroIdx] = useState(0);
+  const heroListRef = useRef<FlatList<FeedItem>>(null);
+  const heroIdxRef = useRef(0); // mirror của heroIdx cho interval (đọc state trong setInterval không đáng tin)
+  const heroAutoRef = useRef(false); // true khi đang scroll chương trình: onScroll không được ghi heroIdx ngược lại
+
+  // Auto-slide mỗi 4s. Scroll trực tiếp từ interval, KHÔNG qua useEffect([heroIdx]):
+  // smooth scroll (web) phát onScroll với offset trung gian → round() ra index cũ
+  // → setHeroIdx(index cũ) → scroll ngược lại → oscillation, carousel đứng yên.
+  useEffect(() => {
+    if (heroes.length < 2) return;
+    const t = setInterval(() => {
+      const next = (heroIdxRef.current + 1) % heroes.length;
+      heroIdxRef.current = next;
+      heroAutoRef.current = true;
+      setHeroIdx(next);
+      heroListRef.current?.scrollToOffset({ offset: next * HERO_W, animated: true });
+      setTimeout(() => { heroAutoRef.current = false; }, 600); // > thời gian smooth scroll (~300-400ms)
+    }, 4000);
+    return () => clearInterval(t);
+  }, [heroes.length]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -336,9 +363,36 @@ export default function HomeScreen({ navigation }: Props) {
           renderItem={renderItem}
           ListHeaderComponent={
             <View style={styles.listHeader}>
-              {hero && (
+              {heroes.length > 0 && (
                 <View style={styles.heroWrap}>
-                  <FeaturedCard item={hero} onPress={goArticle} />
+                  <FlatList
+                    ref={heroListRef}
+                    data={heroes}
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    keyExtractor={(item) => item.link}
+                    renderItem={({ item }) => (
+                      <View style={styles.heroSlide}>
+                        <FeaturedCard item={item} onPress={goArticle} />
+                      </View>
+                    )}
+                    // onScroll thay vì onMomentumScrollEnd — web (react-native-web)
+                    // không có momentum events, indicator sẽ không bao giờ cập nhật
+                    scrollEventThrottle={100}
+                    onScroll={(e) => {
+                      const w = e.nativeEvent.layoutMeasurement.width || 1;
+                      const idx = Math.min(Math.max(Math.round(e.nativeEvent.contentOffset.x / w), 0), heroes.length - 1);
+                      if (idx !== heroIdx) setHeroIdx(idx);
+                    }}
+                  />
+                  {heroes.length > 1 && (
+                    <View style={styles.heroDots}>
+                      {heroes.map((h, i) => (
+                        <View key={h.link} style={[styles.heroDot, i === heroIdx && styles.heroDotActive]} />
+                      ))}
+                    </View>
+                  )}
                 </View>
               )}
               <SectionHeader title={filtered.length ? 'TIN MỚI NHẤT' : 'KHÔNG CÓ DỮ LIỆU'} />
@@ -491,6 +545,10 @@ const styles = StyleSheet.create({
   listContent: { paddingBottom: 32 },
   listHeader: { paddingHorizontal: 12, paddingTop: 4 },
   heroWrap: { marginBottom: 8 },
+  heroSlide: { width: HERO_W },
+  heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 10 },
+  heroDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Color.border },
+  heroDotActive: { width: 18, backgroundColor: Color.primary },
 
   // Skeletons
   skelWrap: { paddingTop: 8 },
