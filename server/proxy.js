@@ -35,6 +35,28 @@ app.post('/api/llm', async (req, res) => {
   }
 });
 
+// Generic fetch proxy — RSS feeds etc. Fetch phía server nên không dính CORS
+// của trình duyệt, thay proxy Vercel (api-proxy-liart-ten) hay 502.
+app.get('/api/fetch', async (req, res) => {
+  const url = req.query.url;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required query param: url' });
+  }
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsSummarizer RSS reader)' },
+    });
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Upstream ${response.status}` });
+    }
+    const data = await response.text();
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'text/xml; charset=utf-8');
+    return res.send(data);
+  } catch (e) {
+    res.status(502).json({ error: 'Fetch failed', message: e.message });
+  }
+});
+
 // Jina Reader proxy — fetch phía server nên không dính CORS của trình duyệt,
 // kèm retry khi Jina chập chờn (503).
 const JINA_REMOVE_SELECTOR = 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]';

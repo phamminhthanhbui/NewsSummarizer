@@ -13,6 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { FeedItem } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
+import { fetchAllFeeds } from '../services/feeds';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
@@ -22,8 +23,23 @@ export default function SavedScreen({ navigation }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      AsyncStorage.getItem(KEYS.saved).then((raw) => {
-        setItems(raw ? JSON.parse(raw) : []);
+      AsyncStorage.getItem(KEYS.saved).then(async (raw) => {
+        const saved: FeedItem[] = raw ? JSON.parse(raw) : [];
+        setItems(saved);
+        // Bản lưu cũ có thể thiếu image (hoặc image CDN hết hạn) → vá từ feed hiện tại
+        if (saved.some((i) => !i.image)) {
+          const feeds = await fetchAllFeeds().catch(() => [] as FeedItem[]);
+          if (!feeds.length) return;
+          const byLink = new Map(feeds.map((f) => [f.link, f]));
+          const merged = saved.map((i) => {
+            const f = byLink.get(i.link);
+            return f?.image && !i.image ? { ...i, image: f.image } : i;
+          });
+          if (merged.some((m, idx) => m !== saved[idx])) {
+            await AsyncStorage.setItem(KEYS.saved, JSON.stringify(merged));
+            setItems(merged);
+          }
+        }
       });
     }, []),
   );

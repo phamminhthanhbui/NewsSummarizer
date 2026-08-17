@@ -5,8 +5,8 @@ import { Platform } from 'react-native';
 import type { FeedItem } from '../types';
 import { LIMITS } from '../services/storage';
 
-// Self-hosted Vercel proxy — free, reliable, no rate limit
-const PROXY = 'https://api-proxy-liart-ten.vercel.app/api/proxy?url=';
+// Web: RSS đi qua proxy local (server/proxy.js, port 3001) — Vercel proxy cũ hay 502 + thiếu CORS
+const PROXY = (process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001') + '/api/fetch?url=';
 
 export const FEEDS = [
   // Việt Nam
