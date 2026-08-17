@@ -44,6 +44,11 @@ const useWebSpeech = () => {
   const speak = (text: string, opts: { lang?: string; rate?: number; pitch?: number; voice?: SpeechSynthesisVoice | null } = {}) => {
     return new Promise<void>((resolve, reject) => {
       if (!synthRef.current) { reject(new Error('Web Speech API not available')); return; }
+      // Cancel giọng đang đọc/đang TREO trong queue trước khi speak. Web Speech xếp
+      // utterance mới SAU utterance cũ; utterance cũ mà treo (vd giọng nữ cloud trên
+      // Edge) thì utterance mới KHÔNG BAO GIỜ chạy → bấm đọc im lặng. Cancel sạch
+      // queue để lần nào cũng phát được. (Fix này có ở commit cũ 05fa5b0c, bị mất.)
+      synthRef.current.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = opts.lang || 'vi-VN';
       u.rate = opts.rate ?? 1.0;
@@ -67,7 +72,18 @@ const useWebSpeech = () => {
       }, 1200);
       u.onstart = () => { started = true; clearTimeout(startGuard); };
       u.onend = ok;
-      u.onerror = fail;
+      u.onerror = (e: any) => {
+        // 'interrupted'/'canceled' = bình thường khi cancel() hoặc giọng mới đè
+        // giọng cũ — resolve KHÔNG kèm onEndRef: onEndRef bây giờ trỏ về callback
+        // của lần đọc MỚI (set trước khi speak), gọi nó sẽ tắt nhầm trạng thái
+        // đang đọc. Cũng KHÔNG reject: reject sẽ chạy vào catch →
+        // markWebVoiceHung(gender) → bấm NÚT DỪNG cũng thành "giọng treo", lần sau
+        // mất word-highlight Web Speech oan. (Fix ở commit cũ 05fa5b0c, bị mất.)
+        if (e && (e.error === 'interrupted' || e.error === 'canceled')) {
+          if (settled) return; settled = true; clearTimeout(startGuard); resolve(); return;
+        }
+        fail(e);
+      };
       // Word boundary event: gives charIndex, charLength, elapsedTime
       u.onboundary = (e) => {
         if (e.name === 'word' && onWordRef.current) {
