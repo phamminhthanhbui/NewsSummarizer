@@ -8,6 +8,22 @@ import { LIMITS } from '../services/storage';
 // Web: RSS đi qua proxy local (server/proxy.js, port 3001) — Vercel proxy cũ hay 502 + thiếu CORS
 const PROXY = (process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001') + '/api/fetch?url=';
 
+// Màu thương hiệu của từng tờ báo — badge nguồn trên card dùng màu này
+export const SOURCE_COLORS: Record<string, string> = {
+  'VNExpress': '#9F2247',
+  'Tuổi Trẻ': '#ED1C24',
+  'Thanh Niên': '#0072BC',
+  'VietNamNet': '#D31E26',
+  'BBC News': '#B80000',
+  'NYT': '#1A1A1A',
+  'Al Jazeera': '#F5A100',
+  'GenK': '#00A651',
+  'Cafebiz': '#F0642A',
+  'BongDaPlus': '#E30613',
+  'Kenh14': '#FB512A',
+  'HelloBacSi': '#00A99D',
+};
+
 // name = tên tờ báo (publisher) — "Chọn nguồn tin" lọc theo tờ báo, không theo kênh con.
 // Một tờ báo có thể có nhiều feed (mỗi feed 1 category); item mang cả source lẫn category.
 export const FEEDS = [

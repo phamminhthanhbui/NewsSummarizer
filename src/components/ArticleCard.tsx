@@ -1,35 +1,40 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
 import { Color, Font, Radius } from '../constants/theme';
+import { SOURCE_COLORS } from '../services/feeds';
 import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 
+// Thẻ dọc kiểu Kenh14 mobile: ảnh to trên, tiêu đề đậm, hợp giới trẻ
 function ArticleCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
+  // Mỗi tờ báo 1 màu đặc trưng; '1A' = 10% alpha cho nền tint
+  const srcColor = SOURCE_COLORS[item.source] || Color.hot;
 
   return (
-    <TouchableOpacity style={s.row} onPress={() => onPress(item)} activeOpacity={0.7}>
+    <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.85}>
       {item.image ? (
-        <Image source={{ uri: item.image }} style={s.thumb} resizeMode="cover" />
+        <Image source={{ uri: item.image }} style={s.img} resizeMode="cover" />
       ) : (
-        <View style={[s.thumb, s.thumbPh]}>
-          <Ionicons name="image-outline" size={26} color={Color.textMuted} />
+        <View style={[s.img, s.imgPh]}>
+          <Ionicons name="image-outline" size={40} color={Color.textMuted} />
         </View>
       )}
       <View style={s.body}>
-        {/* Nhãn chuyên mục đỏ kiểu CafeBiz */}
-        {item.category ? <Text style={s.category}>{item.category}</Text> : null}
+        <View style={s.meta}>
+          <View style={[s.srcBadge, { backgroundColor: srcColor + '1A' }]}>
+            <View style={[s.srcDot, { backgroundColor: srcColor }]} />
+            <Text style={[s.source, { color: srcColor }]} numberOfLines={1}>{item.source}</Text>
+          </View>
+          {t ? <Text style={s.time}>{t} trước</Text> : null}
+        </View>
         <Text style={s.title} numberOfLines={2}>{item.title}</Text>
         {item.description ? (
-          <Text style={s.desc} numberOfLines={1}>{item.description}</Text>
+          <Text style={s.desc} numberOfLines={2}>{item.description}</Text>
         ) : null}
-        <View style={s.meta}>
-          <Text style={s.source} numberOfLines={1}>{item.source}</Text>
-          {t ? <Text style={s.time}>· {t} trước</Text> : null}
-        </View>
       </View>
     </TouchableOpacity>
   );
@@ -39,21 +44,35 @@ function ArticleCard({ item, onPress }: Props) {
 export default React.memo(ArticleCard);
 
 const s = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
+  card: {
     backgroundColor: Color.card,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: Color.border,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    marginHorizontal: 12,
+    marginBottom: 12,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 2 },
+      default: { boxShadow: '0 2px 8px rgba(15, 23, 42, 0.08)' },
+    }),
   },
-  thumb: { width: 118, height: 84, borderRadius: Radius.sm, marginRight: 12, backgroundColor: Color.skeleton },
-  thumbPh: { alignItems: 'center', justifyContent: 'center' },
-  body: { flex: 1, justifyContent: 'center' },
-  category: { fontSize: Font.tiny, fontWeight: '800', color: Color.primary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
-  title: { fontSize: Font.headline, fontWeight: '700', color: Color.text, lineHeight: 22, marginBottom: 4 },
-  desc: { fontSize: Font.body, color: Color.textSecondary, lineHeight: 19, marginBottom: 7 },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  source: { fontSize: Font.tiny, color: Color.textSecondary, fontWeight: '600', maxWidth: 150 },
+  img: { width: '100%', height: 190, backgroundColor: Color.skeleton },
+  imgPh: { alignItems: 'center', justifyContent: 'center' },
+  body: { padding: 14 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  srcBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Color.hotSoft,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 20,
+    maxWidth: 170,
+  },
+  srcDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Color.hot },
+  source: { fontSize: Font.tiny, color: Color.hot, fontWeight: '800', letterSpacing: 0.2 },
   time: { fontSize: Font.tiny, color: Color.textMuted },
+  title: { fontSize: Font.title, fontWeight: '800', color: Color.text, lineHeight: 24, marginBottom: 6 },
+  desc: { fontSize: Font.body, color: Color.textSecondary, lineHeight: 20 },
 });

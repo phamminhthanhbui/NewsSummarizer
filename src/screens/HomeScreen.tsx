@@ -3,6 +3,7 @@ import {
   View,
   Text,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -15,6 +16,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FEEDS, fetchAllFeeds } from '../services/feeds';
@@ -187,27 +189,30 @@ export default function HomeScreen({ navigation }: Props) {
 
   return (
     <Animated.View style={[styles.root, { opacity: headerAnim }]}>
-      {/* Sticky Header - Modern Design */}
-      <Animated.View
-        style={[
-          styles.header,
-          { paddingTop: insets.top + 8, paddingBottom: 10 },
-        ]}
+      {/* Sticky Header — gradient cam đỏ kiểu Kenh14, trẻ trung nổi bật */}
+      <LinearGradient
+        colors={[Color.hot, Color.hotDark]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.header, { paddingTop: insets.top + 8, paddingBottom: 12 }]}
       >
-        {/* Row 1: Brand + actions — masthead trắng kiểu báo điện tử */}
+        {/* Row 1: Brand + actions */}
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <View style={styles.logoBadge}>
-              <Ionicons name="newspaper" size={20} color="#FFF" />
+              <Ionicons name="flash" size={18} color={Color.hot} />
             </View>
-            <Text style={styles.brand}>NewsSummarizer</Text>
+            <View>
+              <Text style={styles.brand}>NewsSummarizer</Text>
+              <Text style={styles.brandSub}>Tin nhanh · Tóm tắt bằng AI</Text>
+            </View>
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity style={styles.iconBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
-              <Ionicons name="search-outline" size={20} color={Color.text} />
+              <Ionicons name="search-outline" size={20} color="#FFF" />
             </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
-              <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color={Color.text} style={refreshing ? styles.refreshSpin : {}} />
+              <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color="#FFF" style={refreshing ? styles.refreshSpin : {}} />
             </TouchableOpacity>
           </View>
         </View>
@@ -215,12 +220,13 @@ export default function HomeScreen({ navigation }: Props) {
         {/* Row 2: Date + stats */}
         <View style={styles.headerRow2}>
           <View style={styles.dateWrap}>
-            <Ionicons name="calendar-outline" size={13} color={Color.textMuted} />
+            <Ionicons name="calendar-outline" size={13} color="rgba(255,255,255,0.8)" />
             <Text style={styles.date}>{today()}</Text>
           </View>
           <Text style={styles.statsText}>{stats.total} bài · {stats.sources} nguồn</Text>
         </View>
-      </Animated.View>
+
+      </LinearGradient>
 
       {/* Category Bar - animated slide up */}
       <Animated.View
@@ -244,12 +250,29 @@ export default function HomeScreen({ navigation }: Props) {
       {/* Source Selector Trigger */}
       <TouchableOpacity style={styles.sourceTrigger} onPress={() => { Keyboard.dismiss(); setShowSourceModal(true); }} activeOpacity={0.8} accessibilityLabel="Chọn nguồn tin">
         <View style={styles.sourceTriggerLeft}>
-          <Ionicons name="funnel-outline" size={15} color={Color.primary} />
+          <Ionicons name="funnel-outline" size={15} color={Color.hot} />
           <Text style={styles.sourceTriggerText}>Nguồn:</Text>
           <Text style={styles.sourceTriggerValue}>{selectedSource}</Text>
         </View>
         <Ionicons name="chevron-down" size={16} color={Color.textMuted} />
       </TouchableOpacity>
+
+      {/* Strip TIN NÓNG — ticker bài mới nhất, kiểu breaking news */}
+      {heroes.length > 0 && (
+        <View style={styles.hotStrip}>
+          <View style={styles.hotLabel}>
+            <Ionicons name="flash" size={12} color="#FFF" />
+            <Text style={styles.hotLabelText}>TIN NÓNG</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hotScroll}>
+            {heroes.map((h) => (
+              <TouchableOpacity key={h.link} style={styles.hotItem} onPress={() => goArticle(h)} activeOpacity={0.7}>
+                <Text style={styles.hotItemText} numberOfLines={1}>{h.title}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Source Modal */}
       {showSourceModal && (
@@ -409,42 +432,39 @@ export default function HomeScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Color.card },
+  root: { flex: 1, backgroundColor: Color.bg },
 
-  // Header — masthead trắng kiểu báo điện tử (CafeBiz): brand đỏ, icon đen
+  // Header — gradient cam đỏ kiểu Kenh14 (LinearGradient bọc ngoài)
   header: {
-    backgroundColor: Color.card,
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: Color.border,
   },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerRow2: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  headerRow2: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  iconBtn: { padding: 8, borderRadius: 999, backgroundColor: Color.surfaceAlt },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  iconBtn: { padding: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.2)' },
   logoBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.sm,
-    backgroundColor: Color.primary,
+    width: 38,
+    height: 38,
+    borderRadius: Radius.md,
+    backgroundColor: '#FFF',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  brand: { fontSize: 21, fontWeight: '800', color: Color.primary, letterSpacing: -0.5 },
+  brand: { fontSize: 20, fontWeight: '800', color: '#FFF', letterSpacing: -0.5 },
+  brandSub: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: '600', marginTop: 1 },
   dateWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  date: { fontSize: 12, color: Color.textMuted, fontWeight: '500' },
-  statsText: { fontSize: 12, color: Color.textMuted, fontWeight: '500' },
+  date: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
+  statsText: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
   refreshSpin: { transform: [{ rotate: '360deg' }] },
 
-  // Category Bar — tab gạch chân đỏ kiểu menu báo điện tử
+  // Category Bar — tab gạch chân cam kiểu menu báo điện tử
   categoryBar: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
   categoryContent: { paddingHorizontal: 12 },
   categoryTab: { paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 3, borderBottomColor: 'transparent' },
-  categoryTabActive: { borderBottomColor: Color.primary },
+  categoryTabActive: { borderBottomColor: Color.hot },
   categoryTabText: { fontSize: Font.body, fontWeight: '600', color: Color.textSecondary },
-  categoryTabTextActive: { color: Color.primary, fontWeight: '800' },
+  categoryTabTextActive: { color: Color.hot, fontWeight: '800' },
 
   // Source Trigger
   sourceTrigger: {
@@ -459,7 +479,15 @@ const styles = StyleSheet.create({
   },
   sourceTriggerLeft: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   sourceTriggerText: { fontSize: Font.caption, color: Color.textSecondary },
-  sourceTriggerValue: { fontWeight: '700', color: Color.primary },
+  sourceTriggerValue: { fontWeight: '700', color: Color.hot },
+
+  // Strip TIN NÓNG
+  hotStrip: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border, paddingVertical: 8 },
+  hotLabel: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Color.hot, paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.sm, marginHorizontal: 12 },
+  hotLabelText: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.5 },
+  hotScroll: { gap: 16, paddingRight: 16, alignItems: 'center' },
+  hotItem: { maxWidth: 260 },
+  hotItemText: { fontSize: Font.caption, fontWeight: '600', color: Color.text },
 
   // Modal
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end', zIndex: 100 },

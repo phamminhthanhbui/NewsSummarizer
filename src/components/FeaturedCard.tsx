@@ -3,12 +3,14 @@ import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { SOURCE_COLORS } from '../services/feeds';
 import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 
 function FeaturedCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
+  const srcColor = SOURCE_COLORS[item.source] || Color.hot;
 
   return (
     <TouchableOpacity style={[s.card, Shadow.card]} onPress={() => onPress(item)} activeOpacity={0.85}>
@@ -21,8 +23,8 @@ function FeaturedCard({ item, onPress }: Props) {
       )}
       <View style={s.scrim} />
       <View style={s.overlay}>
-        <View style={s.badge}>
-          <Ionicons name="radio-button-on" size={9} color="#FFD54F" />
+        <View style={[s.badge, { backgroundColor: srcColor }]}>
+          <View style={s.badgeDot} />
           <Text style={s.badgeText} numberOfLines={1}>{item.source}</Text>
         </View>
         <Text style={s.title} numberOfLines={2}>{item.title}</Text>
@@ -46,10 +48,11 @@ const s = StyleSheet.create({
   scrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '60%', backgroundColor: Color.scrim },
   overlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 14, paddingTop: 30 },
   badge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
-    backgroundColor: 'rgba(0,0,0,0.32)', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, marginBottom: 7,
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+    backgroundColor: Color.hot, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, marginBottom: 7,
   },
-  badgeText: { fontSize: Font.tiny, color: '#FFD54F', fontWeight: '700', letterSpacing: 0.4 },
+  badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF' },
+  badgeText: { fontSize: Font.tiny, color: '#FFF', fontWeight: '800', letterSpacing: 0.4 },
   title: { fontSize: Font.hero, fontWeight: '800', color: '#FFF', lineHeight: 27 },
   timeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 7 },
   time: { fontSize: Font.tiny, color: 'rgba(255,255,255,0.75)' },

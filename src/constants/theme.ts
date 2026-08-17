@@ -3,6 +3,11 @@ export const Color = {
   primary: '#C62828',        // brand red
   primaryDark: '#A8181F',
   primarySoft: '#FCE9E9',    // pill/tint nền của primary
+  // Palette kiểu Kenh14 — cam đỏ trẻ trung, dùng cho HomeScreen
+  hot: '#FB512A',            // cam đỏ đặc trưng
+  hotDark: '#A70E1A',        // đỏ đậm cuối gradient
+  hotSoft: '#FFEEE8',        // tint nền của hot
+  amber: '#F0A52B',          // cam vàng nhấn
   accent: '#2563EB',         // link blue
   accentSoft: '#E9F0FE',
   bg: '#F3F4F8',             // page background
