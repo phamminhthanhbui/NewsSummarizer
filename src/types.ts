@@ -4,7 +4,8 @@ export interface FeedItem {
   description: string;
   pubDate: string;
   image?: string;
-  source: string;
+  source: string; // tên tờ báo (publisher), ví dụ "VNExpress"
+  category?: string; // chủ đề của feed cụ thể, ví dụ "Công nghệ"
 }
 
 export interface SummaryRecord {

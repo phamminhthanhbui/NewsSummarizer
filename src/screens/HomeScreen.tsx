@@ -145,7 +145,7 @@ export default function HomeScreen({ navigation }: Props) {
   const filtered = useMemo(() => {
     let result = items;
     if (selectedCategory !== 'Tất cả') {
-      result = result.filter((i) => FEEDS.find((f) => f.name === i.source)?.category === selectedCategory);
+      result = result.filter((i) => i.category === selectedCategory);
     }
     if (selectedSource !== 'Tất cả') {
       result = result.filter((i) => i.source === selectedSource);
@@ -187,7 +187,7 @@ export default function HomeScreen({ navigation }: Props) {
   const stats = useMemo(() => ({
     total: items.length,
     sources: new Set(items.map((i) => i.source)).size,
-    categories: new Set(items.map((i) => FEEDS.find((f) => f.name === i.source)?.category).filter(Boolean)).size,
+    categories: new Set(items.map((i) => i.category).filter(Boolean)).size,
   }), [items]);
 
   const renderItem = useCallback(({ item }: { item: FeedItem }) => <ArticleCard item={item} onPress={goArticle} />, [goArticle]);

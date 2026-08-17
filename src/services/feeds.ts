@@ -8,11 +8,14 @@ import { LIMITS } from '../services/storage';
 // Web: RSS đi qua proxy local (server/proxy.js, port 3001) — Vercel proxy cũ hay 502 + thiếu CORS
 const PROXY = (process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001') + '/api/fetch?url=';
 
+// name = tên tờ báo (publisher) — "Chọn nguồn tin" lọc theo tờ báo, không theo kênh con.
+// Một tờ báo có thể có nhiều feed (mỗi feed 1 category); item mang cả source lẫn category.
 export const FEEDS = [
   // Việt Nam
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/tin-moi-nhat.rss', category: 'Việt Nam' },
   { name: 'Thanh Niên', url: 'https://thanhnien.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'VietNamNet', url: 'https://vietnamnet.vn/rss/thoi-su.rss', category: 'Việt Nam' },
 
   // Thế giới
   { name: 'BBC News', url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'Thế giới' },
@@ -20,28 +23,30 @@ export const FEEDS = [
   { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml', category: 'Thế giới' },
 
   // Công nghệ
-  { name: 'VNExpress Công nghệ', url: 'https://vnexpress.net/rss/so-hoa.rss', category: 'Công nghệ' },
-  { name: 'Tuổi Trẻ CN', url: 'https://tuoitre.vn/rss/cong-nghe.rss', category: 'Công nghệ' },
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/so-hoa.rss', category: 'Công nghệ' },
+  { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/cong-nghe.rss', category: 'Công nghệ' },
+  { name: 'VietNamNet', url: 'https://vietnamnet.vn/rss/cong-nghe.rss', category: 'Công nghệ' },
   { name: 'GenK', url: 'https://genk.vn/rss/home.rss', category: 'Công nghệ' },
 
   // Kinh doanh
-  { name: 'VNExpress Kinh doanh', url: 'https://vnexpress.net/rss/kinh-doanh.rss', category: 'Kinh doanh' },
-  { name: 'Tuổi Trẻ KD', url: 'https://tuoitre.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
+  { name: 'VietNamNet', url: 'https://vietnamnet.vn/rss/kinh-doanh.rss', category: 'Kinh doanh' },
   { name: 'Cafebiz', url: 'https://cafebiz.vn/rss/home.rss', category: 'Kinh doanh' },
 
   // Thể thao
-  { name: 'VNExpress Thể thao', url: 'https://vnexpress.net/rss/the-thao.rss', category: 'Thể thao' },
-  { name: 'Tuổi Trẻ TT', url: 'https://tuoitre.vn/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/the-thao.rss', category: 'Thể thao' },
+  { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/the-thao.rss', category: 'Thể thao' },
   { name: 'BongDaPlus', url: 'https://bongdaplus.vn/rss/24h.rss', category: 'Thể thao' },
 
   // Giải trí
-  { name: 'VNExpress Giải trí', url: 'https://vnexpress.net/rss/giai-tri.rss', category: 'Giải trí' },
-  { name: 'Tuổi Trẻ GT', url: 'https://tuoitre.vn/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/giai-tri.rss', category: 'Giải trí' },
+  { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/giai-tri.rss', category: 'Giải trí' },
   { name: 'Kenh14', url: 'https://kenh14.vn/rss/home.rss', category: 'Giải trí' },
 
   // Sức khỏe
-  { name: 'VNExpress Sức khỏe', url: 'https://vnexpress.net/rss/suc-khoe.rss', category: 'Sức khỏe' },
-  { name: 'Tuổi Trẻ SK', url: 'https://tuoitre.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/suc-khoe.rss', category: 'Sức khỏe' },
+  { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
   { name: 'HelloBacSi', url: 'https://hellobacsi.com/rss.xml', category: 'Sức khỏe' },
 ];
 
@@ -112,7 +117,7 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
   const results = await Promise.all(
     FEEDS.map(async (d) => {
       const items = await fetchFeed(d.url);
-      return items.map((i) => ({ ...i, source: d.name }));
+      return items.map((i) => ({ ...i, source: d.name, category: d.category }));
     }),
   );
   const all = results.flat().sort((a, b) => {
