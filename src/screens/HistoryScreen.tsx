@@ -5,7 +5,6 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
-  Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,7 +13,7 @@ import type { SummaryRecord } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
 
-export default function HistoryScreen() {
+export default function HistoryScreen({ navigation }: any) {
   const [items, setItems] = useState<SummaryRecord[]>([]);
 
   useFocusEffect(
@@ -36,8 +35,13 @@ export default function HistoryScreen() {
     setItems([]);
   };
 
+  // Mở màn Article (summary cache hiện ngay, không gọi lại API) thay vì mở link gốc
   const handlePressItem = (item: SummaryRecord) => {
-    Linking.openURL(item.url);
+    // 'Article' nằm trong stack của HomeTab (nested navigator) — giống SavedScreen
+    navigation.navigate('HomeTab', {
+      screen: 'Article',
+      params: { item: { title: item.title, link: item.url, description: item.summary, pubDate: item.date, source: item.source } },
+    });
   };
 
   return (

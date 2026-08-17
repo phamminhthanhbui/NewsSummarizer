@@ -70,6 +70,14 @@ export async function resolveWebVoice(gender: EdgeGender): Promise<SpeechSynthes
   return vi.find((v) => tokens(v.name).some((t) => hints.includes(t))) || null;
 }
 
+// Web Speech có thể CÓ giọng khớp gender nhưng bị TREO ở một số browser
+// (không kích hoạt onstart/onend/onerror, vd giọng nữ cloud trên Edge).
+// Ghi nhận giọng đã treo để lần sau bỏ qua Web Speech, đi thẳng Edge TTS
+// → không phải chờ resolveWebVoice + start-guard nữa (đọc nhanh hơn hẳn).
+const hungWebVoices = new Set<EdgeGender>();
+export function markWebVoiceHung(gender: EdgeGender) { hungWebVoices.add(gender); }
+export function isWebVoiceHung(gender: EdgeGender) { return hungWebVoices.has(gender); }
+
 // Fallback: use expo-speech (system TTS, no network needed)
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';

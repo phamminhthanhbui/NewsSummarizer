@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import {
   View,
   Text,
@@ -23,7 +23,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds } from '../services/feeds';
-import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 
@@ -49,8 +49,25 @@ const useWebSpeech = () => {
       u.rate = opts.rate ?? 1.0;
       u.pitch = opts.pitch ?? 1.0;
       u.voice = opts.voice || null;
-      u.onend = () => { onEndRef.current?.(); resolve(); };
-      u.onerror = (e) => reject(e);
+      // Start-guard: một số giọng (vd giọng nữ cloud) bị treo — không kích hoạt
+      // onstart/onend/onerror → promise treo vĩnh viễn, không fallback được.
+      // Giọng hoạt động thì onstart kích hoạt gần như tức thì (<300ms) nên chỉ
+      // chờ 1.2s rồi hủy + reject để caller rơi xuống Edge TTS cho nhanh.
+      // Cờ `settled` chặn callback muộn của utterance đã bị cancel (tránh tắt nhầm
+      // trạng thái đang đọc khi Edge TTS đã tiếp quản).
+      let started = false;
+      let settled = false;
+      const fail = (e: any) => { if (settled) return; settled = true; clearTimeout(startGuard); reject(e); };
+      const ok = () => { if (settled) return; settled = true; clearTimeout(startGuard); onEndRef.current?.(); resolve(); };
+      const startGuard = setTimeout(() => {
+        if (!started) {
+          try { synthRef.current?.cancel(); } catch {}
+          fail(new Error('Web Speech did not start'));
+        }
+      }, 1200);
+      u.onstart = () => { started = true; clearTimeout(startGuard); };
+      u.onend = ok;
+      u.onerror = fail;
       // Word boundary event: gives charIndex, charLength, elapsedTime
       u.onboundary = (e) => {
         if (e.name === 'word' && onWordRef.current) {
@@ -93,7 +110,8 @@ export default function ArticleScreen({ navigation, route }: any) {
   const cancelledRef = useRef(false);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
-  const openImageModal = (url: string) => setImageModal({ visible: true, url });
+  // useCallback: giữ identity ổn định để SafeImg(memo) không re-render theo highlight tick
+  const openImageModal = useCallback((url: string) => setImageModal({ visible: true, url }), []);
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
 
   // Web Speech API hook for word-level highlighting (web only)
@@ -238,32 +256,45 @@ export default function ArticleScreen({ navigation, route }: any) {
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
       const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
+      // Nội suy progress (0..1) → flat word + đoạn. Dùng chung cho Web Speech
+      // fallback lẫn Edge TTS (cả hai đều không có word timing tin cậy).
+      const applyProgress = (progress: number) => {
+        const flat = Math.min(Math.floor(progress * wordOffsets.length), Math.max(wordOffsets.length - 1, 0));
+        setHighlightWordIndex(flat);
+        for (let pi = 0; pi < paraWords.length; pi++) {
+          const pw = paraWords[pi];
+          if (pw.length && flat >= pw[0].flat && flat <= pw[pw.length - 1].flat) {
+            setHighlightParaIndex(pi);
+            break;
+          }
+        }
+      };
+
       if (isWeb) {
         // WEB: true word-level sync via Web Speech API.
         // Đọc `summary` nguyên bản (KHÔNG replace \n) để charIndex của onboundary
         // khớp 1:1 với wordOffsets build từ chính `summary`.
         // Browser không có giọng đúng gender (vd Chrome chỉ có giọng nam)
-        // → bỏ qua Web Speech, fall through xuống Edge TTS bên dưới.
-        const webVoice = await resolveWebVoice(gender);
+        // hoặc giọng đã biết bị treo (markWebVoiceHung) → bỏ qua Web Speech,
+        // fall through xuống Edge TTS bên dưới.
+        const webVoice = isWebVoiceHung(gender) ? null : await resolveWebVoice(gender);
         if (webVoice) try {
+          // onboundary KHÔNG đáng tin với giọng vi (nhiều browser không bắn
+          // word event) → fallback nội suy theo thời gian. Có boundary thì
+          // charIndex chính xác hơn: quy đổi sang progress rồi dùng applyProgress.
+          let boundarySeen = false;
           webSpeech.setWordCallback((charIndex) => {
-            // charIndex → flat word index (binary search trên wordOffsets)
-            let lo = 0, hi = wordOffsets.length - 1, flat = 0;
-            while (lo <= hi) {
-              const mid = (lo + hi) >> 1;
-              if (wordOffsets[mid] <= charIndex) { flat = mid; lo = mid + 1; } else { hi = mid - 1; }
-            }
-            setHighlightWordIndex(flat);
-            // flat → đoạn đang đọc (paraWords đã sort theo flat tăng dần)
-            for (let pi = 0; pi < paraWords.length; pi++) {
-              const pw = paraWords[pi];
-              if (pw.length && flat >= pw[0].flat && flat <= pw[pw.length - 1].flat) {
-                setHighlightParaIndex(pi);
-                break;
-              }
-            }
+            boundarySeen = true;
+            applyProgress(Math.min(charIndex / Math.max(summary.length, 1), 1));
           });
+          const estMs = Math.max((summary.length / 16) * 1000, 3000) / rate; // ~16 ký tự/giây tiếng Việt
+          const t0 = Date.now();
+          intervalRef.current = setInterval(() => {
+            if (boundarySeen) return; // boundary đang dẫn highlight rồi
+            applyProgress(Math.min((Date.now() - t0) / estMs, 0.98));
+          }, 400);
           webSpeech.setEndCallback(() => {
+            if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
             setSpeaking(false);
             setHighlightWordIndex(-1);
             setHighlightParaIndex(-1);
@@ -272,13 +303,17 @@ export default function ArticleScreen({ navigation, route }: any) {
           await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch, voice: webVoice });
           return;
         } catch {
-          // Web Speech failed → fall through to Edge TTS
+          // Web Speech failed → fall through to Edge TTS.
+          // Treo (không onstart) → ghi nhận để lần sau đi thẳng Edge TTS, khỏi chờ guard
+          markWebVoiceHung(gender);
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         }
       }
 
       // Native + web fallback: Edge TTS blob audio — không có word timing,
-      // chỉ highlight theo đoạn (ponytail: muốn word-level native phải parse
-      // WordBoundary events từ Edge TTS websocket — chưa cần)
+      // highlight nội suy từ tiến trình phát (position/duration): từ đang đọc
+      // suy ra đoạn. (ponytail: muốn timing chính xác phải parse WordBoundary
+      // events từ Edge TTS websocket — chưa cần)
       const text = summary.replace(/\n+/g, '， ');
 
       // Try Edge TTS (native + web fallback)
@@ -290,46 +325,47 @@ export default function ArticleScreen({ navigation, route }: any) {
           { uri: url },
           { rate, volume: 1.0 },
           (status) => {
+            // didJustFinish = đọc XONG → dọn highlight + revoke blob.
+            // (playAsync() resolve ngay khi BẮT ĐẦU phát, không chờ hết bài)
             if (status.isLoaded && status.didJustFinish) {
-              setSpeaking(false);
               if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+              setSpeaking(false);
+              setHighlightWordIndex(-1);
+              setHighlightParaIndex(-1);
               revokeAudioUrl(url);
             }
           }
         );
         audioRef.current = sound;
+        // Highlight theo tiến trình phát (position/duration).
+        // Kiểm tra cancelledRef thay vì state `speaking` (closure giữ giá trị cũ)
         intervalRef.current = setInterval(() => {
-          if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
+          if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
           sound.getStatusAsync().then(st => {
             if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
-              const progress = st.positionMillis / st.durationMillis;
-              const targetIdx = Math.min(Math.floor(progress * paraWords.length), paraWords.length - 1);
-              setHighlightParaIndex(targetIdx);
+              applyProgress(Math.min(st.positionMillis / st.durationMillis, 1));
             }
           });
         }, 500);
         await sound.playAsync();
-        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-        setHighlightParaIndex(-1);
-        setTimeout(() => { if (speaking && audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; setSpeaking(false); setHighlightParaIndex(-1); } }, 60000);
         return;
       } catch {
         // Edge TTS failed → fall back to system TTS
       }
 
-      // Fallback: expo-speech (system TTS) - approximate paragraph highlighting
+      // Fallback: expo-speech (system TTS) — không có timing, nội suy theo thời gian ước tính
       if (cancelledRef.current) return; // Edge TTS fail nhưng đã dừng/thoát rồi
+      const sysEstMs = Math.max((text.length / 16) * 1000, 3000) / rate;
+      const sysT0 = Date.now();
       intervalRef.current = setInterval(() => {
-        if (!speaking) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
-        setHighlightParaIndex(prev => {
-          if (prev >= paraWords.length - 1) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return prev; }
-          return prev + 1;
-        });
-      }, 2500);
+        if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
+        applyProgress(Math.min((Date.now() - sysT0) / sysEstMs, 0.98));
+      }, 400);
 
       await speakSystem(text, { pitch, rate });
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setSpeaking(false);
+      setHighlightWordIndex(-1);
       setHighlightParaIndex(-1);
     } catch {
       setSpeaking(false);
@@ -614,7 +650,7 @@ export default function ArticleScreen({ navigation, route }: any) {
 
 // Video block: file trực tiếp phát bằng expo-video; YouTube/Vimeo hiện thumb + mở ra ngoài
 // (expo-video không phát được YouTube natively — cần nguồn stream trực tiếp)
-function BlockVideo({ block }: { block: ArticleBlock }) {
+const BlockVideo = memo(function BlockVideo({ block }: { block: ArticleBlock }) {
   if (block.kind === 'file') {
     return <FileVideo url={block.url!} />;
   }
@@ -635,15 +671,17 @@ function BlockVideo({ block }: { block: ArticleBlock }) {
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 function FileVideo({ url }: { url: string }) {
   const player = useVideoPlayer(url, (p) => { p.loop = false; });
   return <VideoView style={styles.videoThumb} player={player} nativeControls contentFit="cover" />;
 }
 
-// Ảnh mà không load được (url hỏng/đổi trang) → trả về null, không để lại ô trống rác
-function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
+// Ảnh mà không load được (url hỏng/đổi trang) → trả về null, không để lại ô trống rác.
+// memo: highlight tick re-render ArticleScreen liên tục khi đọc; không memo thì
+// mỗi tick remount <Image> (refetch + console "Image load at ...") dù props y hệt.
+const SafeImg = memo(function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
   const [failed, setFailed] = useState(false);
   if (failed) return null;
   return (
@@ -651,7 +689,7 @@ function SafeImg({ url, onPress }: { url: string; onPress?: () => void }) {
       <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />
     </TouchableOpacity>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.card },

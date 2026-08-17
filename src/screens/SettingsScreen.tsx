@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { PROVIDERS, type LLMProvider, getModelsForProvider } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakEdge, revokeAudioUrl, resolveWebVoice, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
@@ -116,38 +116,46 @@ export default function SettingsScreen() {
     try {
       const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
       if (isWeb) {
-        // Browser có giọng khớp gender → Web Speech (offline, tức thì)
-        const matched = await resolveWebVoice(gender);
+        // Browser có giọng khớp gender và chưa từng bị treo → Web Speech (offline, tức thì)
+        const matched = isWebVoiceHung(gender) ? null : await resolveWebVoice(gender);
         if (matched) {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = 'vi-VN';
-          utterance.rate = rate;
-          utterance.pitch = pitch;
-          utterance.voice = matched;
-          utterance.onend = () => {
-            setPreviewing(false);
-            webUtteranceRef.current = null;
-          };
-          utterance.onerror = () => {
-            setPreviewing(false);
-            webUtteranceRef.current = null;
-          };
-          webUtteranceRef.current = utterance;
-          speechSynthesis.speak(utterance);
-
-          setTimeout(() => {
-            if (previewing) {
-              stopAudio();
-              setPreviewing(false);
-            }
-          }, 15000);
-          return;
+          // Start-guard: một số giọng bị treo (không onstart/onend/onerror) →
+          // nếu không bắt đầu phát trong 1.2s thì hủy và fall through xuống Edge TTS.
+          const started = await new Promise<boolean>((resolve) => {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'vi-VN';
+            utterance.rate = rate;
+            utterance.pitch = pitch;
+            utterance.voice = matched;
+            let decided = false; // guard đã quyết định chưa (started | timeout)
+            const guard = setTimeout(() => {
+              if (!decided) { decided = true; try { speechSynthesis.cancel(); } catch {} resolve(false); }
+            }, 1200);
+            const cleanup = () => { setPreviewing(false); webUtteranceRef.current = null; };
+            utterance.onstart = () => { if (!decided) { decided = true; clearTimeout(guard); resolve(true); } };
+            utterance.onend = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
+            utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
+            webUtteranceRef.current = utterance;
+            speechSynthesis.speak(utterance);
+          });
+          if (started) {
+            setTimeout(() => {
+              if (previewing) {
+                stopAudio();
+                setPreviewing(false);
+              }
+            }, 15000);
+            return;
+          }
+          // Giọng bị treo → ghi nhận để lần sau đi thẳng Edge TTS, khỏi chờ guard
+          markWebVoiceHung(gender);
         }
         // Browser KHÔNG có giọng đúng (vd Chrome chỉ có giọng nam "Microsoft An")
         // → fall through xuống Edge TTS để đảm bảo đúng giọng đã chọn
       }
 
       // Edge TTS (native + web fallback khi browser thiếu giọng)
+      setPreviewing(true); // có thể bị cleanup() của utterance bị cancel reset trước đó
       const url = await speakEdge(text, gender);
       const { sound } = await Audio.Sound.createAsync(
         { uri: url },
