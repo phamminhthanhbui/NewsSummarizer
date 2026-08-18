@@ -13,7 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { FeedItem } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
-import { fetchAllFeeds } from '../services/feeds';
+import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
@@ -60,17 +60,15 @@ export default function SavedScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header — kiểu Kenh14: tiêu đề + vạch đỏ, nút outline vuông */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <View style={styles.titleBadge}>
-            <Ionicons name="heart" size={18} color="#E53935" />
-          </View>
-          <Text style={styles.title}>Bài Đã Lưu</Text>
+          <View style={styles.titleBar} />
+          <Text style={styles.title}>Bài đã lưu</Text>
         </View>
         {items.length > 0 && (
           <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={15} color={Color.primary} />
+            <Ionicons name="trash-outline" size={15} color={Color.hot} />
             <Text style={styles.clearText}>Xoá tất cả</Text>
           </TouchableOpacity>
         )}
@@ -82,7 +80,7 @@ export default function SavedScreen({ navigation }: Props) {
         keyExtractor={(item) => item.link}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
-          <TouchableOpacity style={[styles.card, Shadow.card]} onPress={() => open(item)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.card} onPress={() => open(item)} activeOpacity={0.7}>
             {item.image ? (
               <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" />
             ) : (
@@ -92,10 +90,7 @@ export default function SavedScreen({ navigation }: Props) {
             )}
             <View style={styles.cardBody}>
               <View style={styles.cardHeader}>
-                <View style={styles.srcPill}>
-                  <View style={styles.srcDot} />
-                  <Text style={styles.source} numberOfLines={1}>{item.source}</Text>
-                </View>
+                <Text style={[styles.source, { color: SOURCE_COLORS[item.source] || Color.hot }]} numberOfLines={1}>{item.source}</Text>
                 {item.pubDate && (
                   <Text style={styles.dim}>{new Date(item.pubDate).toLocaleString('vi-VN')}</Text>
                 )}
@@ -107,6 +102,7 @@ export default function SavedScreen({ navigation }: Props) {
               onPress={() => handleDelete(item.link)}
               hitSlop={10}
               activeOpacity={0.6}
+              accessibilityLabel="Bỏ lưu bài"
             >
               <Ionicons name="close" size={18} color={Color.textMuted} />
             </TouchableOpacity>
@@ -134,70 +130,57 @@ export default function SavedScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
-  // Header
+  // Header — tiêu đề + vạch đỏ kiểu Kenh14
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 14,
     backgroundColor: Color.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  titleBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.md,
-    backgroundColor: '#FDEBEF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
   title: { fontSize: Font.hero, fontWeight: '800', color: Color.text },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: Color.primarySoft,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
+    backgroundColor: Color.hotSoft,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: Color.hot,
   },
-  clearText: { fontSize: Font.caption, color: Color.primary, fontWeight: '700' },
+  clearText: { fontSize: Font.caption, color: Color.hot, fontWeight: '700' },
 
   // List
   listContent: { padding: 16, paddingBottom: 24 },
   separator: { height: 10 },
 
-  // Card
+  // Card — trắng, góc vuông, border mỏng
   card: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Color.card,
     padding: 12,
-    borderRadius: Radius.xl,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Color.border,
   },
-  thumb: { width: 80, height: 80, borderRadius: Radius.md, backgroundColor: Color.skeleton, marginRight: 12 },
+  thumb: { width: 84, height: 84, borderRadius: 4, backgroundColor: Color.skeleton, marginRight: 12 },
   thumbPh: { alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, marginRight: 8 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  srcPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: Color.primarySoft,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  srcDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Color.primary },
-  source: { fontSize: Font.tiny, color: Color.primary, fontWeight: '700', letterSpacing: 0.3 },
+  source: { fontSize: Font.tiny, color: Color.hot, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase' },
   dim: { fontSize: Font.tiny, color: Color.textMuted },
   cardTitle: { fontSize: Font.body, fontWeight: '700', color: Color.text, lineHeight: 20 },
 
   // Remove button
-  remove: { width: 32, height: 32, borderRadius: 16, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  remove: { width: 32, height: 32, borderRadius: 4, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
 
   // Empty
   empty: { paddingTop: 120, alignItems: 'center', gap: 12 },

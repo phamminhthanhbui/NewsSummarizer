@@ -10,8 +10,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import type { SummaryRecord } from '../types';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font } from '../constants/theme';
 import { KEYS } from '../services/storage';
+import { SOURCE_COLORS } from '../services/feeds';
 
 export default function HistoryScreen({ navigation }: any) {
   const [items, setItems] = useState<SummaryRecord[]>([]);
@@ -46,17 +47,15 @@ export default function HistoryScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header — kiểu Kenh14: tiêu đề + vạch đỏ, nút outline vuông */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <View style={styles.titleBadge}>
-            <Ionicons name="time-outline" size={18} color={Color.primary} />
-          </View>
-          <Text style={styles.title}>Lịch Sử Tóm Tắt</Text>
+          <View style={styles.titleBar} />
+          <Text style={styles.title}>Lịch sử tóm tắt</Text>
         </View>
         {items.length > 0 && (
           <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={15} color={Color.primary} />
+            <Ionicons name="trash-outline" size={15} color={Color.hot} />
             <Text style={styles.clearText}>Xoá tất cả</Text>
           </TouchableOpacity>
         )}
@@ -69,22 +68,16 @@ export default function HistoryScreen({ navigation }: any) {
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={[styles.card, Shadow.card]}
+            style={styles.card}
             activeOpacity={0.7}
             onPress={() => handlePressItem(item)}
           >
             <View style={styles.cardHeader}>
-              <View style={styles.srcPill}>
-                <View style={styles.srcDot} />
-                <Text style={styles.src} numberOfLines={1}>{item.source}</Text>
-              </View>
+              <Text style={[styles.src, { color: SOURCE_COLORS[item.source] || Color.hot }]} numberOfLines={1}>{item.source}</Text>
               <Text style={styles.dim}>{new Date(item.date).toLocaleString('vi-VN')}</Text>
             </View>
             <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
             <Text style={styles.cardSummary} numberOfLines={3}>{item.summary}</Text>
-            <View style={styles.cardFooter}>
-              <Ionicons name="chevron-forward" size={16} color={Color.textMuted} />
-            </View>
           </TouchableOpacity>
         )}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -105,65 +98,51 @@ export default function HistoryScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
-  // Header
+  // Header — tiêu đề + vạch đỏ kiểu Kenh14
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 14,
     backgroundColor: Color.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  titleBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.md,
-    backgroundColor: Color.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
   title: { fontSize: Font.hero, fontWeight: '800', color: Color.text },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: Color.primarySoft,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
+    backgroundColor: Color.hotSoft,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: Color.hot,
   },
-  clearText: { fontSize: Font.caption, color: Color.primary, fontWeight: '700' },
+  clearText: { fontSize: Font.caption, color: Color.hot, fontWeight: '700' },
 
   // List
   listContent: { padding: 16, paddingBottom: 24 },
   separator: { height: 10 },
 
-  // Card
+  // Card — trắng, góc vuông, border mỏng
   card: {
     backgroundColor: Color.card,
-    padding: 16,
-    borderRadius: Radius.xl,
+    padding: 14,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Color.border,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  srcPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: Color.accentSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  srcDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Color.accent },
-  src: { fontSize: Font.tiny, color: Color.accent, fontWeight: '700', letterSpacing: 0.3 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  src: { fontSize: Font.tiny, color: Color.hot, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase' },
   dim: { fontSize: Font.tiny, color: Color.textMuted },
 
-  cardTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text, lineHeight: 22, marginBottom: 8 },
+  cardTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text, lineHeight: 22, marginBottom: 6 },
   cardSummary: { fontSize: Font.caption, color: Color.textSecondary, lineHeight: 19 },
-  cardFooter: { marginTop: 12, alignItems: 'flex-end' },
 
   // Empty
   empty: { paddingTop: 120, alignItems: 'center', gap: 12 },

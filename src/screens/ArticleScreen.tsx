@@ -23,7 +23,7 @@ import { Color, Font, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
-import { fetchAllFeeds } from '../services/feeds';
+import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
 import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
@@ -528,7 +528,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.hBtn}>
           <Ionicons name="chevron-back" size={26} color={Color.accent} />
         </TouchableOpacity>
-        <Text style={styles.hTitle} numberOfLines={1}>{item.source}</Text>
+        <Text style={[styles.hTitle, { color: SOURCE_COLORS[item.source] || Color.text }]} numberOfLines={1}>{item.source}</Text>
         <TouchableOpacity onPress={handleShare} style={styles.hBtn}>
           <Ionicons name="share-social-outline" size={21} color={Color.textSecondary} />
         </TouchableOpacity>
@@ -541,7 +541,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         <Text style={styles.title}>{item.title}</Text>
 
         <View style={styles.meta}>
-          <Text style={styles.metaSource}>{item.source}</Text>
+          <Text style={[styles.metaSource, { color: SOURCE_COLORS[item.source] || Color.primary }]}>{item.source}</Text>
           <Text style={styles.metaDot}> · </Text>
           <Text style={styles.metaTime}>
             {new Date(item.pubDate).toLocaleString('vi-VN')}
@@ -613,7 +613,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           >
             <View style={styles.sourceTextRow}>
               <Ionicons name="link-outline" size={13} color={Color.textMuted} />
-              <Text style={styles.sourceName}>{item.source}</Text>
+              <Text style={[styles.sourceName, { color: SOURCE_COLORS[item.source] || Color.primary }]}>{item.source}</Text>
             </View>
             <Text style={styles.sourceDate}>{new Date(item.pubDate).toLocaleDateString('vi-VN')}</Text>
           </TouchableOpacity>

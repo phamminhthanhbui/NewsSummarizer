@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { FEEDS, fetchAllFeeds } from '../services/feeds';
+import { FEEDS, fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
 import { fetchVideos } from '../services/videos';
 import type { FeedItem, VideoItem } from '../types';
 import { Color, Font, Radius, Shadow } from '../constants/theme';
@@ -88,9 +88,12 @@ const CategoryChip = React.memo(({ category, active, onPress }: { category: stri
   </TouchableOpacity>
 ));
 
-const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => (
+// Chip nguồn báo: mỗi báo 1 màu thương hiệu (SOURCE_COLORS) — đồng bộ badge trên card
+const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => {
+  const c = source === 'Tất cả' ? Color.hot : SOURCE_COLORS[source] || Color.hot;
+  return (
   <TouchableOpacity
-    style={[styles.sourceChip, active && styles.sourceChipActive]}
+    style={[styles.sourceChip, active && { backgroundColor: c, borderColor: c }]}
     onPress={() => onPress(source)}
     activeOpacity={0.7}
     accessibilityRole="button"
@@ -98,7 +101,8 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
   >
     <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]}>{source}</Text>
   </TouchableOpacity>
-));
+  );
+});
 
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
@@ -277,6 +281,7 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={styles.sourceTriggerLeft}>
           <Ionicons name="funnel-outline" size={15} color={Color.hot} />
           <Text style={styles.sourceTriggerText}>Nguồn:</Text>
+          <View style={[styles.sourceTriggerDot, { backgroundColor: selectedSource === 'Tất cả' ? Color.hot : SOURCE_COLORS[selectedSource] || Color.hot }]} />
           <Text style={styles.sourceTriggerValue}>{selectedSource}</Text>
         </View>
         <Ionicons name="chevron-down" size={16} color={Color.textMuted} />
@@ -524,6 +529,7 @@ const styles = StyleSheet.create({
     borderColor: Color.border,
   },
   sourceTriggerLeft: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  sourceTriggerDot: { width: 8, height: 8, borderRadius: 4 },
   sourceTriggerText: { fontSize: Font.caption, color: Color.textSecondary },
   sourceTriggerValue: { fontWeight: '700', color: Color.hot },
 
@@ -572,11 +578,10 @@ const styles = StyleSheet.create({
   searchHint: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   searchHintText: { fontSize: Font.caption, color: Color.textMuted },
 
-  // Source Chips (in modal)
+  // Source Chips (in modal) — màu active theo thương hiệu báo (inline style)
   sourceChip: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: Color.surfaceAlt, borderWidth: 1, borderColor: Color.border },
-  sourceChipActive: { backgroundColor: Color.primarySoft, borderColor: Color.primary },
   sourceChipText: { fontSize: Font.body, fontWeight: '600', color: Color.text },
-  sourceChipTextActive: { color: Color.primary, fontWeight: '700' },
+  sourceChipTextActive: { color: '#FFF', fontWeight: '700' },
 
   // List
   listContent: { paddingBottom: 32 },

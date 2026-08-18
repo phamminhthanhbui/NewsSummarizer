@@ -15,7 +15,7 @@ import { Audio } from 'expo-av';
 import { PROVIDERS, type LLMProvider, getModelsForProvider } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font, Shadow } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
 
@@ -212,7 +212,7 @@ export default function SettingsScreen() {
   const SectionHeader = ({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) => (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
-        <Ionicons name={icon as any} size={18} color={Color.primary} />
+        <Ionicons name={icon as any} size={18} color={Color.hot} />
         <Text style={styles.sectionTitle}>{title}</Text>
       </View>
       {children}
@@ -237,7 +237,7 @@ export default function SettingsScreen() {
         <View style={[styles.listItemDot, active && styles.listItemDotActive]} />
       </View>
       <Text style={[styles.listItemText, active && styles.listItemTextActive]} numberOfLines={1}>{item.label}</Text>
-      {active && <Ionicons name="checkmark" size={18} color={Color.primary} />}
+      {active && <Ionicons name="checkmark" size={18} color={Color.hot} />}
     </TouchableOpacity>
   );
 
@@ -249,7 +249,7 @@ export default function SettingsScreen() {
       activeOpacity={0.6}
     >
       <View style={styles.providerCardIcon}>
-        <Ionicons name={PROVIDER_ICONS[p.id] as any} size={24} color={active ? '#FFF' : Color.primary} />
+        <Ionicons name={PROVIDER_ICONS[p.id] as any} size={24} color={active ? '#FFF' : Color.hot} />
       </View>
       <View style={styles.providerCardContent}>
         <Text style={[styles.providerCardLabel, active && styles.providerCardLabelActive]}>{p.label}</Text>
@@ -264,9 +264,12 @@ export default function SettingsScreen() {
       style={styles.container}
       contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]}
     >
-      {/* Header */}
+      {/* Header — tiêu đề + vạch đỏ kiểu Kenh14 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Cài đặt</Text>
+        <View style={styles.headerTitleRow}>
+          <View style={styles.titleBar} />
+          <Text style={styles.headerTitle}>Cài đặt</Text>
+        </View>
         <Text style={styles.headerSubtitle}>Tùy chỉnh AI, giọng đọc & dữ liệu</Text>
       </View>
 
@@ -401,10 +404,10 @@ export default function SettingsScreen() {
                     <View style={[styles.listItemDot, gender === g.key && styles.listItemDotActive]} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Ionicons name={g.icon as any} size={18} color={gender === g.key ? Color.primary : Color.textSecondary} style={{ marginRight: 10 }} />
+                    <Ionicons name={g.icon as any} size={18} color={gender === g.key ? Color.hot : Color.textSecondary} style={{ marginRight: 10 }} />
                     <Text style={[styles.listItemText, gender === g.key && styles.listItemTextActive]}>{g.label}</Text>
                   </View>
-                  {gender === g.key && <Ionicons name="checkmark" size={18} color={Color.primary} />}
+                  {gender === g.key && <Ionicons name="checkmark" size={18} color={Color.hot} />}
                 </TouchableOpacity>
               ))}
             </View>
@@ -493,11 +496,11 @@ function Stepper({ label, value, min, max, step, onChange }: { label: string; va
       <Text style={styles.stepperLabel}>{label}</Text>
       <View style={styles.stepperControl}>
         <TouchableOpacity style={styles.stepperBtn} onPress={decrement} activeOpacity={0.6} disabled={value <= min}>
-          <Ionicons name="remove" size={18} color={value <= min ? Color.textMuted : Color.primary} />
+          <Ionicons name="remove" size={18} color={value <= min ? Color.textMuted : Color.hot} />
         </TouchableOpacity>
         <Text style={styles.stepperValue}>{value.toFixed(1)}</Text>
         <TouchableOpacity style={styles.stepperBtn} onPress={increment} activeOpacity={0.6} disabled={value >= max}>
-          <Ionicons name="add" size={18} color={value >= max ? Color.textMuted : Color.primary} />
+          <Ionicons name="add" size={18} color={value >= max ? Color.textMuted : Color.hot} />
         </TouchableOpacity>
       </View>
     </View>
@@ -508,24 +511,27 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
   content: { padding: 16, paddingBottom: 100 },
 
-  // Header
+  // Header — tiêu đề + vạch đỏ kiểu Kenh14
   header: { marginBottom: 24 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
   headerTitle: { fontSize: Font.hero, fontWeight: '800', color: Color.text },
-  headerSubtitle: { fontSize: Font.caption, color: Color.textMuted, marginTop: 4 },
+  headerSubtitle: { fontSize: Font.caption, color: Color.textMuted, marginTop: 6, marginLeft: 14 },
 
   // Sections
   section: { marginBottom: 20 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  sectionTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text },
+  sectionTitle: { fontSize: Font.headline, fontWeight: '800', color: Color.text, textTransform: 'uppercase', letterSpacing: 0.4 },
 
-  // Cards
+  // Cards — trắng, góc vuông, border mỏng
   card: {
     backgroundColor: Color.card,
-    borderRadius: Radius.xl,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Color.border,
     padding: 16,
-    ...Shadow.card,
   },
-  dangerCard: { borderWidth: 1, borderColor: Color.danger + '30' },
+  dangerCard: { borderColor: Color.danger + '40' },
 
   // Labels & hints
   fieldLabel: { fontSize: Font.caption, fontWeight: '600', color: Color.text, marginBottom: 8 },
@@ -535,7 +541,7 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: Color.border,
-    borderRadius: Radius.md,
+    borderRadius: 4,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: Font.body,
@@ -556,17 +562,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 14,
-    borderRadius: Radius.md,
+    borderRadius: 4,
     backgroundColor: Color.surfaceAlt,
     borderWidth: 1,
     borderColor: Color.border,
     gap: 10,
   },
   providerCardActive: {
-    backgroundColor: Color.primary,
-    borderColor: Color.primary,
+    backgroundColor: Color.hot,
+    borderColor: Color.hot,
   },
-  providerCardIcon: { width: 40, height: 40, borderRadius: Radius.sm, backgroundColor: Color.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  providerCardIcon: { width: 40, height: 40, borderRadius: 4, backgroundColor: Color.hotSoft, alignItems: 'center', justifyContent: 'center' },
   providerCardContent: { flex: 1, minWidth: 0 },
   providerCardLabel: { fontSize: Font.body, fontWeight: '600', color: Color.text },
   providerCardLabelActive: { color: '#FFF' },
@@ -580,7 +586,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 14,
-    borderRadius: Radius.md,
+    borderRadius: 4,
     backgroundColor: Color.surfaceAlt,
     borderWidth: 1,
     borderColor: Color.border,
@@ -591,20 +597,19 @@ const styles = StyleSheet.create({
   // Dropdown list
   selectDropdown: {
     marginTop: 8,
-    borderRadius: Radius.md,
+    borderRadius: 4,
     backgroundColor: Color.card,
     borderWidth: 1,
     borderColor: Color.border,
     overflow: 'hidden',
-    ...Shadow.card,
   },
   listItem: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 10 },
-  listItemActive: { backgroundColor: Color.primarySoft },
+  listItemActive: { backgroundColor: Color.hotSoft },
   listItemLeft: { width: 24, alignItems: 'center' },
   listItemDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: Color.border },
-  listItemDotActive: { borderColor: Color.primary, backgroundColor: Color.primary },
+  listItemDotActive: { borderColor: Color.hot, backgroundColor: Color.hot },
   listItemText: { fontSize: Font.body, color: Color.text, flex: 1 },
-  listItemTextActive: { color: Color.primary, fontWeight: '600' },
+  listItemTextActive: { color: Color.hot, fontWeight: '600' },
 
   // Gender icon circle
   genderIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
@@ -614,7 +619,7 @@ const styles = StyleSheet.create({
   stepper: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1 },
   stepperLabel: { fontSize: Font.body, color: Color.textSecondary, flex: 1 },
   stepperControl: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stepperBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
+  stepperBtn: { width: 36, height: 36, borderRadius: 4, backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
   stepperValue: { fontSize: Font.headline, fontWeight: '700', color: Color.text, minWidth: 36, textAlign: 'center' },
 
   // Preview button
@@ -625,8 +630,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 12,
-    borderRadius: Radius.md,
-    backgroundColor: Color.primary,
+    borderRadius: 4,
+    backgroundColor: Color.hot,
   },
   previewBtnActive: { backgroundColor: Color.danger },
   previewBtnText: { color: '#FFF', fontWeight: '600', fontSize: Font.caption },
@@ -643,8 +648,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 16,
-    borderRadius: Radius.md,
-    backgroundColor: Color.primary,
+    borderRadius: 4,
+    backgroundColor: Color.hot,
     ...Shadow.button,
   },
   saveBtnSaved: { backgroundColor: Color.success },
