@@ -44,11 +44,7 @@ const useWebSpeech = () => {
   const speak = (text: string, opts: { lang?: string; rate?: number; pitch?: number; voice?: SpeechSynthesisVoice | null } = {}) => {
     return new Promise<void>((resolve, reject) => {
       if (!synthRef.current) { reject(new Error('Web Speech API not available')); return; }
-      // Cancel giọng đang đọc/đang TREO trong queue trước khi speak. Web Speech xếp
-      // utterance mới SAU utterance cũ; utterance cũ mà treo (vd giọng nữ cloud trên
-      // Edge) thì utterance mới KHÔNG BAO GIỜ chạy → bấm đọc im lặng. Cancel sạch
-      // queue để lần nào cũng phát được. (Fix này có ở commit cũ 05fa5b0c, bị mất.)
-      synthRef.current.cancel();
+      const synth = synthRef.current;
       const u = new SpeechSynthesisUtterance(text);
       u.lang = opts.lang || 'vi-VN';
       u.rate = opts.rate ?? 1.0;
@@ -66,7 +62,7 @@ const useWebSpeech = () => {
       const ok = () => { if (settled) return; settled = true; clearTimeout(startGuard); onEndRef.current?.(); resolve(); };
       const startGuard = setTimeout(() => {
         if (!started) {
-          try { synthRef.current?.cancel(); } catch {}
+          try { synth.cancel(); } catch {}
           fail(new Error('Web Speech did not start'));
         }
       }, 1200);
@@ -91,7 +87,19 @@ const useWebSpeech = () => {
         }
       };
       utteranceRef.current = u;
-      synthRef.current.speak(u);
+      // Cancel giọng đang đọc/đang TREO trong queue trước khi speak. Web Speech xếp
+      // utterance mới SAU utterance cũ; utterance cũ mà treo (vd giọng nữ cloud trên
+      // Edge) thì utterance mới KHÔNG BAO GIỜ chạy → bấm đọc im lặng. Cancel sạch
+      // queue để lần nào cũng phát được. (Fix này có ở commit cũ 05fa5b0c, bị mất.)
+      // KHÔNG cancel NGAY TRƯỚC speak(): Chrome/Edge có race — cancel() xong speak()
+      // liền thì utterance mới bị hủy nhầm hoặc engine kẹt cứng, onstart không bao
+      // giờ kích hoạt → guard 1.2s reject → Edge TTS chậm. Cancel SỚM, chờ engine
+      // xả queue rồi mới speak.
+      synth.cancel();
+      setTimeout(() => {
+        if (settled) return; // đã dừng/hết hạn trong lúc chờ
+        try { synth.speak(u); } catch { fail(new Error('Web Speech speak failed')); }
+      }, 120);
     });
   };
 

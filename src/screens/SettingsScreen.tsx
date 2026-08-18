@@ -134,13 +134,26 @@ export default function SettingsScreen() {
             const cleanup = () => { setPreviewing(false); webUtteranceRef.current = null; };
             utterance.onstart = () => { if (!decided) { decided = true; clearTimeout(guard); resolve(true); } };
             utterance.onend = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
-            utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
+            // Lỗi hay 'interrupted'/'canceled' (bị cancel đè) → resolve(false):
+            // fall through Edge TTS thay vì im lặng hoặc alert oan.
+            utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(false); } };
             webUtteranceRef.current = utterance;
-            speechSynthesis.speak(utterance);
+            // Cancel + chờ engine xả queue trước khi speak: cancel() xong speak()
+            // liền tay trên Chrome/Edge dính race — utterance mới bị hủy nhầm hoặc
+            // engine kẹt, onstart không kích hoạt → guard 1.2s → Edge TTS chậm.
+            speechSynthesis.cancel();
+            setTimeout(() => {
+              if (decided) return;
+              try { speechSynthesis.speak(utterance); }
+              catch { if (!decided) { decided = true; clearTimeout(guard); resolve(false); } }
+            }, 120);
           });
           if (started) {
+            // Utterance tự kết thúc qua onend (cleanup). Timeout chỉ chặn treo giữa
+            // chừng; kiểm tra ref thay vì state `previewing` (closure giữ giá trị cũ
+            // = true → dừng nhầm UI đang đọc bình thường).
             setTimeout(() => {
-              if (previewing) {
+              if (webUtteranceRef.current) {
                 stopAudio();
                 setPreviewing(false);
               }
@@ -170,12 +183,14 @@ export default function SettingsScreen() {
       audioRef.current = sound;
       await sound.setRateAsync(rate, true);
       await sound.playAsync();
+      // 60s: câu preview ngắn nhưng Edge TTS upstream có thể chậm; kết thúc thật
+      // do didJustFinish xử lý. Kiểm tra ref thay vì state `previewing` (closure cũ).
       setTimeout(() => {
-        if (previewing) {
+        if (audioRef.current) {
           stopAudio();
           setPreviewing(false);
         }
-      }, 15000);
+      }, 60000);
     } catch (e) {
       alert('Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown'));
       setPreviewing(false);
