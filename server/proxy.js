@@ -255,10 +255,21 @@ function synthesize(text, voice, timeoutMs = 15000) {
   });
 }
 
+// Cache MP3 theo (text+voice): nghe lại bài cũ / đổi giọng rồi nghe lại phải tức thì,
+// khỏi tổng hợp lại — upstream cold mất 7-15s, đây là nguyên nhân chờ 15-20s.
+const ttsCache = new Map(); // sha256 -> Buffer, FIFO cap 100 (~50MB)
+
 app.post('/api/edge-tts', async (req, res) => {
   const { text, voice } = req.body;
   if (!text || !voice) {
     return res.status(400).json({ error: 'Missing required fields: text, voice' });
+  }
+
+  const key = crypto.createHash('sha256').update(voice + '\n' + text).digest('hex');
+  const hit = ttsCache.get(key);
+  if (hit) {
+    res.setHeader('Content-Type', 'audio/mpeg');
+    return res.send(hit);
   }
 
   // Upstream đôi khi "ngủ quên"/rate-limit tức thời → retry với backoff.
@@ -266,6 +277,8 @@ app.post('/api/edge-tts', async (req, res) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const audio = await synthesize(text, voice);
+      if (ttsCache.size >= 100) ttsCache.delete(ttsCache.keys().next().value);
+      ttsCache.set(key, audio);
       res.setHeader('Content-Type', 'audio/mpeg');
       return res.send(audio);
     } catch (e) {

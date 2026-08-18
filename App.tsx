@@ -4,7 +4,15 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Pressable, View, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Color, Font } from "./src/constants/theme";
+import { Color, Font, THEME_COLORS } from "./src/constants/theme";
+
+// Mỗi tab 1 màu chủ đạo riêng (trong 7 màu THEME_COLORS)
+const TAB_COLORS: Record<string, string> = {
+  HomeTab: THEME_COLORS[0].color,      // Cam
+  History: THEME_COLORS[2].color,      // Xanh biển
+  Saved: THEME_COLORS[5].color,        // Hồng
+  SettingsTab: THEME_COLORS[3].color,  // Tím
+};
 import HomeScreen from "./src/screens/HomeScreen";
 import ArticleScreen from "./src/screens/ArticleScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
@@ -22,7 +30,7 @@ function HomeStackScreen() {
 }
 
 function TabBarBtn(props: any) {
-  const { onPress, onLongPress, accessibilityState, accessibilityRole, accessibilityLabel, testID, style, children } = props;
+  const { onPress, onLongPress, accessibilityState, accessibilityRole, accessibilityLabel, testID, style, children, dotColor } = props;
   const focused = accessibilityState?.selected;
   return (
     <Pressable
@@ -38,11 +46,14 @@ function TabBarBtn(props: any) {
         pressed && { opacity: 0.7 },
       ]}
     >
-      {focused ? <View style={s.activeDot} /> : null}
+      {focused ? <View style={[s.activeDot, { backgroundColor: dotColor || Color.primary }]} /> : null}
       {children}
     </Pressable>
   );
 }
+
+// tabBarButton nhận màu riêng từng tab qua closure (props không mang tên route)
+const tabButton = (color: string) => (props: any) => <TabBarBtn {...props} dotColor={color} />;
 
 const s = StyleSheet.create({
   tabBtn: {
@@ -69,9 +80,7 @@ export default function App() {
       <Tab.Navigator
         screenOptions={{
           headerShown: false,
-          tabBarActiveTintColor: Color.primary,
           tabBarInactiveTintColor: Color.textMuted,
-          tabBarButton: (props) => <TabBarBtn {...props} />,
           tabBarStyle: {
             backgroundColor: Color.card,
             borderTopColor: Color.border,
@@ -100,6 +109,8 @@ export default function App() {
           component={HomeStackScreen}
           options={{
             tabBarLabel: "Trang chủ",
+            tabBarActiveTintColor: TAB_COLORS.HomeTab,
+            tabBarButton: tabButton(TAB_COLORS.HomeTab),
             tabBarIcon: ({ focused, color }) => (
               <Ionicons name={focused ? "newspaper" : "newspaper-outline"} size={22} color={color} />
             ),
@@ -110,6 +121,8 @@ export default function App() {
           component={HistoryScreen}
           options={{
             tabBarLabel: "Lịch sử",
+            tabBarActiveTintColor: TAB_COLORS.History,
+            tabBarButton: tabButton(TAB_COLORS.History),
             tabBarIcon: ({ focused, color }) => (
               <Ionicons name={focused ? "time" : "time-outline"} size={22} color={color} />
             ),
@@ -120,6 +133,8 @@ export default function App() {
           component={SavedScreen}
           options={{
             tabBarLabel: "Đã lưu",
+            tabBarActiveTintColor: TAB_COLORS.Saved,
+            tabBarButton: tabButton(TAB_COLORS.Saved),
             tabBarIcon: ({ focused, color }) => (
               <Ionicons name={focused ? "heart" : "heart-outline"} size={22} color={color} />
             ),
@@ -130,6 +145,8 @@ export default function App() {
           component={SettingsScreen}
           options={{
             tabBarLabel: "Cài đặt",
+            tabBarActiveTintColor: TAB_COLORS.SettingsTab,
+            tabBarButton: tabButton(TAB_COLORS.SettingsTab),
             tabBarIcon: ({ focused, color }) => (
               <Ionicons name={focused ? "settings" : "settings-outline"} size={22} color={color} />
             ),

@@ -2,8 +2,9 @@
 // ponytail: regex XML parser, no libs. CORS proxy for web only.
 
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
-import { LIMITS } from '../services/storage';
+import { KEYS, LIMITS } from '../services/storage';
 
 // Web: RSS đi qua proxy local (server/proxy.js, port 3001) — Vercel proxy cũ hay 502 + thiếu CORS
 const PROXY = (process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001') + '/api/fetch?url=';
@@ -152,6 +153,23 @@ export async function fetchFeed(url: string): Promise<FeedItem[]> {
   }
 }
 
+// Cache RSS vào AsyncStorage — lần mở app sau hiện tin tức thì (stale-while-revalidate),
+// fetch mạng chạy nền rồi cập nhật. Giới hạn 300 item để JSON không phình.
+const FEED_CACHE_MAX = 300;
+
+export async function readFeedsCache(): Promise<FeedItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.feedsCache);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFeedsCache(items: FeedItem[]) {
+  AsyncStorage.setItem(KEYS.feedsCache, JSON.stringify(items.slice(0, FEED_CACHE_MAX))).catch(() => {});
+}
+
 export async function fetchAllFeeds(): Promise<FeedItem[]> {
   const results = await Promise.all(
     FEEDS.map(async (d) => {
@@ -170,10 +188,12 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
 
   // Deduplicate by link (keep first occurrence = latest)
   const seen = new Set<string>();
-  return all.filter((item) => {
+  const deduped = all.filter((item) => {
     if (seen.has(item.link)) return false;
     seen.add(item.link);
     return true;
   });
+  writeFeedsCache(deduped);
+  return deduped;
 }
 

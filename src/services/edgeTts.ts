@@ -17,31 +17,19 @@ export async function speakEdge(text: string, gender: EdgeGender): Promise<strin
   const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (typeof window !== 'undefined' ? 'http://localhost:3001' : '');
   const endpoint = proxyUrl ? `${proxyUrl}/api/edge-tts` : '/api/edge-tts';
 
-  // Upstream Edge TTS chập chờn → retry 2 lần nếu lỗi mạng hoặc 5xx
-  let lastErr: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let retryable = true;
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice }),
-      });
-      if (res.ok) {
-        const blob = await res.blob();
-        return URL.createObjectURL(blob);
-      }
-      const errText = await res.text().catch(() => '');
-      lastErr = new Error(`Edge TTS error: ${res.status} ${errText}`);
-      // 4xx (trừ 408/429) là lỗi request, retry vô ích
-      retryable = !(res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429);
-    } catch (e) {
-      lastErr = e instanceof Error ? e : new Error(String(e));
-    }
-    if (!retryable) break;
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+  // KHÔNG retry phía client: proxy (server/proxy.js) đã retry 3 lần với backoff.
+  // Client retry thêm = 3×3 = tối đa 9 lần tổng hợp, mỗi lần cold 7-15s → chờ 15-20s+.
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (res.ok) {
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
   }
-  throw lastErr ?? new Error('Edge TTS failed');
+  const errText = await res.text().catch(() => '');
+  throw new Error(`Edge TTS lỗi: ${res.status} ${errText}`);
 }
 
 export function revokeAudioUrl(url: string) {

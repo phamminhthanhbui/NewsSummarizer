@@ -107,20 +107,16 @@ export function getModelsForProvider(provider: LLMProvider): { id: string; label
 // Legacy export for backward compat
 export const NIM_MODELS = getModelsForProvider('nvidia');
 
-// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint
-export async function summarizeWithProvider(
-  articleText: string,
+// Dựng request theo từng provider (endpoint + kiểu auth khác nhau)
+function buildLlmRequest(
   provider: LLMProvider,
   apiKey: string,
   model: string,
+  systemPrompt: string,
+  userContent: string,
+  maxTokens: number,
   customBaseUrl?: string,
-): Promise<string> {
-  const prompt = `Bạn là biên tập viên tóm tắt tin tức. Tóm tắt bài báo sau bằng tiếng Việt, đầy đủ và mạch lạc, theo cấu trúc:
-- Mở đầu: 1-2 câu nêu sự kiện chính và bối cảnh.
-- Nội dung chính: dùng gạch đầu dòng (-) liệt kê các ý quan trọng, giữ nguyên số liệu, tên riêng, địa điểm, thời gian.
-- Kết luận: 1-2 câu nêu kết quả hoặc ý nghĩa của sự kiện.
-Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm thông tin không có trong bài. Chỉ trả về nội dung tóm tắt.`;
-
+): { url: string; headers: Record<string, string>; body: any } {
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
 
@@ -145,10 +141,10 @@ Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm th
     };
     body = {
       model,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       temperature: 0.3,
-      system: prompt,
-      messages: [{ role: 'user', content: articleText }],
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }],
     };
   } else if (isGoogle) {
     // Google Gemini via OpenAI-compatible endpoint
@@ -157,10 +153,10 @@ Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm th
     body = {
       model,
       messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: articleText },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
       ],
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       temperature: 0.3,
     };
   } else {
@@ -177,14 +173,26 @@ Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm th
     body = {
       model,
       messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: articleText },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
       ],
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       temperature: 0.3,
     };
   }
+  return { url, headers, body };
+}
 
+// Gửi request — web đi qua proxy local (server/proxy.js) khi provider không có CORS.
+// timeoutMs chỉ dùng cho test kết nối; summarize không đặt timeout (bài dài có thể chậm).
+async function sendLlmRequest(
+  url: string,
+  headers: Record<string, string>,
+  body: any,
+  provider: LLMProvider,
+  label: string,
+  timeoutMs?: number,
+): Promise<any> {
   // Use proxy on web to bypass CORS
   const isWeb = Platform.OS === 'web';
 
@@ -209,26 +217,81 @@ Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm th
     ? JSON.stringify({ url, method: 'POST', body, headers })
     : JSON.stringify(body);
 
-  const res = await fetch(finalUrl, {
-    method: 'POST',
-    headers: finalHeaders,
-    body: finalBody,
-  });
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller && timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(finalUrl, {
+      method: 'POST',
+      headers: finalHeaders,
+      body: finalBody,
+      signal: controller?.signal,
+    });
+  } catch (e) {
+    if ((e as any)?.name === 'AbortError') throw new Error(`${label}: hết thời gian chờ phản hồi`);
+    throw new Error(`${label}: không kết nối được — kiểm tra mạng${corsProxy ? ' hoặc chạy proxy server (server/proxy.js)' : ''}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
-    throw new Error(`Lỗi ${cfg.label}: ${msg}`);
+    throw new Error(`Lỗi ${label}: ${msg}`);
   }
 
-  const data = await res.json();
+  return res.json();
+}
+
+// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint
+export async function summarizeWithProvider(
+  articleText: string,
+  provider: LLMProvider,
+  apiKey: string,
+  model: string,
+  customBaseUrl?: string,
+): Promise<string> {
+  const prompt = `Bạn là biên tập viên tóm tắt tin tức. Tóm tắt bài báo sau bằng tiếng Việt, đầy đủ và mạch lạc, theo cấu trúc:
+- Mở đầu: 1-2 câu nêu sự kiện chính và bối cảnh.
+- Nội dung chính: dùng gạch đầu dòng (-) liệt kê các ý quan trọng, giữ nguyên số liệu, tên riêng, địa điểm, thời gian.
+- Kết luận: 1-2 câu nêu kết quả hoặc ý nghĩa của sự kiện.
+Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm thông tin không có trong bài. Chỉ trả về nội dung tóm tắt.`;
+
+  const cfg = getProviderConfig(provider);
+  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+
+  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, articleText, 1024, customBaseUrl);
+  const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
 
   // Parse response based on provider
-  if (isAnthropic) {
+  if (provider === 'anthropic') {
     return data.content?.[0]?.text || '';
   }
   // OpenAI-compatible
   return data.choices?.[0]?.message?.content || '';
+}
+
+// Kiểm tra kết nối: gửi request nhỏ nhất (max_tokens 8, timeout 15s), throw nếu lỗi.
+// Dùng chung buildLlmRequest/sendLlmRequest nên auth/endpoint/proxy giống hệt khi summarize thật.
+export async function testProviderConnection(
+  provider: LLMProvider,
+  apiKey: string,
+  model: string,
+  customBaseUrl?: string,
+): Promise<void> {
+  const cfg = getProviderConfig(provider);
+  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+
+  const { url, headers, body } = buildLlmRequest(
+    provider, apiKey, model,
+    'Bạn là trợ lý kiểm tra kết nối. Trả lời đúng một từ: OK',
+    'ping',
+    8,
+    customBaseUrl,
+  );
+  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 15000);
+  const text = provider === 'anthropic' ? data.content?.[0]?.text : data.choices?.[0]?.message?.content;
+  if (!text) throw new Error(`Lỗi ${cfg.label}: phản hồi rỗng`);
 }
 
 // High-level: fetch key + model from storage, then summarize
@@ -310,7 +373,7 @@ const NON_EDITORIAL_FILENAME_PATTERNS = [
   /icon/i,                        // UI icons
   /sprite/i,                      // CSS sprites
   /tracking|pixel|beacon/i,       // tracking pixels
-  /social|share|fb|zalo|tw|ig|yt/i, // social icons (when standalone)
+  /social|share|facebook|zalo|tiktok|instagram|youtube/i, // social icons — KHÔNG viết tắt fb/tw/ig/yt: khớp giữa chuỗi (vd signature CDN "...Jdpweig") chặn nhầm ảnh thật
   /newslette|newsletter/i,          // newsletter signup banners
 ];
 // Fake video: .gif.mp4, .webp.mp4 = animated images, not real videos
@@ -324,6 +387,9 @@ const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
 function isEditorialImage(url: string): boolean {
     // blob:/data: = object URL của trình duyệt render, không phải ảnh thật của bài
     if (!/^(https?:)?\/\//i.test(url)) return false;
+    // Phải là file ảnh thật: Jina đôi khi biến <a> thành ![Image N](link-bai.html)
+    // → render ra <img> giả. Chỉ nhận URL có đuôi ảnh trước query/hash.
+    if (!/\.(jpe?g|png|webp|avif|bmp)(\?|#|$)/i.test(url)) return false;
     if (/\.(svg|gif)(\?|#|$)/i.test(url)) return false;
     if (/\/restruct\/|\/graphics\/|\/icons\//i.test(url)) return false;
     // /zoom/W_H/ luôn là thumbnail (sidebar/tin liên quan). /thumb_w/N/ chỉ chặn N nhỏ:
@@ -350,6 +416,10 @@ function isEditorialImage(url: string): boolean {
     if (hParam && +hParam[1] > 0 && +hParam[1] < 300) return false;
     // Filter 1x1, 2x2 tracking pixels
     if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
+    // Ad/tracking pixel đội lốt ảnh (vd cl.vlitag.com/tf-v1.jpeg?e=...): query
+    // rất dài, không có tham số kích thước như ảnh CDN thật.
+    const qIdx = url.indexOf('?');
+    if (qIdx >= 0 && url.length - qIdx > 150 && !/[?&](w|width|h|height)=/i.test(url)) return false;
     // Filter UI icon filenames common in VN news sites
     if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
     // Filter social/share icons
@@ -390,6 +460,15 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
   while ((m = imgRe.exec(s)) !== null) {
     if (AD_VIDEO_HOSTS.test(m[2])) continue;
     if (!isEditorialImage(m[2])) continue;
+    // Thumbnail "tin liên quan/đọc nhiều" bị bọc trong link bài viết:
+    // [![alt](img.jpg)](bai-viet.html) — ảnh bài thật đứng một mình (hoặc bọc
+    // trong link trỏ đến chính ảnh đó để phóng to). Bỏ ảnh bị bọc trong link
+    // không phải file ảnh.
+    if (s[m.index - 1] === '[' && s.startsWith('](', m.index + m[0].length)) {
+      const close = s.indexOf(')', m.index + m[0].length + 2);
+      const wrapUrl = close >= 0 ? s.slice(m.index + m[0].length + 2, close) : '';
+      if (!/\.(jpe?g|png|webp|avif|bmp)(\?|#|$)/i.test(wrapUrl)) continue;
+    }
     if (seenUrl.has(m[2])) continue;
     seenUrl.add(m[2]);
     markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url: m[2] } });

@@ -1,8 +1,9 @@
 // Design tokens — palette + type scale + radius
+// primary/danger lấy đúng từ 7 màu chủ đạo (THEME_COLORS): cam Kenh14 + đỏ thời sự
 export const Color = {
-  primary: '#C62828',        // brand red
-  primaryDark: '#A8181F',
-  primarySoft: '#FCE9E9',    // pill/tint nền của primary
+  primary: '#FB512A',        // = THEME_COLORS 'Cam Kenh14'
+  primaryDark: '#A70E1A',
+  primarySoft: '#FFEEE8',    // pill/tint nền của primary
   // Palette kiểu Kenh14 — cam đỏ trẻ trung, dùng cho HomeScreen
   hot: '#FB512A',            // cam đỏ đặc trưng
   hotDark: '#A70E1A',        // đỏ đậm cuối gradient
@@ -19,10 +20,10 @@ export const Color = {
   border: '#E8EAF0',         // dividers
   skeleton: '#ECEFF4',       // placeholder bg
   skeletonAnim: '#DFE3EA',   // placeholder pulse
-  success: '#2E7D32',
-  successSoft: '#E7F4E8',
-  danger: '#C62828',
-  dangerSoft: '#FCE9E9',
+  success: '#059669',        // = THEME_COLORS 'Xanh lá'
+  successSoft: '#D1FAE5',
+  danger: '#DC2626',         // = THEME_COLORS 'Đỏ thời sự'
+  dangerSoft: '#FEE2E2',
   scrim: 'rgba(10,15,25,0.55)',
   white: '#FFFFFF',
 } as const;
@@ -43,6 +44,17 @@ export const Radius = {
   xl: 22,
 } as const;
 
+// 7 màu chủ đạo của app — dải màu trang trí dưới header + màu active của tab bar
+export const THEME_COLORS = [
+  { key: 'hot', label: 'Cam Kenh14', color: '#FB512A' },
+  { key: 'red', label: 'Đỏ thời sự', color: '#DC2626' },
+  { key: 'blue', label: 'Xanh biển', color: '#2563EB' },
+  { key: 'violet', label: 'Tím', color: '#7C3AED' },
+  { key: 'green', label: 'Xanh lá', color: '#059669' },
+  { key: 'pink', label: 'Hồng', color: '#DB2777' },
+  { key: 'gold', label: 'Vàng đồng', color: '#D97706' },
+] as const;
+
 export const Shadow = {
   card: {
     boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
@@ -53,8 +65,8 @@ export const Shadow = {
     elevation: 2,
   },
   button: {
-    boxShadow: '0 4px 12px rgba(198, 40, 40, 0.15)',
-    shadowColor: '#C62828',
+    boxShadow: '0 4px 12px rgba(251, 81, 42, 0.15)',
+    shadowColor: '#FB512A',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
     shadowRadius: 12,

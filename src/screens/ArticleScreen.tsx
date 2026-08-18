@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import {
   View,
   Text,
@@ -23,7 +23,7 @@ import { Color, Font, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
-import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
+import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
@@ -166,13 +166,15 @@ export default function ArticleScreen({ navigation, route }: any) {
 
       // Chạy song song không chặn nhau: tóm nhanh từ mô tả + tải toàn bài để render
       const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
-      fetchAllFeeds()
-        .then((all) => {
-          const same = all.filter((a) => a.source === item.source && a.link !== item.link);
-          const others = all.filter((a) => a.source !== item.source && a.link !== item.link);
-          setRelated([...same, ...others].slice(0, LIMITS.relatedMax));
-        })
-        .catch(() => {});
+      // Bài liên quan: đọc từ cache RSS (Home đã fetch + ghi cache) — KHÔNG gọi lại
+      // fetchAllFeeds() mỗi lần mở bài (30 request RSS thừa). Cache trống mới fetch.
+      (async () => {
+        let all = await readFeedsCache();
+        if (!all.length) all = await fetchAllFeeds().catch(() => [] as FeedItem[]);
+        const same = all.filter((a) => a.source === item.source && a.link !== item.link);
+        const others = all.filter((a) => a.source !== item.source && a.link !== item.link);
+        setRelated([...same, ...others].slice(0, LIMITS.relatedMax));
+      })().catch(() => {});
 
       // CACHE: đã tóm tắt bài này rồi → hiện lại ngay, 0 lời gọi API
       const raw = await AsyncStorage.getItem(KEYS.history);
@@ -327,10 +329,12 @@ export default function ArticleScreen({ navigation, route }: any) {
           // Truyền voice đã resolve theo gender (không truyền = giọng mặc định)
           await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch, voice: webVoice });
           return;
-        } catch {
+        } catch (e) {
           // Web Speech failed → fall through to Edge TTS.
-          // Treo (không onstart) → ghi nhận để lần sau đi thẳng Edge TTS, khỏi chờ guard
-          markWebVoiceHung(gender);
+          // Chỉ ghi nhận TREO khi đúng lỗi start-guard (không onstart trong 1.2s).
+          // Lỗi engine khác (engine kẹt sau khi đổi giọng ở Settings...) là tạm thời —
+          // đánh dấu oan thì giọng đó MÃI MÃI mất word-highlight Web Speech.
+          if (e instanceof Error && e.message === 'Web Speech did not start') markWebVoiceHung(gender);
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         }
       }
@@ -457,20 +461,39 @@ export default function ArticleScreen({ navigation, route }: any) {
       return points;
     };
 
+    // Phân loại đoạn: dòng gạch đầu dòng (- / • / *) = điểm nhấn, đoạn đầu tiên = lead
+    const isBullet = (s: string) => /^[-•*]\s/.test(s);
+
     if (isWeb && paraWords.length > 0) {
       // WEB: word-level karaoke highlighting PER PARAGRAPH + interleaved media
       const renderPara = (pi: number) => {
         const words = paraWords[pi];
         if (!words) return null; // guard: index lệch (không xảy ra khi wordMap là useMemo, nhưng chặn crash)
-        return (
-          <Text key={'wp' + pi} style={styles.summaryText}>
-            {words.map((w, wi) => (
-              <Text
-                key={'w' + pi + '_' + wi}
-                style={[w.flat === highlightWordIndex && { backgroundColor: Color.hotSoft, borderRadius: 3, fontWeight: '700', color: Color.hot }]}
-              >{wi > 0 ? ' ' : ''}{w.text}</Text>
-            ))}
+        const bullet = isBullet(paras[pi] || '');
+        const lead = pi === 0 && !bullet;
+        let firstVisible = true;
+        const text = (
+          <Text style={[styles.summaryText, lead && styles.summaryLead, bullet && styles.bulletText]}>
+            {words.map((w, wi) => {
+              // Ẩn marker "-" đầu dòng (thay bằng vạch màu); flat index vẫn khớp summary gốc
+              if (bullet && wi === 0 && /^[-•*]$/.test(w.text)) return null;
+              const spacer = firstVisible ? '' : ' ';
+              firstVisible = false;
+              return (
+                <Text
+                  key={'w' + pi + '_' + wi}
+                  style={[w.flat === highlightWordIndex && { backgroundColor: Color.hotSoft, borderRadius: 3, fontWeight: '700', color: Color.hot }]}
+                >{spacer}{w.text}</Text>
+              );
+            })}
           </Text>
+        );
+        if (!bullet) return <React.Fragment key={'wp' + pi}>{text}</React.Fragment>;
+        return (
+          <View key={'b' + pi} style={styles.bulletRow}>
+            <View style={styles.bulletBar} />
+            <View style={styles.bulletBody}>{text}</View>
+          </View>
         );
       };
       if (!media.length) return paraWords.map((_, pi) => renderPara(pi));
@@ -487,37 +510,34 @@ export default function ArticleScreen({ navigation, route }: any) {
     }
 
     // NATIVE: paragraph-level highlighting with interleaved media
-    if (!media.length) {
-      return paras.map((p, i) =>
-        <Text key={'p' + i} style={[
+    const renderParaNative = (i: number) => {
+      const p = paras[i];
+      const bullet = isBullet(p);
+      const lead = i === 0 && !bullet;
+      const text = (
+        <Text style={[
           styles.summaryText,
+          lead && styles.summaryLead,
+          bullet && styles.bulletText,
           highlightParaIndex === i && { backgroundColor: Color.hotSoft, borderRadius: 3 }
-        ]}>{p}</Text>
+        ]}>{bullet ? p.replace(/^[-•*]\s+/, '') : p}</Text>
       );
-    }
+      if (!bullet) return <React.Fragment key={'p' + i}>{text}</React.Fragment>;
+      return (
+        <View key={'b' + i} style={styles.bulletRow}>
+          <View style={styles.bulletBar} />
+          <View style={styles.bulletBody}>{text}</View>
+        </View>
+      );
+    };
+    if (!media.length) return paras.map((_, i) => renderParaNative(i));
     let cur = 0;
     media.forEach((mb, mi) => {
       const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
-      while (cur < at) {
-        nodes.push(
-          <Text key={'p' + cur} style={[
-            styles.summaryText,
-            highlightParaIndex === cur && { backgroundColor: Color.hotSoft, borderRadius: 3 }
-          ]}>{paras[cur]}</Text>
-        );
-        cur++;
-      }
+      while (cur < at) { nodes.push(renderParaNative(cur)); cur++; }
       nodes.push(renderMedia(mb, 'm' + mi));
     });
-    while (cur < paras.length) {
-      nodes.push(
-        <Text key={'p' + cur} style={[
-          styles.summaryText,
-          highlightParaIndex === cur && { backgroundColor: Color.hotSoft, borderRadius: 3 }
-        ]}>{paras[cur]}</Text>
-      );
-      cur++;
-    }
+    while (cur < paras.length) { nodes.push(renderParaNative(cur)); cur++; }
     return nodes;
   };
 
@@ -681,7 +701,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           onPress={handleBookmark}
           activeOpacity={0.7}
         >
-          <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={21} color={isSaved ? '#E53935' : Color.textSecondary} />
+          <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={21} color={isSaved ? Color.danger : Color.textSecondary} />
         </TouchableOpacity>
       </View>
     </View>
@@ -826,6 +846,28 @@ const styles = StyleSheet.create({
   summaryErrText: { fontSize: Font.body, color: Color.danger, flex: 1 },
   retryLink: { fontSize: Font.body, fontWeight: '700', color: Color.hot, marginLeft: 12 },
   summaryText: { fontSize: 15, lineHeight: 25, color: Color.text, marginBottom: 12 },
+  // Đoạn mở đầu (lead) — đậm hơn, vạch cam bên trái kiểu Kenh14
+  summaryLead: {
+    fontSize: 16,
+    lineHeight: 26,
+    fontWeight: '600',
+    color: Color.text,
+    borderLeftWidth: 3,
+    borderLeftColor: Color.hot,
+    paddingLeft: 10,
+    paddingVertical: 2,
+  },
+  // Điểm nhấn gạch đầu dòng — nền tint, vạch cam, chữ đậm
+  bulletRow: { flexDirection: 'row', marginBottom: 10 },
+  bulletBar: { width: 3, borderRadius: 2, backgroundColor: Color.hot, marginRight: 10 },
+  bulletBody: {
+    flex: 1,
+    backgroundColor: Color.hotSoft,
+    borderRadius: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  bulletText: { fontWeight: '600', marginBottom: 0 },
   copyInline: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -927,7 +969,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#00000008',
   },
-  fabRoundOn: { backgroundColor: '#FFEBEE' },
+  fabRoundOn: { backgroundColor: Color.dangerSoft },
   fabRoundText: { fontSize: 20 },
   // Image Modal
   imageModalOverlay: {

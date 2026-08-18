@@ -117,7 +117,7 @@ export default function SavedScreen({ navigation }: Props) {
             <Text style={styles.emptyText}>Chưa có bài đã lưu</Text>
             <View style={styles.emptyHintRow}>
               <Text style={styles.emptyHint}>Bấm</Text>
-              <Ionicons name="heart" size={14} color="#E53935" />
+              <Ionicons name="heart" size={14} color={Color.danger} />
               <Text style={styles.emptyHint}>trong bài báo để lưu</Text>
             </View>
           </View>

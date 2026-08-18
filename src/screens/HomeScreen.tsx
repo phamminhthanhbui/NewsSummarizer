@@ -20,10 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { FEEDS, fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
+import { FEEDS, fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { fetchVideos } from '../services/videos';
 import type { FeedItem, VideoItem } from '../types';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font, Radius, Shadow, THEME_COLORS } from '../constants/theme';
 import ArticleCard from '../components/ArticleCard';
 import FeaturedCard from '../components/FeaturedCard';
 import SectionHeader from '../components/SectionHeader';
@@ -41,14 +41,15 @@ const CATEGORIES = ['Tất cả', ...new Set(FEEDS.map((f) => f.category))];
 const SOURCES = ['Tất cả', ...new Set(FEEDS.map((f) => f.name))];
 
 
+// Mỗi category đúng 1 trong 7 màu chủ đạo (THEME_COLORS) — 7 mục, 7 màu, không trùng
 const CATEGORY_COLORS: Record<string, string> = {
-  'Tất cả': Color.primary,
-  'Việt Nam': '#DA1E37',
-  'Công nghệ': '#6C5CE7',
-  'Kinh doanh': '#00C896',
-  'Thể thao': '#FFA502',
-  'Giải trí': '#E84393',
-  'Sức khỏe': '#26DE81',
+  'Tất cả': '#FB512A',      // Cam Kenh14
+  'Việt Nam': '#DC2626',    // Đỏ thời sự
+  'Công nghệ': '#7C3AED',   // Tím
+  'Kinh doanh': '#D97706',  // Vàng đồng
+  'Thể thao': '#059669',    // Xanh lá
+  'Giải trí': '#DB2777',    // Hồng
+  'Sức khỏe': '#2563EB',    // Xanh biển
 };
 
 const CATEGORY_ICONS: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
@@ -123,8 +124,11 @@ export default function HomeScreen({ navigation }: Props) {
   const flatListRef = useRef<FlatList<FeedItem>>(null);
 
   const load = useCallback(async () => {
+    // Cache trước: có tin cũ hiện ngay (vài ms), fetch mạng chạy tiếp rồi thay
+    const cached = await readFeedsCache();
+    if (cached.length) setItems(cached);
     const [data, vids] = await Promise.all([fetchAllFeeds(), fetchVideos()]);
-    setItems(data);
+    if (data.length) setItems(data);
     setVideos(vids);
   }, []);
 
@@ -207,6 +211,11 @@ export default function HomeScreen({ navigation }: Props) {
   }), [items]);
 
   const renderItem = useCallback(({ item }: { item: FeedItem }) => <ArticleCard item={item} onPress={goArticle} />, [goArticle]);
+  const heroRenderItem = useCallback(({ item }: { item: FeedItem }) => (
+    <View style={styles.heroSlide}>
+      <FeaturedCard item={item} onPress={goArticle} />
+    </View>
+  ), [goArticle]);
 
   // Callback ổn định cho chip (memo chỉ hiệu quả khi onPress không đổi)
   const handleCategoryPress = useCallback((category: string) => {
@@ -256,6 +265,13 @@ export default function HomeScreen({ navigation }: Props) {
             <Text style={styles.date}>{today()}</Text>
           </View>
           <Text style={styles.statsText}>{stats.total} bài · {stats.sources} nguồn</Text>
+        </View>
+
+        {/* Dải 7 màu chủ đạo — signature của app */}
+        <View style={styles.themeStrip}>
+          {THEME_COLORS.map((t) => (
+            <View key={t.key} style={[styles.themeStripSeg, { backgroundColor: t.color }]} />
+          ))}
         </View>
 
       </LinearGradient>
@@ -422,11 +438,7 @@ export default function HomeScreen({ navigation }: Props) {
                     pagingEnabled
                     showsHorizontalScrollIndicator={false}
                     keyExtractor={(item) => item.link}
-                    renderItem={({ item }) => (
-                      <View style={styles.heroSlide}>
-                        <FeaturedCard item={item} onPress={goArticle} />
-                      </View>
-                    )}
+                    renderItem={heroRenderItem}
                     // onScroll thay vì onMomentumScrollEnd — web (react-native-web)
                     // không có momentum events, indicator sẽ không bao giờ cập nhật
                     scrollEventThrottle={100}
@@ -478,6 +490,11 @@ export default function HomeScreen({ navigation }: Props) {
           }
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          // Perf: render vừa đủ + window nhỏ, card đã memo → scroll nhẹ
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS !== 'web'}
         />
       )}
     </Animated.View>
@@ -509,6 +526,9 @@ const styles = StyleSheet.create({
   dateWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   date: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
   statsText: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
+  // Dải 7 màu chủ đạo ở đáy header
+  themeStrip: { flexDirection: 'row', marginTop: 12, marginHorizontal: -16, marginBottom: -12, height: 4 },
+  themeStripSeg: { flex: 1 },
   refreshSpin: { transform: [{ rotate: '360deg' }] },
 
   // Category Bar — tab gạch chân cam kiểu menu báo điện tử
