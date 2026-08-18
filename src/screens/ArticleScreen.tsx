@@ -16,9 +16,10 @@ import { Audio } from 'expo-av';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
-import { Color, Font } from '../constants/theme';
+import { Color, Font, Shadow } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
@@ -466,7 +467,7 @@ export default function ArticleScreen({ navigation, route }: any) {
             {words.map((w, wi) => (
               <Text
                 key={'w' + pi + '_' + wi}
-                style={[w.flat === highlightWordIndex && { backgroundColor: Color.primarySoft, borderRadius: 3, fontWeight: '700', color: Color.primary }]}
+                style={[w.flat === highlightWordIndex && { backgroundColor: Color.hotSoft, borderRadius: 3, fontWeight: '700', color: Color.hot }]}
               >{wi > 0 ? ' ' : ''}{w.text}</Text>
             ))}
           </Text>
@@ -490,7 +491,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       return paras.map((p, i) =>
         <Text key={'p' + i} style={[
           styles.summaryText,
-          highlightParaIndex === i && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+          highlightParaIndex === i && { backgroundColor: Color.hotSoft, borderRadius: 3 }
         ]}>{p}</Text>
       );
     }
@@ -501,7 +502,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         nodes.push(
           <Text key={'p' + cur} style={[
             styles.summaryText,
-            highlightParaIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+            highlightParaIndex === cur && { backgroundColor: Color.hotSoft, borderRadius: 3 }
           ]}>{paras[cur]}</Text>
         );
         cur++;
@@ -512,7 +513,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       nodes.push(
         <Text key={'p' + cur} style={[
           styles.summaryText,
-          highlightParaIndex === cur && { backgroundColor: Color.primarySoft, borderRadius: 3 }
+          highlightParaIndex === cur && { backgroundColor: Color.hotSoft, borderRadius: 3 }
         ]}>{paras[cur]}</Text>
       );
       cur++;
@@ -549,7 +550,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           <Text style={styles.metaTime}>⏱ ~{readTime} phút đọc</Text>
         </View>
 
-        {/* AI Summary card */}
+        {/* AI Summary card — kiểu Kenh14: ảnh full-bleed, badge đỏ, góc vuông, nền trắng */}
         <View style={styles.summaryCard}>
           {/* Hình gốc của bài */}
           {item.image ? (
@@ -557,33 +558,48 @@ export default function ArticleScreen({ navigation, route }: any) {
           ) : null}
 
           <View style={styles.summaryLabelRow}>
-            <View style={styles.aiBadge}>
-              <Ionicons name="sparkles" size={15} color="#FFF" />
-            </View>
-            <Text style={styles.summaryLabel}>Tóm tắt bằng AI</Text>
+            <LinearGradient
+              colors={[Color.hot, Color.hotDark]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.aiBadge}
+            >
+              <Ionicons name="sparkles" size={13} color="#FFF" />
+              <Text style={styles.summaryLabel}>AI TÓM TẮT</Text>
+            </LinearGradient>
             {summary ? (
-              <TouchableOpacity onPress={toggleSpeak} style={styles.speakBtn} activeOpacity={0.7}>
-                <Ionicons name={speaking ? 'stop-circle' : 'volume-high'} size={19} color={speaking ? Color.primary : Color.textSecondary} />
-              </TouchableOpacity>) : null}
+              <TouchableOpacity
+                onPress={toggleSpeak}
+                style={[styles.speakBtn, speaking && styles.speakBtnOn]}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel={speaking ? 'Dừng đọc' : 'Nghe tóm tắt'}
+              >
+                <Ionicons name={speaking ? 'stop' : 'volume-high'} size={16} color={speaking ? '#FFF' : Color.hot} />
+                <Text style={[styles.speakBtnText, speaking && styles.speakBtnTextOn]}>
+                  {speaking ? 'Dừng' : 'Nghe'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           {summarizing ? (
             <View style={styles.summaryLoading}>
-              <ActivityIndicator color={Color.accent} size="small" />
+              <ActivityIndicator color={Color.hot} size="small" />
               <Text style={styles.summaryLoadingText}>Đang tóm tắt...</Text>
             </View>
           ) : error || !summary ? (
             <View style={styles.summaryErr}>
               <Text style={styles.summaryErrText}>{error || 'Chưa có tóm tắt'}</Text>
-              <TouchableOpacity onPress={summarize}>
-                <Text style={styles.retryLink}>{summary ? 'Tóm tắt lại →' : '→'}</Text>
+              <TouchableOpacity onPress={summarize} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.retryLink}>{summary ? 'Tóm tắt lại' : 'Tóm tắt'}</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <View>
+            <View style={styles.summaryBody}>
               {renderSummaryNodes()}
               <TouchableOpacity style={styles.copyInline} onPress={copySummary} activeOpacity={0.7}>
-                <Ionicons name="copy-outline" size={14} color={Color.textSecondary} />
+                <Ionicons name="copy-outline" size={14} color={Color.hot} />
                 <Text style={styles.copyInlineText}>Copy tóm tắt</Text>
               </TouchableOpacity>
             </View>
@@ -750,50 +766,66 @@ const styles = StyleSheet.create({
   metaSource: { fontSize: Font.tiny, color: Color.primary, fontWeight: '700' },
   metaDot: { fontSize: Font.tiny, color: Color.textMuted },
   metaTime: { fontSize: Font.tiny, color: Color.textMuted },
-  // Summary
+  // Summary — kiểu Kenh14: nền trắng, góc vuông (radius 4), ảnh full-bleed, badge đỏ
   summaryCard: {
     marginHorizontal: 16,
     marginBottom: 16,
-    backgroundColor: Color.bg,
-    borderRadius: 14,
+    backgroundColor: Color.card,
+    borderRadius: 4,
     borderWidth: 1,
     borderColor: Color.border,
-    padding: 16,
+    overflow: 'hidden',
+    ...Shadow.card,
   },
   summaryLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
+    gap: 8,
+    marginHorizontal: 14,
+    marginTop: 12,
     marginBottom: 12,
   },
   aiBadge: {
-    width: 28, height: 28, borderRadius: 9, backgroundColor: Color.primary,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  summaryLabel: { fontSize: Font.body, fontWeight: '800', color: Color.text },
-  speakBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Color.skeleton,
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 3,
+  },
+  summaryLabel: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.6 },
+  speakBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: Color.hot,
+    backgroundColor: Color.hotSoft,
     marginLeft: 'auto',
   },
-  cardImg: { height: 180, borderRadius: 10, marginBottom: 12, backgroundColor: Color.skeleton },
-  summaryLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  speakBtnOn: { backgroundColor: Color.hot, borderColor: Color.hot },
+  speakBtnText: { fontSize: Font.tiny, fontWeight: '700', color: Color.hot },
+  speakBtnTextOn: { color: '#FFF' },
+  cardImg: { height: 200, backgroundColor: Color.skeleton },
+  summaryBody: { marginHorizontal: 14 },
+  summaryLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginHorizontal: 14, marginBottom: 14 },
   summaryLoadingText: { fontSize: Font.body, color: Color.textMuted },
   summaryErr: {
-    backgroundColor: '#FFF0F0',
+    backgroundColor: Color.dangerSoft,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: 4,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginHorizontal: 14,
+    marginBottom: 14,
   },
-  summaryErrText: { fontSize: Font.body, color: '#E53935', flex: 1 },
-  retryLink: { fontSize: Font.body, fontWeight: '600', color: Color.accent, marginLeft: 12 },
-  summaryText: { fontSize: Font.body, lineHeight: 23, color: Color.text, marginBottom: 10 },
+  summaryErrText: { fontSize: Font.body, color: Color.danger, flex: 1 },
+  retryLink: { fontSize: Font.body, fontWeight: '700', color: Color.hot, marginLeft: 12 },
+  summaryText: { fontSize: 15, lineHeight: 25, color: Color.text, marginBottom: 12 },
   copyInline: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -801,20 +833,24 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 7,
     paddingHorizontal: 13,
-    borderRadius: 999,
-    backgroundColor: Color.skeleton,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: Color.border,
+    backgroundColor: Color.surfaceAlt,
+    marginBottom: 14,
   },
   copyInlineText: { fontSize: Font.caption, fontWeight: '600', color: Color.textSecondary },
   // Ảnh/video đan xen trong khung tóm tắt
   blockImg: {
     width: '100%',
     height: 220,
+    borderRadius: 4,
     backgroundColor: Color.skeleton,
     marginBottom: 14,
   },
   videoCard: {
     marginBottom: 14,
-    borderRadius: 10,
+    borderRadius: 4,
     overflow: 'hidden',
     backgroundColor: Color.skeleton,
     alignItems: 'center',
@@ -827,7 +863,8 @@ const styles = StyleSheet.create({
     color: Color.accent,
   },
   sourceRow: {
-    marginTop: 14,
+    marginHorizontal: 14,
+    marginBottom: 14,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
