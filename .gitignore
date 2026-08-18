@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Edge TTS MP3 disk cache (server/proxy.js)
+server/.tts-cache/

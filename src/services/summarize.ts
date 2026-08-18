@@ -353,7 +353,7 @@ function cleanMarkdownText(s: string): string {
 }
 
 // host/ad-network chèn player giả vào bài (bỏ qua để không hiện video quảng cáo)
-const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\.com|taboola\.com|outbrain\.com|adservice\.google\.)/i;
+const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\.com|taboola\.com|outbrain\.com|adservice\.google\.|gliastudios\.com)/i;
 
 // General patterns for non-editorial media (applies to ALL news sites)
 // Thumbnail/CDN patterns: zoom/W_H, thumb, crop, resize
@@ -405,8 +405,8 @@ function isEditorialImage(url: string): boolean {
     // Filter thumbnail suffixes: -thumb, _thumb, -small, _small, -preview, _preview
     if (/(-|_)(thumb|small|preview|teaser|crop)\d*(\/|_|-|\.|$)/i.test(url)) return false;
     // Filter by aspect ratio hints: square/portrait thumbnails often have h~w, main images are landscape (w > h*1.2)
-    const wParam = url.match(/[?&]w=(\d+)/i);
-    const hParam = url.match(/[?&]h=(\d+)/i);
+    const wParam = url.match(/[?&](?:w|width)=(\d+)/i);
+    const hParam = url.match(/[?&](?:h|height)=(\d+)/i);
     if (wParam && hParam) {
       const w = +wParam[1], h = +hParam[1];
       if (w > 0 && h > 0 && w / h < 1.2) return false; // square/portrait = likely thumbnail
@@ -460,14 +460,15 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
   while ((m = imgRe.exec(s)) !== null) {
     if (AD_VIDEO_HOSTS.test(m[2])) continue;
     if (!isEditorialImage(m[2])) continue;
-    // Thumbnail "tin liên quan/đọc nhiều" bị bọc trong link bài viết:
-    // [![alt](img.jpg)](bai-viet.html) — ảnh bài thật đứng một mình (hoặc bọc
-    // trong link trỏ đến chính ảnh đó để phóng to). Bỏ ảnh bị bọc trong link
-    // không phải file ảnh.
+    // Ảnh bị bọc trong link [![alt](img.jpg)](...): thumbnail "tin liên quan/
+    // đọc nhiều" (link bài viết) hoặc banner QC (link trỏ ảnh khác, vd
+    // [![QC Xi măng](qc.jpg)](longson.jpg)). Chỉ giữ khi link trỏ đến CHÍNH
+    // ảnh đó (zoom to) — so base URL không query.
     if (s[m.index - 1] === '[' && s.startsWith('](', m.index + m[0].length)) {
       const close = s.indexOf(')', m.index + m[0].length + 2);
       const wrapUrl = close >= 0 ? s.slice(m.index + m[0].length + 2, close) : '';
-      if (!/\.(jpe?g|png|webp|avif|bmp)(\?|#|$)/i.test(wrapUrl)) continue;
+      const wrapHref = wrapUrl.split(/\s/)[0]; // markdown: URL có thể kèm "title"
+      if (wrapHref.split('?')[0] !== m[2].split('?')[0]) continue;
     }
     if (seenUrl.has(m[2])) continue;
     seenUrl.add(m[2]);

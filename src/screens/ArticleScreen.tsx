@@ -24,7 +24,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
-import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, warmEdgeTts, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 
@@ -74,7 +74,7 @@ const useWebSpeech = () => {
         // giọng cũ — resolve KHÔNG kèm onEndRef: onEndRef bây giờ trỏ về callback
         // của lần đọc MỚI (set trước khi speak), gọi nó sẽ tắt nhầm trạng thái
         // đang đọc. Cũng KHÔNG reject: reject sẽ chạy vào catch →
-        // markWebVoiceHung(gender) → bấm NÚT DỪNG cũng thành "giọng treo", lần sau
+        // markWebVoiceHung() → bấm NÚT DỪNG cũng thành "giọng treo", lần sau
         // mất word-highlight Web Speech oan. (Fix ở commit cũ 05fa5b0c, bị mất.)
         if (e && (e.error === 'interrupted' || e.error === 'canceled')) {
           if (settled) return; settled = true; clearTimeout(startGuard); resolve(); return;
@@ -252,6 +252,16 @@ export default function ArticleScreen({ navigation, route }: any) {
     const { offsets, paras } = buildWordMap(summary);
     return { wordOffsets: offsets, paraWords: paras };
   }, [summary]);
+
+  // Pre-warm cache TTS: summary vừa hiện là tổng hợp NGẦM ngay (fire-and-forget),
+  // user click Nghe sau đó = cache hit tức thì, khỏi chờ 5-30s tổng hợp.
+  // Text phải giống hệt toggleSpeak (replace \n) để key cache khớp.
+  useEffect(() => {
+    if (!summary) return;
+    const text = summary.replace(/\n+/g, '， ');
+    warmEdgeTts(text);
+  }, [summary]);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Reset highlight khi summary đổi
@@ -274,11 +284,11 @@ export default function ArticleScreen({ navigation, route }: any) {
     }
     if (!summary) return;
     cancelledRef.current = false;
+    clearWebVoiceHung(); // thử lại Web Speech mỗi lần bấm — mark cũ có thể oan
     setSpeaking(true);
     setHighlightWordIndex(0);
     setHighlightParaIndex(0);
     try {
-      const gender = (await AsyncStorage.getItem(KEYS.voiceGender)) as EdgeGender || 'nu';
       const rate = parseFloat((await AsyncStorage.getItem(KEYS.rate)) || '') || 1.0;
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
       const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -301,10 +311,9 @@ export default function ArticleScreen({ navigation, route }: any) {
         // WEB: true word-level sync via Web Speech API.
         // Đọc `summary` nguyên bản (KHÔNG replace \n) để charIndex của onboundary
         // khớp 1:1 với wordOffsets build từ chính `summary`.
-        // Browser không có giọng đúng gender (vd Chrome chỉ có giọng nam)
-        // hoặc giọng đã biết bị treo (markWebVoiceHung) → bỏ qua Web Speech,
-        // fall through xuống Edge TTS bên dưới.
-        const webVoice = isWebVoiceHung(gender) ? null : await resolveWebVoice(gender);
+        // Browser không có giọng vi hoặc giọng đã biết bị treo (markWebVoiceHung)
+        // → bỏ qua Web Speech, fall through xuống Edge TTS bên dưới.
+        const webVoice = isWebVoiceHung() ? null : await resolveWebVoice();
         if (webVoice) try {
           // onboundary KHÔNG đáng tin với giọng vi (nhiều browser không bắn
           // word event) → fallback nội suy theo thời gian. Có boundary thì
@@ -326,7 +335,7 @@ export default function ArticleScreen({ navigation, route }: any) {
             setHighlightWordIndex(-1);
             setHighlightParaIndex(-1);
           });
-          // Truyền voice đã resolve theo gender (không truyền = giọng mặc định)
+          // Truyền voice vi đã resolve (không truyền = giọng mặc định)
           await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch, voice: webVoice });
           return;
         } catch (e) {
@@ -334,7 +343,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           // Chỉ ghi nhận TREO khi đúng lỗi start-guard (không onstart trong 1.2s).
           // Lỗi engine khác (engine kẹt sau khi đổi giọng ở Settings...) là tạm thời —
           // đánh dấu oan thì giọng đó MÃI MÃI mất word-highlight Web Speech.
-          if (e instanceof Error && e.message === 'Web Speech did not start') markWebVoiceHung(gender);
+          if (e instanceof Error && e.message === 'Web Speech did not start') markWebVoiceHung();
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         }
       }
@@ -345,9 +354,10 @@ export default function ArticleScreen({ navigation, route }: any) {
       // events từ Edge TTS websocket — chưa cần)
       const text = summary.replace(/\n+/g, '， ');
 
-      // Try Edge TTS (native + web fallback)
+      // Try Edge TTS (native + web fallback). Cache đã được warm ngầm khi summary
+      // hiện (warmEdgeTts) nên thường là cache hit tức thì.
       try {
-        const url = await speakEdge(text, gender);
+        const url = await speakEdge(text);
         // Đã dừng/thoát trong lúc fetch → bỏ kết quả, không phát nữa
         if (cancelledRef.current) { revokeAudioUrl(url); return; }
         const { sound } = await Audio.Sound.createAsync(

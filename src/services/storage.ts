@@ -14,7 +14,6 @@ export const KEYS = {
   history: '@summary_history',
   feedsCache: '@feeds_cache', // cache RSS cho lần mở sau tức thì (stale-while-revalidate)
   voice: '@voice',          // giọng đọc cũ (expo-speech voice identifier)
-  voiceGender: '@voice_gender', // Edge TTS gender: 'nam' | 'nu'
   pitch: '@voice_pitch',
   rate: '@voice_rate',
 } as const;

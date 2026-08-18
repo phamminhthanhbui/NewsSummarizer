@@ -15,15 +15,10 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, type EdgeGender } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
 import { Color, Font, Shadow, THEME_COLORS } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
-
-const GENDERS: { key: EdgeGender; label: string; icon: string }[] = [
-  { key: 'nu', label: 'Giọng nữ (Hoài My)', icon: 'female' },
-  { key: 'nam', label: 'Giọng nam (Nam Minh)', icon: 'male' },
-];
 
 const PROVIDER_ICONS: Record<LLMProvider, string> = {
   nvidia: 'cube',
@@ -51,7 +46,6 @@ export default function SettingsScreen() {
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [saved, setSaved] = useState(false);
-  const [gender, setGender] = useState<EdgeGender>('nu');
   const [pitch, setPitch] = useState(1.0);
   const [rate, setRate] = useState(1.0);
   const [previewing, setPreviewing] = useState(false);
@@ -75,9 +69,6 @@ export default function SettingsScreen() {
     AsyncStorage.getItem(keyStorageKey).then((val) => val && setApiKey(val));
     AsyncStorage.getItem(KEYS.customBaseUrl).then((val) => val && setCustomBaseUrl(val));
     AsyncStorage.getItem(KEYS.model).then((val) => val && setModel(val));
-    AsyncStorage.getItem(KEYS.voiceGender).then((val) => {
-      if (val === 'nam' || val === 'nu') setGender(val);
-    });
     AsyncStorage.getItem(KEYS.pitch).then((val) => setPitch(parseFloat(val || '') || 1.0));
     AsyncStorage.getItem(KEYS.rate).then((val) => setRate(parseFloat(val || '') || 1.0));
   }, []);
@@ -99,7 +90,6 @@ export default function SettingsScreen() {
     await AsyncStorage.setItem(keyStorageKey, apiKey.trim());
     if (showCustomUrl) await AsyncStorage.setItem(KEYS.customBaseUrl, customBaseUrl.trim());
     await AsyncStorage.setItem(KEYS.model, model);
-    await AsyncStorage.setItem(KEYS.voiceGender, gender);
     await AsyncStorage.setItem(KEYS.pitch, String(pitch));
     await AsyncStorage.setItem(KEYS.rate, String(rate));
     setSaved(true);
@@ -129,8 +119,8 @@ export default function SettingsScreen() {
     try {
       const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
       if (isWeb) {
-        // Browser có giọng khớp gender và chưa từng bị treo → Web Speech (offline, tức thì)
-        const matched = isWebVoiceHung(gender) ? null : await resolveWebVoice(gender);
+        // Browser có giọng vi và chưa từng bị treo → Web Speech (offline, tức thì)
+        const matched = isWebVoiceHung() ? null : await resolveWebVoice();
         if (matched) {
           // Start-guard: một số giọng bị treo (không onstart/onend/onerror) →
           // nếu không bắt đầu phát trong 1.2s thì hủy và fall through xuống Edge TTS.
@@ -174,15 +164,14 @@ export default function SettingsScreen() {
             return;
           }
           // Giọng bị treo → ghi nhận để lần sau đi thẳng Edge TTS, khỏi chờ guard
-          markWebVoiceHung(gender);
+          markWebVoiceHung();
         }
-        // Browser KHÔNG có giọng đúng (vd Chrome chỉ có giọng nam "Microsoft An")
-        // → fall through xuống Edge TTS để đảm bảo đúng giọng đã chọn
+        // Browser KHÔNG có giọng vi → fall through xuống Edge TTS
       }
 
       // Edge TTS (native + web fallback khi browser thiếu giọng)
       setPreviewing(true); // có thể bị cleanup() của utterance bị cancel reset trước đó
-      const url = await speakEdge(text, gender);
+      const url = await speakEdge(text);
       const { sound } = await Audio.Sound.createAsync(
         { uri: url },
         { volume: 1.0 },
@@ -388,40 +377,6 @@ export default function SettingsScreen() {
         {/* Voice Section */}
         <SectionHeader title="Giọng đọc tiếng Việt" icon="volume-high" color={SECTION_COLORS.voice}>
           <Card>
-            {/* Gender selector — 2 thẻ chọn trực tiếp, không dropdown */}
-            <View style={styles.genderRow}>
-              {GENDERS.map((g) => {
-                const active = gender === g.key;
-                const gColor = g.key === 'nam' ? Color.accent : '#DB2777';
-                return (
-                  <TouchableOpacity
-                    key={g.key}
-                    style={[
-                      styles.genderCard,
-                      active && { borderColor: gColor, backgroundColor: gColor + '14' },
-                    ]}
-                    onPress={() => setGender(g.key)}
-                    activeOpacity={0.7}
-                  >
-                    {active ? (
-                      <View style={[styles.genderCheck, { backgroundColor: gColor }]}>
-                        <Ionicons name="checkmark" size={12} color="#FFF" />
-                      </View>
-                    ) : (
-                      <View style={styles.genderCheckEmpty} />
-                    )}
-                    <View style={[styles.genderIcon, { backgroundColor: gColor + '20' }]}>
-                      <Ionicons name={g.icon as any} size={20} color={gColor} />
-                    </View>
-                    <Text style={[styles.genderName, active && { color: gColor }]}>
-                      {g.key === 'nam' ? 'Nam Minh' : 'Hoài My'}
-                    </Text>
-                    <Text style={styles.genderSub}>{g.key === 'nam' ? 'Giọng nam' : 'Giọng nữ'}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
             {/* Pitch & Rate Steppers */}
             <View style={styles.stepperGroup}>
               <Stepper
@@ -451,7 +406,7 @@ export default function SettingsScreen() {
               <Ionicons name={previewing ? 'stop-circle' : 'play-circle'} size={18} color="#FFF" />
               <Text style={styles.previewBtnText}>{previewing ? 'Đang phát...' : 'Nghe thử giọng đọc'}</Text>
             </TouchableOpacity>
-            <Text style={styles.fieldHint}>Edge TTS (Microsoft) — cloud, không cần cài đặt, cần internet.</Text>
+            <Text style={styles.fieldHint}>Ưu tiên giọng máy (đọc tức thì); giọng máy lỗi tự chuyển Edge TTS (Microsoft, cần internet).</Text>
           </Card>
         </SectionHeader>
 
@@ -464,7 +419,7 @@ export default function SettingsScreen() {
               </View>
               <Text style={styles.dangerBtnText}>Xoá tất cả cài đặt</Text>
             </TouchableOpacity>
-            <Text style={styles.fieldHint}>Xoá API key, model, giọng đọc. Không xoá bài đã lưu & lịch sử.</Text>
+            <Text style={styles.fieldHint}>Xoá API key, model, cao độ & tốc độ đọc. Không xoá bài đã lưu & lịch sử.</Text>
           </Card>
         </SectionHeader>
 
@@ -723,44 +678,8 @@ const styles = StyleSheet.create({
   listItemText: { fontSize: Font.body, color: Color.text, flex: 1 },
   listItemTextActive: { color: Color.hot, fontWeight: '600' },
 
-  // Gender selector — 2 thẻ chọn trực tiếp
-  genderRow: { flexDirection: 'row', gap: 10 },
-  genderCard: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderRadius: 4,
-    backgroundColor: Color.surfaceAlt,
-    borderWidth: 1.5,
-    borderColor: Color.border,
-    gap: 6,
-  },
-  genderCheck: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  genderCheckEmpty: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: Color.border,
-  },
-  genderIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  genderName: { fontSize: Font.body, fontWeight: '700', color: Color.text, marginTop: 2 },
-  genderSub: { fontSize: Font.tiny, color: Color.textMuted },
-
   // Stepper group
-  stepperGroup: { marginTop: 14, gap: 12 },
+  stepperGroup: { gap: 12 },
   stepper: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1 },
   stepperLabel: { fontSize: Font.body, color: Color.textSecondary, flex: 1 },
   stepperControl: { flexDirection: 'row', alignItems: 'center', gap: 8 },

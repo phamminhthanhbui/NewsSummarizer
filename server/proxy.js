@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const WebSocket = require('ws');
 
 const app = express();
@@ -328,9 +330,82 @@ function synthesize(text, voice, timeoutMs = 15000) {
   });
 }
 
-// Cache MP3 theo (text+voice): nghe lại bài cũ / đổi giọng rồi nghe lại phải tức thì,
-// khỏi tổng hợp lại — upstream cold mất 7-15s, đây là nguyên nhân chờ 15-20s.
-const ttsCache = new Map(); // sha256 -> Buffer, FIFO cap 100 (~50MB)
+// Cache MP3 theo (text+voice) trên DISK: nghe lại bài cũ / đổi giọng rồi nghe lại
+// phải tức thì, khỏi tổng hợp lại — upstream cold mất 7-30s, đây là nguyên nhân
+// chờ 15-20s. In-memory Map mất sạch mỗi lần restart proxy → bug tái phát;
+// disk cache sống qua restart.
+const TTS_CACHE_DIR = path.join(__dirname, '.tts-cache');
+fs.mkdirSync(TTS_CACHE_DIR, { recursive: true });
+
+const ttsCacheFile = (key) => path.join(TTS_CACHE_DIR, key + '.mp3');
+
+function ttsCacheGet(key) {
+  try { return fs.readFileSync(ttsCacheFile(key)); } catch { return null; }
+}
+
+function ttsCacheSet(key, audio) {
+  try {
+    fs.writeFileSync(ttsCacheFile(key), audio);
+    // Cap ~100 file: giữ 100 file mới nhất theo mtime, xóa phần còn lại
+    const files = fs.readdirSync(TTS_CACHE_DIR)
+      .map((f) => ({ f, m: fs.statSync(path.join(TTS_CACHE_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    for (const { f } of files.slice(100)) fs.unlinkSync(path.join(TTS_CACHE_DIR, f));
+  } catch {}
+}
+
+// Tổng hợp 1 chunk với retry 3 lần (upstream chập chờn/rate-limit tức thời)
+async function synthesizeChunk(text, voice) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await synthesize(text, voice);
+    } catch (e) {
+      lastErr = e;
+      console.error(`Edge TTS attempt ${attempt + 1} failed:`, e.message);
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// Cắt text dài thành câu (mỗi chunk ≤ maxLen ký tự) để tổng hợp song song.
+// Cắt ở ranh giới câu để không xé đôi từ, giữ dấu câu + khoảng trắng liền sau.
+function splitTtsChunks(text, maxLen = 350) {
+  const sentences = text.match(/[^.!?…\n]+[.!?…]*\s*/g) || [text];
+  const chunks = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (cur && (cur + s).length > maxLen) { chunks.push(cur); cur = s; }
+    else cur += s;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+// Text dài → cắt câu, tổng hợp SONG SONG các chunk (tối đa 4), ghép MP3 lại.
+// Tổng hợp đơn cả bài dài mất 20-40s (upstream stream ~real-time); chia song song
+// giảm còn ~10s. MP3 frame độc lập nên ghép phát bình thường.
+async function synthesizeText(text, voice) {
+  const chunks = splitTtsChunks(text);
+  if (chunks.length <= 1) return synthesizeChunk(text, voice);
+  const parts = new Array(chunks.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(4, chunks.length) }, async () => {
+    while (i < chunks.length) {
+      const idx = i++;
+      parts[idx] = await synthesizeChunk(chunks[idx], voice);
+    }
+  });
+  await Promise.all(workers);
+  return Buffer.concat(parts);
+}
+
+// Dedup in-flight: pre-warm (khi summary hiện) và nút Nghe có thể bắn trùng text
+// cùng lúc — không dedup thì 2 synthesis chạy song song lên upstream, dễ dính
+// rate-limit → retry 3 lần → chờ hàng chục giây. Request sau chờ chung promise
+// với request đầu, chỉ tổng hợp 1 lần.
+const ttsInflight = new Map(); // key -> Promise<Buffer>
 
 app.post('/api/edge-tts', async (req, res) => {
   const { text, voice } = req.body;
@@ -339,28 +414,29 @@ app.post('/api/edge-tts', async (req, res) => {
   }
 
   const key = crypto.createHash('sha256').update(voice + '\n' + text).digest('hex');
-  const hit = ttsCache.get(key);
+  const hit = ttsCacheGet(key);
   if (hit) {
     res.setHeader('Content-Type', 'audio/mpeg');
     return res.send(hit);
   }
 
-  // Upstream đôi khi "ngủ quên"/rate-limit tức thời → retry với backoff.
-  let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const audio = await synthesize(text, voice);
-      if (ttsCache.size >= 100) ttsCache.delete(ttsCache.keys().next().value);
-      ttsCache.set(key, audio);
-      res.setHeader('Content-Type', 'audio/mpeg');
-      return res.send(audio);
-    } catch (e) {
-      lastErr = e;
-      console.error(`Edge TTS attempt ${attempt + 1} failed:`, e.message);
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-    }
+  let pending = ttsInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const audio = await synthesizeText(text, voice);
+      ttsCacheSet(key, audio);
+      return audio;
+    })().finally(() => ttsInflight.delete(key));
+    ttsInflight.set(key, pending);
   }
-  res.status(502).json({ error: 'Edge TTS failed after retries', message: lastErr?.message });
+
+  try {
+    const audio = await pending;
+    res.setHeader('Content-Type', 'audio/mpeg');
+    return res.send(audio);
+  } catch (e) {
+    res.status(502).json({ error: 'Edge TTS failed after retries', message: e?.message });
+  }
 });
 
 const PORT = process.env.PROXY_PORT || 3001;

@@ -1,16 +1,11 @@
-// Edge TTS (Microsoft) — free, no key, high-quality Vietnamese voices
-// Voice list: https://speech.microsoft.com/portal/voicegallery
-// VN voices: vi-VN-HoaiMyNeural (female), vi-VN-NamMinhNeural (male)
+// Edge TTS (Microsoft) — free, no key, high-quality Vietnamese voice
+// Chỉ dùng 1 giọng nam vi-VN-NamMinhNeural (giọng nữ đã bỏ: Web Speech local
+// không đảm bảo có giọng nữ vi, vd Chrome chỉ có giọng nam "Microsoft An").
 
-export const EDGE_VOICES = {
-  nu: 'vi-VN-HoaiMyNeural',
-  nam: 'vi-VN-NamMinhNeural',
-} as const;
+export const EDGE_VOICE = 'vi-VN-NamMinhNeural';
 
-export type EdgeGender = keyof typeof EDGE_VOICES;
-
-export async function speakEdge(text: string, gender: EdgeGender): Promise<string> {
-  const voice = EDGE_VOICES[gender];
+export async function speakEdge(text: string): Promise<string> {
+  const voice = EDGE_VOICE;
 
   // Use local proxy server (server/proxy.js) or deployed endpoint
   // Configure via EXPO_PUBLIC_PROXY_URL env var or default to localhost
@@ -36,11 +31,26 @@ export function revokeAudioUrl(url: string) {
   try { URL.revokeObjectURL(url); } catch {}
 }
 
-// Web Speech API: tên giọng vi khác nhau theo trình duyệt (Edge: "Microsoft HoaiMy Neural"
-// nữ / "Microsoft NamMinh Neural" nam; Chrome thường chỉ có 1 giọng nam) và getVoices()
-// trả [] ở lần gọi đầu (load async). Trả về giọng khớp gender, hoặc null nếu trình duyệt
-// KHÔNG CÓ giọng đó → caller tự fallback sang Edge TTS (đảm bảo đúng giọng đã chọn).
-export async function resolveWebVoice(gender: EdgeGender): Promise<SpeechSynthesisVoice | null> {
+// Warm cache TTS ngầm: summary vừa hiện là gọi /api/edge-tts ngay (fire-and-forget),
+// proxy tổng hợp + ghi disk cache. User click Nghe sau đó = cache hit = tức thì,
+// khỏi chờ 5-30s tổng hợp. Cùng text+voice với speakEdge nên key cache khớp.
+// Lỗi thì im lặng — click Nghe vẫn fallback tổng hợp bình thường.
+export function warmEdgeTts(text: string): void {
+  const voice = EDGE_VOICE;
+  const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (typeof window !== 'undefined' ? 'http://localhost:3001' : '');
+  const endpoint = proxyUrl ? `${proxyUrl}/api/edge-tts` : '/api/edge-tts';
+  fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  }).catch(() => {});
+}
+
+// Web Speech API: tên giọng vi khác nhau theo trình duyệt (Edge: "Microsoft NamMinh
+// Neural"; Chrome thường chỉ có giọng nam "Microsoft An") và getVoices() trả [] ở lần
+// gọi đầu (load async). Trả về giọng vi bất kỳ, hoặc null nếu trình duyệt KHÔNG CÓ
+// giọng vi → caller tự fallback sang Edge TTS.
+export async function resolveWebVoice(): Promise<SpeechSynthesisVoice | null> {
   if (typeof speechSynthesis === 'undefined') return null;
   const voices = await new Promise<SpeechSynthesisVoice[]>((resolve) => {
     const list = speechSynthesis.getVoices();
@@ -51,20 +61,18 @@ export async function resolveWebVoice(gender: EdgeGender): Promise<SpeechSynthes
     setTimeout(done, 1000);
   });
   const vi = voices.filter((v) => v.lang.toLowerCase().startsWith('vi'));
-  const tokens = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/);
-  const FEMALE = ['hoaomy', 'lan'];
-  const MALE = ['namminh', 'an'];
-  const hints = gender === 'nam' ? MALE : FEMALE;
-  return vi.find((v) => tokens(v.name).some((t) => hints.includes(t))) || null;
+  return vi[0] || null;
 }
 
-// Web Speech có thể CÓ giọng khớp gender nhưng bị TREO ở một số browser
-// (không kích hoạt onstart/onend/onerror, vd giọng nữ cloud trên Edge).
-// Ghi nhận giọng đã treo để lần sau bỏ qua Web Speech, đi thẳng Edge TTS
+// Web Speech có thể bị TREO ở một số browser (không kích hoạt onstart/onend/onerror).
+// Ghi nhận để lần sau bỏ qua Web Speech, đi thẳng Edge TTS
 // → không phải chờ resolveWebVoice + start-guard nữa (đọc nhanh hơn hẳn).
-const hungWebVoices = new Set<EdgeGender>();
-export function markWebVoiceHung(gender: EdgeGender) { hungWebVoices.add(gender); }
-export function isWebVoiceHung(gender: EdgeGender) { return hungWebVoices.has(gender); }
+let webVoiceHung = false;
+export function markWebVoiceHung() { webVoiceHung = true; }
+export function isWebVoiceHung() { return webVoiceHung; }
+// Reset mỗi lần BẮT ĐẦU bấm Nghe: mark cũ có thể oan (engine kẹt tạm thời)
+// — reset để Web Speech được thử lại, khỏi rớt thẳng xuống Edge TTS chậm vĩnh viễn.
+export function clearWebVoiceHung() { webVoiceHung = false; }
 
 // Fallback: use expo-speech (system TTS, no network needed)
 import { Audio } from 'expo-av';
