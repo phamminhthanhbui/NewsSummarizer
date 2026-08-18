@@ -90,6 +90,16 @@ export const FEEDS = [
   { name: 'Sức khỏe & Đời sống', url: 'https://suckhoedoisong.vn/rss/home.rss', category: 'Sức khỏe' },
 ];
 
+// Feed "tin nổi bật" riêng — KHÔNG nằm trong FEEDS (không hiện trong list thường,
+// dành riêng cho carousel trang chủ). Đã dò hết các báo: chỉ 4 báo này có RSS
+// nổi bật thật (dantri/tuoitre/vietnamnet/kenh14/thanhnien/nld/sggp... đều 404).
+const FEATURED_FEEDS = [
+  { name: 'VNExpress', url: 'https://vnexpress.net/rss/tin-noi-bat.rss', category: 'Việt Nam' },
+  { name: 'Tiền Phong', url: 'https://tienphong.vn/rss/noi-bat.rss', category: 'Việt Nam' },
+  { name: 'An ninh Thủ đô', url: 'https://anninhthudo.vn/rss/noi-bat.rss', category: 'Việt Nam' },
+  { name: 'CAND', url: 'https://cand.com.vn/rss/noi-bat.rss', category: 'Việt Nam' },
+];
+
 function stripHtml(s: string): string {
   return s
     .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1')
@@ -171,12 +181,20 @@ function writeFeedsCache(items: FeedItem[]) {
 }
 
 export async function fetchAllFeeds(): Promise<FeedItem[]> {
-  const results = await Promise.all(
-    FEEDS.map(async (d) => {
-      const items = await fetchFeed(d.url);
-      return items.map((i) => ({ ...i, source: d.name, category: d.category }));
-    }),
-  );
+  const [results, featuredResults] = await Promise.all([
+    Promise.all(
+      FEEDS.map(async (d) => {
+        const items = await fetchFeed(d.url);
+        return items.map((i) => ({ ...i, source: d.name, category: d.category }));
+      }),
+    ),
+    Promise.all(
+      FEATURED_FEEDS.map(async (d) => {
+        const items = await fetchFeed(d.url);
+        return items.map((i) => ({ ...i, source: d.name, category: d.category, featured: true }));
+      }),
+    ),
+  ]);
   const all = results.flat().sort((a, b) => {
     const da = new Date(a.pubDate).getTime();
     const db = new Date(b.pubDate).getTime();
@@ -186,13 +204,18 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
     return db - da;
   });
 
-  // Deduplicate by link (keep first occurrence = latest)
-  const seen = new Set<string>();
-  const deduped = all.filter((item) => {
-    if (seen.has(item.link)) return false;
-    seen.add(item.link);
-    return true;
-  });
+  // Deduplicate by link (keep first occurrence = latest). Bài thường trùng link với
+  // bài trong feed nổi bật → gắn cờ featured vào bản giữ lại để carousel nhận ra.
+  const seen = new Map<string, FeedItem>();
+  for (const item of all) {
+    if (!seen.has(item.link)) seen.set(item.link, item);
+  }
+  for (const item of featuredResults.flat()) {
+    const prev = seen.get(item.link);
+    if (prev) prev.featured = true;
+    else seen.set(item.link, item);
+  }
+  const deduped = [...seen.values()];
   writeFeedsCache(deduped);
   return deduped;
 }

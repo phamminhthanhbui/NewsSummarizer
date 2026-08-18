@@ -124,16 +124,89 @@ async function crawlSoha() {
   return videos;
 }
 
+// VNExpress video nổi bật: <article class="art_item art_featured pel"> — data-extend
+// JSON chứa dr (duration giây), thumb ở data-original (lazy load), title ở attr title.
+async function crawlVnExpressVideo() {
+  const response = await fetch('https://video.vnexpress.net/', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<article class="art_item art_featured pel"').slice(1)) {
+    const href = (block.match(/href="(https:\/\/video\.vnexpress\.net\/[^"]+\.html)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]+)"/) || [])[1] || '');
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const dr = parseInt((block.match(/"dr":(\d+)/) || [])[1] || '0', 10);
+    videos.push({
+      title,
+      link: href,
+      thumb: decodeHtml((block.match(/data-original="([^"]+)"/) || block.match(/data-fornext="([^"]+)"/) || [])[1] || ''),
+      duration: dr ? `${Math.floor(dr / 60)}:${String(dr % 60).padStart(2, '0')}` : '',
+      pubDate: '',
+      zone: 'Video nổi bật',
+      source: 'VNExpress',
+      // data-extend JSON chứa m3u8 (HLS master) — phát trong popup qua /api/hls
+      stream: (block.match(/"m3u8":"([^"]+)"/) || [])[1]?.replace(/\\\//g, '/') || '',
+    });
+  }
+  return videos;
+}
+
 app.get('/api/videos', async (req, res) => {
   try {
     // Nguồn nào chết thì trả list rỗng, không kéo sập cả endpoint
-    const [kenh14, soha] = await Promise.all([
+    const [kenh14, soha, vnexpress] = await Promise.all([
       crawlKenh14().catch(() => []),
       crawlSoha().catch(() => []),
+      crawlVnExpressVideo().catch(() => []),
     ]);
-    res.json({ videos: [...kenh14, ...soha] });
+    res.json({ videos: [...kenh14, ...soha, ...vnexpress] });
   } catch (e) {
     res.status(502).json({ error: 'Video crawl failed', message: e.message });
+  }
+});
+
+// Proxy HLS của VNExpress: CDN chặn browser phát trực tiếp (segment trả 407/406
+// theo Referer) nên server fetch hộ với Referer đúng. Playlist .m3u8 được rewrite
+// mọi URL tuyệt đối về lại /api/hls?url=... để hls.js chỉ nói chuyện với proxy.
+app.get('/api/hls', async (req, res) => {
+  const url = req.query.url;
+  if (!url || typeof url !== 'string' || !/^https:\/\/[^/]*vnecdn\.net\//.test(url)) {
+    return res.status(400).json({ error: 'Missing or disallowed url' });
+  }
+  try {
+    const upstream = await fetch(url, {
+      headers: { ...UA, Referer: 'https://video.vnexpress.net/' },
+    });
+    if (!upstream.ok) return res.status(upstream.status).json({ error: `Upstream ${upstream.status}` });
+    const ct = upstream.headers.get('content-type') || '';
+    if (url.endsWith('.m3u8') || ct.includes('mpegurl')) {
+      const text = await upstream.text();
+      const base = url.slice(0, url.lastIndexOf('/') + 1);
+      const proxied = (u) => '/api/hls?url=' + encodeURIComponent(u);
+      const rewritten = text
+        .split('\n')
+        .map((line) => {
+          const t = line.trim();
+          if (!t) return line;
+          // #EXT-X-KEY:...URI="https://..." — key cũng phải đi qua proxy (CDN chặn)
+          if (t.startsWith('#')) {
+            return line.replace(/URI="([^"]+)"/, (_, u) => 'URI="' + proxied(new URL(u, base).href) + '"');
+          }
+          const abs = /^https?:\/\//.test(t) ? t : new URL(t, base).href;
+          return proxied(abs);
+        })
+        .join('\n');
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      return res.send(rewritten);
+    }
+    // .ts / .key: stream nguyên bản
+    res.setHeader('Content-Type', ct || 'application/octet-stream');
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    return res.send(buf);
+  } catch (e) {
+    res.status(502).json({ error: 'HLS proxy failed', message: e.message });
   }
 });
 

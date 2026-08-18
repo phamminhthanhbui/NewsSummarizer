@@ -14,7 +14,6 @@ import {
   TextInput,
   Pressable,
   Dimensions,
-  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,6 +28,7 @@ import FeaturedCard from '../components/FeaturedCard';
 import SectionHeader from '../components/SectionHeader';
 import SkeletonCard from '../components/SkeletonCard';
 import VideoCard from '../components/VideoCard';
+import VideoModal from '../components/VideoModal';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
 
@@ -157,10 +157,10 @@ export default function HomeScreen({ navigation }: Props) {
     navigation.navigate('Article', { item });
   }, [navigation]);
 
-  // CDN chặn phát trực tiếp (mp4 400, hls.mediacdn.vn IP private) nên mở trang gốc
-  const goVideo = useCallback((v: VideoItem) => {
-    Linking.openURL(v.link);
-  }, []);
+  // Mọi video đều mở popup: có stream HLS (VNExpress) thì phát trong app,
+  // không có (Kenh14/Soha — CDN DRM) thì popup hiện thumb + nút mở tại nguồn
+  const [videoModal, setVideoModal] = useState<VideoItem | null>(null);
+  const goVideo = useCallback((v: VideoItem) => setVideoModal(v), []);
 
   const filtered = useMemo(() => {
     let result = items;
@@ -177,9 +177,13 @@ export default function HomeScreen({ navigation }: Props) {
     return result;
   }, [items, selectedCategory, selectedSource, searchQuery]);
 
-  // Carousel tin nổi bật: top 5 bài mới nhất có ảnh; phần còn lại xuống list
+  // Carousel TIN NỔI BẬT: bài từ feed nổi bật (featured) trước, sau đó bài mới nhất
+  // có ảnh lấp đầy cho đủ 5. "Nhiều người đọc nhất" không có RSS (đã dò các báo đều
+  // 404) nên dùng feed nổi bật của tòa soạn làm proxy. Phần còn lại xuống list.
   const { heroes, rest } = useMemo(() => {
-    const heroes = filtered.filter((i) => i.image).slice(0, 5);
+    const withImg = filtered.filter((i) => i.image);
+    const feat = withImg.filter((i) => i.featured);
+    const heroes = feat.concat(withImg.filter((i) => !i.featured)).slice(0, 5);
     const heroSet = new Set(heroes);
     return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
   }, [filtered]);
@@ -187,6 +191,7 @@ export default function HomeScreen({ navigation }: Props) {
   const heroListRef = useRef<FlatList<FeedItem>>(null);
   const heroIdxRef = useRef(0); // mirror của heroIdx cho interval (đọc state trong setInterval không đáng tin)
   const heroAutoRef = useRef(false); // true khi đang scroll chương trình: onScroll không được ghi heroIdx ngược lại
+  const lastManualRef = useRef(0); // thời điểm bấm mũi tên — interval nhường người dùng 4s
 
   // Auto-slide mỗi 4s. Scroll trực tiếp từ interval, KHÔNG qua useEffect([heroIdx]):
   // smooth scroll (web) phát onScroll với offset trung gian → round() ra index cũ
@@ -194,6 +199,7 @@ export default function HomeScreen({ navigation }: Props) {
   useEffect(() => {
     if (heroes.length < 2) return;
     const t = setInterval(() => {
+      if (Date.now() - lastManualRef.current < 4000) return; // vừa bấm mũi tên xong
       const next = (heroIdxRef.current + 1) % heroes.length;
       heroIdxRef.current = next;
       heroAutoRef.current = true;
@@ -203,6 +209,26 @@ export default function HomeScreen({ navigation }: Props) {
     }, 4000);
     return () => clearInterval(t);
   }, [heroes.length]);
+
+  // Mũi tên qua lại: modulo để slide cuối quay về slide đầu (và ngược lại)
+  const goHero = useCallback((delta: number) => {
+    const n = heroes.length;
+    if (n < 2) return;
+    const next = (heroIdxRef.current + delta + n) % n;
+    heroIdxRef.current = next;
+    heroAutoRef.current = true;
+    lastManualRef.current = Date.now();
+    setHeroIdx(next);
+    heroListRef.current?.scrollToOffset({ offset: next * HERO_W, animated: true });
+    setTimeout(() => { heroAutoRef.current = false; }, 600);
+  }, [heroes.length]);
+
+  // Video nổi bật lên đầu strip: video từ box "Video nổi bật" (VNExpress) trước,
+  // còn lại giữ thứ tự crawl. Một strip duy nhất, không nhân đôi section.
+  const sortedVideos = useMemo(() => {
+    const feat = videos.filter((v) => v.zone === 'Video nổi bật');
+    return feat.concat(videos.filter((v) => v.zone !== 'Video nổi bật'));
+  }, [videos]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -409,21 +435,22 @@ export default function HomeScreen({ navigation }: Props) {
           renderItem={renderItem}
           ListHeaderComponent={
             <View style={styles.listHeader}>
-              {/* Section VIDEO — crawl từ video.kenh14.vn, RSS không có video/live.
+              {/* Section VIDEO NỔI BẬT — crawl từ video.kenh14.vn / soha / video.vnexpress.net,
+                  RSS không có video/live. Video từ box "Video nổi bật" gắn badge HOT, lên đầu.
                   Nằm trong ListHeaderComponent để cuộn cùng danh sách tin. */}
-              {videos.length > 0 && (
+              {sortedVideos.length > 0 && (
                 <View style={styles.videoSection}>
                   <View style={styles.videoHeader}>
                     <View style={styles.videoLabel}>
                       <Ionicons name="videocam" size={13} color="#FFF" />
-                      <Text style={styles.videoLabelText}>VIDEO</Text>
+                      <Text style={styles.videoLabelText}>VIDEO NỔI BẬT</Text>
                     </View>
                     <Text style={styles.videoSub}>mở tại nguồn</Text>
                   </View>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
-                    {videos.map((v) => (
+                    {sortedVideos.map((v) => (
                       <View key={v.link} style={styles.videoCardWrap}>
-                        <VideoCard item={v} onPress={goVideo} />
+                        <VideoCard item={v} onPress={goVideo} featured={v.zone === 'Video nổi bật'} />
                       </View>
                     ))}
                   </ScrollView>
@@ -448,6 +475,16 @@ export default function HomeScreen({ navigation }: Props) {
                       if (idx !== heroIdx) setHeroIdx(idx);
                     }}
                   />
+                  {heroes.length > 1 && (
+                    <>
+                      <TouchableOpacity style={[styles.heroArrow, styles.heroArrowLeft]} onPress={() => goHero(-1)} activeOpacity={0.7} accessibilityLabel="Tin trước">
+                        <Ionicons name="chevron-back" size={20} color="#FFF" />
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.heroArrow, styles.heroArrowRight]} onPress={() => goHero(1)} activeOpacity={0.7} accessibilityLabel="Tin sau">
+                        <Ionicons name="chevron-forward" size={20} color="#FFF" />
+                      </TouchableOpacity>
+                    </>
+                  )}
                   {heroes.length > 1 && (
                     <View style={styles.heroDots}>
                       {heroes.map((h, i) => (
@@ -497,6 +534,9 @@ export default function HomeScreen({ navigation }: Props) {
           removeClippedSubviews={Platform.OS !== 'web'}
         />
       )}
+
+      {/* Popup phát video nổi bật (HLS) trong app */}
+      {videoModal && <VideoModal video={videoModal} onClose={() => setVideoModal(null)} />}
     </Animated.View>
   );
 }
@@ -611,6 +651,12 @@ const styles = StyleSheet.create({
   listHeader: { paddingHorizontal: 12, paddingTop: 4 },
   heroWrap: { marginBottom: 8 },
   heroSlide: { width: HERO_W },
+  heroArrow: {
+    position: 'absolute', top: 87, width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+  },
+  heroArrowLeft: { left: 8 },
+  heroArrowRight: { right: 8 },
   heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 10 },
   heroDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Color.border },
   heroDotActive: { width: 18, backgroundColor: Color.primary },

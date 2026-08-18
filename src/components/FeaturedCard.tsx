@@ -23,10 +23,23 @@ function FeaturedCard({ item, onPress }: Props) {
       )}
       <View style={s.scrim} />
       <View style={s.overlay}>
-        <View style={[s.badge, { backgroundColor: srcColor }]}>
-          <View style={s.badgeDot} />
-          <Text style={s.badgeText} numberOfLines={1}>{item.source}</Text>
-        </View>
+        {item.featured ? (
+          // Tin nổi bật: badge lửa + nhãn NỔI BẬT, giữ tên nguồn ở badge phụ nhỏ
+          <View style={s.badgeRow}>
+            <View style={[s.badge, { backgroundColor: Color.hot }]}>
+              <Ionicons name="flame" size={11} color="#FFF" />
+              <Text style={s.badgeText} numberOfLines={1}>NỔI BẬT</Text>
+            </View>
+            <View style={[s.badge, s.badgeGhost]}>
+              <Text style={s.badgeText} numberOfLines={1}>{item.source}</Text>
+            </View>
+          </View>
+        ) : (
+          <View style={[s.badge, { backgroundColor: srcColor }]}>
+            <View style={s.badgeDot} />
+            <Text style={s.badgeText} numberOfLines={1}>{item.source}</Text>
+          </View>
+        )}
         <Text style={s.title} numberOfLines={2}>{item.title}</Text>
         {t ? (
           <View style={s.timeWrap}>
@@ -47,10 +60,12 @@ const s = StyleSheet.create({
   imgPh: { backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
   scrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '60%', backgroundColor: Color.scrim },
   overlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 14, paddingTop: 30 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
     backgroundColor: Color.hot, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, marginBottom: 7,
   },
+  badgeGhost: { backgroundColor: 'rgba(0,0,0,0.35)', marginBottom: 0 },
   badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF' },
   badgeText: { fontSize: Font.tiny, color: '#FFF', fontWeight: '800', letterSpacing: 0.4 },
   title: { fontSize: Font.hero, fontWeight: '800', color: '#FFF', lineHeight: 27 },

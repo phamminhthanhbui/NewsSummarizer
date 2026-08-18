@@ -5,10 +5,10 @@ import type { VideoItem } from '../types';
 import { Color, Font, Radius } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
 
-interface Props { item: VideoItem; onPress: (item: VideoItem) => void; }
+interface Props { item: VideoItem; onPress: (item: VideoItem) => void; featured?: boolean; }
 
 // Card video ngang cho strip VIDEO: thumb 16:9 + nút play + thời lượng
-function VideoCard({ item, onPress }: Props) {
+function VideoCard({ item, onPress, featured }: Props) {
   const srcColor = SOURCE_COLORS[item.source] || Color.hot;
   return (
     <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.85}>
@@ -31,6 +31,12 @@ function VideoCard({ item, onPress }: Props) {
         <View style={[s.srcBadge, { backgroundColor: srcColor }]}>
           <Text style={s.srcText} numberOfLines={1}>{item.source}</Text>
         </View>
+        {featured ? (
+          <View style={s.hotBadge}>
+            <Ionicons name="flame" size={10} color="#FFF" />
+            <Text style={s.hotText}>HOT</Text>
+          </View>
+        ) : null}
       </View>
       <Text style={s.title} numberOfLines={2}>{item.title}</Text>
       {item.zone ? <Text style={s.zone} numberOfLines={1}>{item.zone}</Text> : null}
@@ -70,6 +76,11 @@ const s = StyleSheet.create({
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4, maxWidth: 100,
   },
   srcText: { fontSize: 10, fontWeight: '800', color: '#FFF' },
+  hotBadge: {
+    position: 'absolute', right: 6, top: 6, flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: Color.hot, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+  },
+  hotText: { fontSize: 10, fontWeight: '800', color: '#FFF' },
   title: { fontSize: Font.caption, fontWeight: '700', color: Color.text, lineHeight: 18, marginTop: 8, paddingHorizontal: 10 },
   zone: { fontSize: Font.tiny, color: Color.textMuted, marginTop: 4, marginBottom: 10, paddingHorizontal: 10 },
 });
