@@ -69,10 +69,12 @@ const today = () => {
 
 // Chip components ở module scope (KHÔNG trong HomeScreen) — định nghĩa trong
 // component tạo type mới mỗi lần render, phá memo và remount toàn bộ chip
-// Tab kiểu báo điện tử (CafeBiz): chữ đỏ gạch chân, kèm icon theo category
-const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => (
+// Tab kiểu báo điện tử (CafeBiz): gạch chân + icon theo màu riêng từng category
+const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => {
+  const c = CATEGORY_COLORS[category] || Color.hot;
+  return (
   <TouchableOpacity
-    style={[styles.categoryTab, active && styles.categoryTabActive]}
+    style={[styles.categoryTab, active && { borderBottomColor: c }]}
     onPress={() => onPress(category)}
     activeOpacity={0.7}
     accessibilityRole="button"
@@ -81,12 +83,13 @@ const CategoryChip = React.memo(({ category, active, onPress }: { category: stri
     <Ionicons
       name={CATEGORY_ICONS[category] || 'newspaper'}
       size={15}
-      color={active ? Color.hot : Color.textSecondary}
+      color={active ? c : Color.textSecondary}
       style={styles.categoryTabIcon}
     />
-    <Text style={[styles.categoryTabText, active && styles.categoryTabTextActive]}>{category}</Text>
+    <Text style={[styles.categoryTabText, active && { color: c, fontWeight: '800' }]}>{category}</Text>
   </TouchableOpacity>
-));
+  );
+});
 
 // Chip nguồn báo: mỗi báo 1 màu thương hiệu (SOURCE_COLORS) — đồng bộ badge trên card
 const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => {
