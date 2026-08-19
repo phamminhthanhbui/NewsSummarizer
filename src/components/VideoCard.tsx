@@ -2,14 +2,16 @@ import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { VideoItem } from '../types';
-import { Color, Font, Radius } from '../constants/theme';
+import { Color, Font, Radius, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
 
 interface Props { item: VideoItem; onPress: (item: VideoItem) => void; featured?: boolean; }
 
 // Card video ngang cho strip VIDEO: thumb 16:9 + nút play + thời lượng
 function VideoCard({ item, onPress, featured }: Props) {
-  const srcColor = SOURCE_COLORS[item.source] || Color.hot;
+  const C = useTheme();
+  const s = makeStyles(C); // styles động theo dark mode
+  const srcColor = SOURCE_COLORS[item.source] || C.hot;
   return (
     <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.85}>
       <View style={s.thumbWrap}>
@@ -17,7 +19,7 @@ function VideoCard({ item, onPress, featured }: Props) {
           <Image source={{ uri: item.thumb }} style={s.thumb} resizeMode="cover" />
         ) : (
           <View style={[s.thumb, s.thumbPh]}>
-            <Ionicons name="videocam-outline" size={28} color={Color.textMuted} />
+            <Ionicons name="videocam-outline" size={28} color={C.textMuted} />
           </View>
         )}
         <View style={s.playBadge}>
@@ -46,7 +48,9 @@ function VideoCard({ item, onPress, featured }: Props) {
 
 export default React.memo(VideoCard);
 
-const s = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   card: {
     width: 220,
     backgroundColor: Color.card,
@@ -84,3 +88,6 @@ const s = StyleSheet.create({
   title: { fontSize: Font.caption, fontWeight: '700', color: Color.text, lineHeight: 18, marginTop: 8, paddingHorizontal: 10 },
   zone: { fontSize: Font.tiny, color: Color.textMuted, marginTop: 4, marginBottom: 10, paddingHorizontal: 10 },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const s = makeStyles(Color);

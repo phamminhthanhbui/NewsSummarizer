@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
-import { Color, Font, Shadow } from '../constants/theme';
+import { Color, Font, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
@@ -120,6 +120,8 @@ import { LIMITS } from '../services/storage';
 export default function ArticleScreen({ navigation, route }: any) {
   const { item } = route.params as { item: FeedItem };
   const insets = useSafeAreaInsets();
+  const C = useTheme();
+  const styles = makeStyles(C); // styles động theo dark mode
 
   const [blocks, setBlocks] = useState<ArticleBlock[]>([]);
   const [content, setContent] = useState('');
@@ -492,7 +494,7 @@ export default function ArticleScreen({ navigation, route }: any) {
               return (
                 <Text
                   key={'w' + pi + '_' + wi}
-                  style={[w.flat === highlightWordIndex && { backgroundColor: Color.hotSoft, borderRadius: 3, fontWeight: '700', color: Color.hot }]}
+                  style={[w.flat === highlightWordIndex && { backgroundColor: C.hotSoft, borderRadius: 3, fontWeight: '700', color: C.hot }]}
                 >{spacer}{w.text}</Text>
               );
             })}
@@ -529,7 +531,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           styles.summaryText,
           lead && styles.summaryLead,
           bullet && styles.bulletText,
-          highlightParaIndex === i && { backgroundColor: Color.hotSoft, borderRadius: 3 }
+          highlightParaIndex === i && { backgroundColor: C.hotSoft, borderRadius: 3 }
         ]}>{bullet ? p.replace(/^[-•*]\s+/, '') : p}</Text>
       );
       if (!bullet) return <React.Fragment key={'p' + i}>{text}</React.Fragment>;
@@ -556,11 +558,11 @@ export default function ArticleScreen({ navigation, route }: any) {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.hBtn}>
-          <Ionicons name="chevron-back" size={26} color={Color.accent} />
+          <Ionicons name="chevron-back" size={26} color={C.accent} />
         </TouchableOpacity>
-        <Text style={[styles.hTitle, { color: SOURCE_COLORS[item.source] || Color.text }]} numberOfLines={1}>{item.source}</Text>
+        <Text style={[styles.hTitle, { color: SOURCE_COLORS[item.source] || C.text }]} numberOfLines={1}>{item.source}</Text>
         <TouchableOpacity onPress={handleShare} style={styles.hBtn}>
-          <Ionicons name="share-social-outline" size={21} color={Color.textSecondary} />
+          <Ionicons name="share-social-outline" size={21} color={C.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -571,7 +573,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         <Text style={styles.title}>{item.title}</Text>
 
         <View style={styles.meta}>
-          <Text style={[styles.metaSource, { color: SOURCE_COLORS[item.source] || Color.primary }]}>{item.source}</Text>
+          <Text style={[styles.metaSource, { color: SOURCE_COLORS[item.source] || C.primary }]}>{item.source}</Text>
           <Text style={styles.metaDot}> · </Text>
           <Text style={styles.metaTime}>
             {new Date(item.pubDate).toLocaleString('vi-VN')}
@@ -589,7 +591,7 @@ export default function ArticleScreen({ navigation, route }: any) {
 
           <View style={styles.summaryLabelRow}>
             <LinearGradient
-              colors={[Color.hot, Color.hotDark]}
+              colors={[C.hot, C.hotDark]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.aiBadge}
@@ -605,7 +607,7 @@ export default function ArticleScreen({ navigation, route }: any) {
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityLabel={speaking ? 'Dừng đọc' : 'Nghe tóm tắt'}
               >
-                <Ionicons name={speaking ? 'stop' : 'volume-high'} size={16} color={speaking ? '#FFF' : Color.hot} />
+                <Ionicons name={speaking ? 'stop' : 'volume-high'} size={16} color={speaking ? '#FFF' : C.hot} />
                 <Text style={[styles.speakBtnText, speaking && styles.speakBtnTextOn]}>
                   {speaking ? 'Dừng' : 'Nghe'}
                 </Text>
@@ -615,7 +617,7 @@ export default function ArticleScreen({ navigation, route }: any) {
 
           {summarizing ? (
             <View style={styles.summaryLoading}>
-              <ActivityIndicator color={Color.hot} size="small" />
+              <ActivityIndicator color={C.hot} size="small" />
               <Text style={styles.summaryLoadingText}>Đang tóm tắt...</Text>
             </View>
           ) : error || !summary ? (
@@ -629,7 +631,7 @@ export default function ArticleScreen({ navigation, route }: any) {
             <View style={styles.summaryBody}>
               {renderSummaryNodes()}
               <TouchableOpacity style={styles.copyInline} onPress={copySummary} activeOpacity={0.7}>
-                <Ionicons name="copy-outline" size={14} color={Color.hot} />
+                <Ionicons name="copy-outline" size={14} color={C.hot} />
                 <Text style={styles.copyInlineText}>Copy tóm tắt</Text>
               </TouchableOpacity>
             </View>
@@ -642,8 +644,8 @@ export default function ArticleScreen({ navigation, route }: any) {
             activeOpacity={0.7}
           >
             <View style={styles.sourceTextRow}>
-              <Ionicons name="link-outline" size={13} color={Color.textMuted} />
-              <Text style={[styles.sourceName, { color: SOURCE_COLORS[item.source] || Color.primary }]}>{item.source}</Text>
+              <Ionicons name="link-outline" size={13} color={C.textMuted} />
+              <Text style={[styles.sourceName, { color: SOURCE_COLORS[item.source] || C.primary }]}>{item.source}</Text>
             </View>
             <Text style={styles.sourceDate}>{new Date(item.pubDate).toLocaleDateString('vi-VN')}</Text>
           </TouchableOpacity>
@@ -653,7 +655,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         {related.length > 0 && (
           <View style={styles.relatedSection}>
             <View style={styles.relatedTitleRow}>
-              <Ionicons name="newspaper-outline" size={17} color={Color.primary} />
+              <Ionicons name="newspaper-outline" size={17} color={C.primary} />
               <Text style={styles.relatedTitle}>Bài viết liên quan</Text>
             </View>
             {related.map((r) => (
@@ -703,7 +705,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           activeOpacity={0.7}
           disabled={summarizing}
         >
-          <Ionicons name={summarizing ? 'sync' : 'refresh'} size={21} color={Color.primary} />
+          <Ionicons name={summarizing ? 'sync' : 'refresh'} size={21} color={C.primary} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -711,7 +713,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           onPress={handleBookmark}
           activeOpacity={0.7}
         >
-          <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={21} color={isSaved ? Color.danger : Color.textSecondary} />
+          <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={21} color={isSaved ? C.danger : C.textSecondary} />
         </TouchableOpacity>
       </View>
     </View>
@@ -761,7 +763,9 @@ const SafeImg = memo(function SafeImg({ url, onPress }: { url: string; onPress?:
   );
 });
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.card },
   // Header
   header: {
@@ -952,7 +956,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 6,
     borderRadius: 20,
-    backgroundColor: '#FFFFFFF2',
+    backgroundColor: Color.card,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
@@ -1011,3 +1015,6 @@ const styles = StyleSheet.create({
     resizeMode: 'contain',
   },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

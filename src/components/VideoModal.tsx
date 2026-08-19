@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Hls from 'hls.js';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import type { VideoItem } from '../types';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
 
 const PROXY_BASE = process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001';
@@ -58,7 +58,9 @@ function NativeVideoPlayer({ stream, width, height }: { stream: string; width: n
 // private) hiện thumb + nút mở tại nguồn thay vì nhảy thẳng ra browser.
 // Chỉ mount khi có video → hooks ổn định.
 export default function VideoModal({ video, onClose }: Props) {
-  const srcColor = SOURCE_COLORS[video.source] || Color.hot;
+  const C = useTheme();
+  const styles = makeStyles(C); // styles động theo dark mode
+  const srcColor = SOURCE_COLORS[video.source] || C.hot;
   const w = Math.min(Dimensions.get('window').width - 40, 640);
   const h = Math.round((w * 9) / 16);
   const playable = !!video.stream;
@@ -97,8 +99,8 @@ export default function VideoModal({ video, onClose }: Props) {
               {video.thumb ? (
                 <Image source={{ uri: video.thumb }} style={{ width: w, height: h }} resizeMode="cover" />
               ) : (
-                <View style={{ width: w, height: h, backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="videocam-outline" size={40} color={Color.textMuted} />
+                <View style={{ width: w, height: h, backgroundColor: C.skeleton, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="videocam-outline" size={40} color={C.textMuted} />
                 </View>
               )}
               <View style={styles.thumbScrim} />
@@ -131,7 +133,9 @@ export default function VideoModal({ video, onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   overlay: { flex: 1, backgroundColor: Color.scrim, alignItems: 'center', justifyContent: 'center', padding: 20 },
   backdrop: { ...StyleSheet.absoluteFillObject },
   box: { backgroundColor: Color.card, borderRadius: Radius.lg, overflow: 'hidden', maxWidth: 664, width: '100%' },
@@ -168,3 +172,6 @@ const styles = StyleSheet.create({
   },
   ghostText: { fontSize: Font.body, fontWeight: '700', color: Color.textSecondary },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

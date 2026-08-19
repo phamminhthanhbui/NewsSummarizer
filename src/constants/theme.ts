@@ -1,6 +1,37 @@
 // Design tokens — palette + type scale + radius
 // primary/danger lấy đúng từ 7 màu chủ đạo (THEME_COLORS): cam Kenh14 + đỏ thời sự
-export const Color = {
+import { useSyncExternalStore } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Palette interface — Color/DarkColor cùng shape, đổi giá trị thoải mái không vướng literal type
+export interface Palette {
+  primary: string;
+  primaryDark: string;
+  primarySoft: string;
+  hot: string;
+  hotDark: string;
+  hotSoft: string;
+  amber: string;
+  accent: string;
+  accentSoft: string;
+  bg: string;
+  card: string;
+  surfaceAlt: string;
+  text: string;
+  textSecondary: string;
+  textMuted: string;
+  border: string;
+  skeleton: string;
+  skeletonAnim: string;
+  success: string;
+  successSoft: string;
+  danger: string;
+  dangerSoft: string;
+  scrim: string;
+  white: string;
+}
+
+export const Color: Palette = {
   primary: '#FB512A',        // = THEME_COLORS 'Cam Kenh14'
   primaryDark: '#A70E1A',
   primarySoft: '#FFEEE8',    // pill/tint nền của primary
@@ -26,7 +57,60 @@ export const Color = {
   dangerSoft: '#FEE2E2',
   scrim: 'rgba(10,15,25,0.55)',
   white: '#FFFFFF',
-} as const;
+};
+
+// Dark mode — chỉ override màu nền/chữ; màu brand (hot/primary/success...) giữ nguyên
+export const DarkColor: Palette = {
+  ...Color,
+  primarySoft: '#3A1D14',
+  hotSoft: '#3A1D14',
+  accentSoft: '#16233D',
+  bg: '#0F1115',
+  card: '#1A1D24',
+  surfaceAlt: '#22262F',
+  text: '#F2F4F8',
+  textSecondary: '#A8AFBC',
+  textMuted: '#6B7280',
+  border: '#2C313C',
+  skeleton: '#232730',
+  skeletonAnim: '#2E333E',
+  successSoft: '#0D2E22',
+  dangerSoft: '#3A1518',
+  scrim: 'rgba(0,0,0,0.7)',
+};
+
+// ---- Dark mode store (AsyncStorage + useSyncExternalStore) ----
+export type ThemeMode = 'light' | 'dark';
+const THEME_KEY = '@theme_mode';
+
+let themeMode: ThemeMode = 'light';
+const themeListeners = new Set<() => void>();
+
+AsyncStorage.getItem(THEME_KEY).then((val) => {
+  if (val === 'dark' || val === 'light') setThemeMode(val);
+});
+
+export function getThemeMode(): ThemeMode {
+  return themeMode;
+}
+
+export function setThemeMode(mode: ThemeMode) {
+  if (mode === themeMode) return;
+  themeMode = mode;
+  AsyncStorage.setItem(THEME_KEY, mode);
+  themeListeners.forEach((l) => l());
+}
+
+export function subscribeTheme(cb: () => void) {
+  themeListeners.add(cb);
+  return () => { themeListeners.delete(cb); };
+}
+
+// Hook: trả về palette theo mode hiện tại, mọi screen dùng hook này tự rerender khi đổi mode
+export function useTheme(): typeof Color {
+  const mode = useSyncExternalStore(subscribeTheme, getThemeMode);
+  return mode === 'dark' ? DarkColor : Color;
+}
 
 export const Font = {
   hero: 22,

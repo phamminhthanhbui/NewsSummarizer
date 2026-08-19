@@ -10,12 +10,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import type { SummaryRecord } from '../types';
-import { Color, Font } from '../constants/theme';
+import { Color, Font, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { SOURCE_COLORS } from '../services/feeds';
 
 export default function HistoryScreen({ navigation }: any) {
   const [items, setItems] = useState<SummaryRecord[]>([]);
+  const C = useTheme();
+  const styles = makeStyles(C); // styles động theo dark mode
 
   useFocusEffect(
     useCallback(() => {
@@ -84,7 +86,7 @@ export default function HistoryScreen({ navigation }: any) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyBadge}>
-              <Ionicons name="document-text-outline" size={36} color={Color.textMuted} />
+              <Ionicons name="document-text-outline" size={36} color={C.textMuted} />
             </View>
             <Text style={styles.emptyText}>Chưa có lịch sử tóm tắt</Text>
             <Text style={styles.emptySub}>Mở bài báo đầu tiên để bắt đầu tóm tắt</Text>
@@ -95,7 +97,9 @@ export default function HistoryScreen({ navigation }: any) {
   );
 }
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
   // Header — tiêu đề + vạch đỏ kiểu Kenh14
@@ -158,3 +162,6 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 16, fontWeight: '700', color: Color.text },
   emptySub: { fontSize: Font.caption, color: Color.textMuted, textAlign: 'center', paddingHorizontal: 24 },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

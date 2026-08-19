@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
 import { timeAgo } from '../utils/timeAgo';
 
@@ -10,7 +10,9 @@ interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 
 function FeaturedCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
-  const srcColor = SOURCE_COLORS[item.source] || Color.hot;
+  const C = useTheme();
+  const s = makeStyles(C); // styles động theo dark mode
+  const srcColor = SOURCE_COLORS[item.source] || C.hot;
 
   return (
     <TouchableOpacity style={[s.card, Shadow.card]} onPress={() => onPress(item)} activeOpacity={0.85}>
@@ -18,7 +20,7 @@ function FeaturedCard({ item, onPress }: Props) {
         <Image source={{ uri: item.image }} style={s.img} resizeMode="cover" />
       ) : (
         <View style={[s.img, s.imgPh]}>
-          <Ionicons name="image-outline" size={44} color={Color.textMuted} />
+          <Ionicons name="image-outline" size={44} color={C.textMuted} />
         </View>
       )}
       <View style={s.scrim} />
@@ -26,7 +28,7 @@ function FeaturedCard({ item, onPress }: Props) {
         {item.featured ? (
           // Tin nổi bật: badge lửa + nhãn NỔI BẬT, giữ tên nguồn ở badge phụ nhỏ
           <View style={s.badgeRow}>
-            <View style={[s.badge, { backgroundColor: Color.hot }]}>
+            <View style={[s.badge, { backgroundColor: C.hot }]}>
               <Ionicons name="flame" size={11} color="#FFF" />
               <Text style={s.badgeText} numberOfLines={1}>NỔI BẬT</Text>
             </View>
@@ -54,7 +56,9 @@ function FeaturedCard({ item, onPress }: Props) {
 
 export default React.memo(FeaturedCard);
 
-const s = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   card: { width: '100%', height: 210, borderRadius: Radius.lg, overflow: 'hidden' },
   img: { width: '100%', height: '100%' },
   imgPh: { backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
@@ -72,3 +76,6 @@ const s = StyleSheet.create({
   timeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 7 },
   time: { fontSize: Font.tiny, color: 'rgba(255,255,255,0.75)' },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const s = makeStyles(Color);

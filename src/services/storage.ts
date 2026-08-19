@@ -16,6 +16,7 @@ export const KEYS = {
   voice: '@voice',          // giọng đọc cũ (expo-speech voice identifier)
   pitch: '@voice_pitch',
   rate: '@voice_rate',
+  aiUnlocked: '@ai_unlocked', // mã 016527 ở ô tìm kiếm home → hiện/ẩn mục AI trong Settings
 } as const;
 
 // Storage limits — single source of truth for cache trimming

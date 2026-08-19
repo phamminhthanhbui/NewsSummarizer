@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Pressable, View, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Color, Font, THEME_COLORS } from "./src/constants/theme";
+import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
 
 // Mỗi tab 1 màu chủ đạo riêng (trong 7 màu THEME_COLORS)
 const TAB_COLORS: Record<string, string> = {
@@ -75,15 +75,16 @@ const s = StyleSheet.create({
 const Tab = createBottomTabNavigator();
 
 export default function App() {
+  const C = useTheme();
   return (
     <NavigationContainer>
       <Tab.Navigator
         screenOptions={{
           headerShown: false,
-          tabBarInactiveTintColor: Color.textMuted,
+          tabBarInactiveTintColor: C.textMuted,
           tabBarStyle: {
-            backgroundColor: Color.card,
-            borderTopColor: Color.border,
+            backgroundColor: C.card,
+            borderTopColor: C.border,
             borderTopWidth: StyleSheet.hairlineWidth,
             height: 58,
             paddingTop: 4,

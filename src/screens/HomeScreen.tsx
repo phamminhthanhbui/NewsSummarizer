@@ -21,8 +21,10 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FEEDS, fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { fetchVideos } from '../services/videos';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { KEYS } from '../services/storage';
 import type { FeedItem, VideoItem } from '../types';
-import { Color, Font, Radius, Shadow, THEME_COLORS } from '../constants/theme';
+import { Color, Font, Radius, Shadow, THEME_COLORS, useTheme } from '../constants/theme';
 import ArticleCard from '../components/ArticleCard';
 import FeaturedCard from '../components/FeaturedCard';
 import SectionHeader from '../components/SectionHeader';
@@ -110,6 +112,7 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
 
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const styles = makeStyles(useTheme()); // styles động theo dark mode
   const [items, setItems] = useState<FeedItem[]>([]);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,10 +121,19 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedSource, setSelectedSource] = useState('Tất cả');
   const [showSourceModal, setShowSourceModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [hasSearchText, setHasSearchText] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const searchInputRef = useRef<TextInput>(null);
+  const searchTextRef = useRef('');
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
+
+  // Dọn debounce timer khi unmount
+  useEffect(() => () => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+  }, []);
 
   const load = useCallback(async () => {
     // Cache trước: có tin cũ hiện ngay (vài ms), fetch mạng chạy tiếp rồi thay
@@ -170,12 +182,12 @@ export default function HomeScreen({ navigation }: Props) {
     if (selectedSource !== 'Tất cả') {
       result = result.filter((i) => i.source === selectedSource);
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
+    if (debouncedQuery.trim()) {
+      const q = debouncedQuery.trim().toLowerCase();
       result = result.filter((i) => i.title.toLowerCase().includes(q) || i.description.toLowerCase().includes(q));
     }
     return result;
-  }, [items, selectedCategory, selectedSource, searchQuery]);
+  }, [items, selectedCategory, selectedSource, debouncedQuery]);
 
   // Carousel TIN NỔI BẬT: bài từ feed nổi bật (featured) trước, sau đó bài mới nhất
   // có ảnh lấp đầy cho đủ 5. "Nhiều người đọc nhất" không có RSS (đã dò các báo đều
@@ -252,6 +264,35 @@ export default function HomeScreen({ navigation }: Props) {
   const handleSourcePress = useCallback((source: string) => {
     setSelectedSource(source);
     setShowSourceModal(false);
+  }, []);
+
+  // Uncontrolled input + ref: gõ không re-render cả màn hình, hết khựng.
+  // Ngừng gõ 600ms mới lọc (debounce kiểu TikTok).
+  const handleSearchChange = useCallback(async (text: string) => {
+    searchTextRef.current = text;
+    const had = text.length > 0;
+    setHasSearchText((prev) => (prev === had ? prev : had));
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => setDebouncedQuery(text), 600);
+    if (text.trim() === '016527') {
+      // Hủy debounce timer vừa đặt ở trên — không thì 600ms sau nó set
+      // debouncedQuery='016527' đè lên reset bên dưới → lọc ra 0 bài
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      const unlocked = (await AsyncStorage.getItem(KEYS.aiUnlocked)) === '1';
+      if (unlocked) {
+        await AsyncStorage.removeItem(KEYS.aiUnlocked);
+        alert('Đã ẩn cấu hình AI trong Cài đặt');
+      } else {
+        await AsyncStorage.setItem(KEYS.aiUnlocked, '1');
+        alert('Đã mở khóa cấu hình AI trong Cài đặt');
+      }
+      searchInputRef.current?.clear();
+      searchTextRef.current = '';
+      setHasSearchText(false);
+      setDebouncedQuery('');
+      setShowSearchModal(false);
+      Keyboard.dismiss();
+    }
   }, []);
 
   return (
@@ -400,16 +441,16 @@ export default function HomeScreen({ navigation }: Props) {
             <View style={styles.searchInputWrap}>
               <Ionicons name="search-outline" size={20} color={Color.textMuted} style={styles.searchInputIcon} />
               <TextInput
+                ref={searchInputRef}
                 style={styles.searchInput}
                 placeholder="Tìm tiêu đề, nội dung bài viết..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
+                onChangeText={handleSearchChange}
                 autoFocus
                 autoComplete="off"
                 placeholderTextColor={Color.textMuted}
               />
-              {searchQuery && (
-                <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearBtn} accessibilityLabel="Xóa">
+              {hasSearchText && (
+                <TouchableOpacity onPress={() => { searchInputRef.current?.clear(); searchTextRef.current = ''; setHasSearchText(false); setDebouncedQuery(''); }} style={styles.searchClearBtn} accessibilityLabel="Xóa">
                   <Ionicons name="close-circle" size={22} color={Color.textMuted} />
                 </TouchableOpacity>
               )}
@@ -541,7 +582,9 @@ export default function HomeScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: Color.bg },
 
   // Header — gradient cam đỏ kiểu Kenh14 (LinearGradient bọc ngoài)
@@ -689,3 +732,6 @@ const styles = StyleSheet.create({
   },
   emptyBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

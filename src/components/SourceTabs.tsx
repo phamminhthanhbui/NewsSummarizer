@@ -1,10 +1,11 @@
 import React from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet } from 'react-native';
-import { Color, Font, Shadow } from '../constants/theme';
+import { Color, Font, Shadow, useTheme } from '../constants/theme';
 
 interface Props { sources: string[]; selected: string; onSelect: (s: string) => void; }
 
 export default function SourceTabs({ sources, selected, onSelect }: Props) {
+  const s = makeStyles(useTheme()); // styles động theo dark mode
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.wrap} contentContainerStyle={s.inner}>
       {sources.map((src) => {
@@ -24,7 +25,9 @@ export default function SourceTabs({ sources, selected, onSelect }: Props) {
   );
 }
 
-const s = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   wrap: { flexShrink: 0, backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
   inner: { paddingHorizontal: 12, gap: 8, alignItems: 'center' },
   tab: {
@@ -35,3 +38,6 @@ const s = StyleSheet.create({
   txt: { fontSize: 13, fontWeight: '600', color: Color.textSecondary },
   txtActive: { color: '#FFF' },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const s = makeStyles(Color);

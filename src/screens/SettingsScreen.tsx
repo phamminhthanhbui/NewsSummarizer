@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,10 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
+  Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
@@ -16,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
-import { Color, Font, Shadow, THEME_COLORS } from '../constants/theme';
+import { Color, Font, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
 
@@ -36,11 +38,13 @@ const SECTION_COLORS = {
   endpoint: '#D97706', // Vàng đồng
   model: '#059669',    // Xanh lá
   voice: '#DB2777',    // Hồng
-  data: '#DC2626',     // Đỏ thời sự
+  security: '#DC2626', // Đỏ thời sự
 };
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const C = useTheme(); // palette theo dark mode — styles dùng C thay vì Color tĩnh
+  const styles = makeStyles(C); // styles động: đổi mode là cả màn hình đổi màu ngay
   const [provider, setProvider] = useState<LLMProvider>('nvidia');
   const [apiKey, setApiKey] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
@@ -52,6 +56,8 @@ export default function SettingsScreen() {
   const [modelOpen, setModelOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [aiUnlocked, setAiUnlocked] = useState(false); // ẩn mục AI mặc định; mở bằng mã 016527 ở ô tìm kiếm home
+  const [darkMode, setDarkMode] = useState(getThemeMode() === 'dark');
   const audioRef = useRef<Audio.Sound | null>(null);
   const webUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -72,6 +78,14 @@ export default function SettingsScreen() {
     AsyncStorage.getItem(KEYS.pitch).then((val) => setPitch(parseFloat(val || '') || 1.0));
     AsyncStorage.getItem(KEYS.rate).then((val) => setRate(parseFloat(val || '') || 1.0));
   }, []);
+
+  // Tab navigator giữ screen mounted sẵn — đọc lại cờ unlock mỗi lần focus
+  // để toggle từ Home có hiệu lực ngay khi quay lại tab này, không cần F5
+  useFocusEffect(
+    useCallback(() => {
+      AsyncStorage.getItem(KEYS.aiUnlocked).then((val) => setAiUnlocked(val === '1'));
+    }, [])
+  );
 
   useEffect(() => {
     const m = models[0]?.id || '';
@@ -199,17 +213,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleClear = async () => {
-    await AsyncStorage.removeItem(KEYS.provider);
-    await AsyncStorage.removeItem(keyStorageKey);
-    await AsyncStorage.removeItem(KEYS.customBaseUrl);
-    await AsyncStorage.removeItem(KEYS.model);
-    setProvider('nvidia');
-    setApiKey('');
-    setCustomBaseUrl('');
-    setModel(PROVIDERS[0].models[0].id);
-  };
-
   const handleTest = async () => {
     if (testing) return;
     setTesting(true);
@@ -250,6 +253,9 @@ export default function SettingsScreen() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {/* Provider + API Key + Endpoint + Model — ẩn mặc định, mở bằng mã bí mật */}
+        {aiUnlocked && (
+          <>
         {/* Provider Section */}
         <SectionHeader title="Nhà cung cấp AI" icon="cube" color={SECTION_COLORS.provider}>
           <View style={styles.providerGrid}>
@@ -373,6 +379,8 @@ export default function SettingsScreen() {
             )}
           </Card>
         </SectionHeader>
+          </>
+        )}
 
         {/* Voice Section */}
         <SectionHeader title="Giọng đọc tiếng Việt" icon="volume-high" color={SECTION_COLORS.voice}>
@@ -410,16 +418,26 @@ export default function SettingsScreen() {
           </Card>
         </SectionHeader>
 
-        {/* Data Section */}
-        <SectionHeader title="Dữ liệu" icon="trash" color={SECTION_COLORS.data}>
-          <Card style={styles.dangerCard}>
-            <TouchableOpacity style={styles.dangerBtn} onPress={handleClear} activeOpacity={0.7}>
-              <View style={styles.dangerIconBadge}>
-                <Ionicons name="trash" size={16} color={Color.danger} />
+        {/* Appearance Section — giao diện sáng/tối */}
+        <SectionHeader title="Giao diện" icon="moon" color={SECTION_COLORS.security}>
+          <Card>
+            <View style={styles.appearanceRow}>
+              <View style={styles.appearanceLeft}>
+                <View style={[styles.fieldIcon, { backgroundColor: SECTION_COLORS.security + '1A' }]}>
+                  <Ionicons name={darkMode ? 'moon' : 'sunny'} size={16} color={SECTION_COLORS.security} />
+                </View>
+                <View style={styles.appearanceTextWrap}>
+                  <Text style={styles.fieldLabel}>Chế độ tối</Text>
+                  <Text style={styles.fieldHint}>{darkMode ? 'Đang bật' : 'Đang tắt'}</Text>
+                </View>
               </View>
-              <Text style={styles.dangerBtnText}>Xoá tất cả cài đặt</Text>
-            </TouchableOpacity>
-            <Text style={styles.fieldHint}>Xoá API key, model, cao độ & tốc độ đọc. Không xoá bài đã lưu & lịch sử.</Text>
+              <Switch
+                value={darkMode}
+                onValueChange={(v) => { setDarkMode(v); setThemeMode(v ? 'dark' : 'light'); }}
+                trackColor={{ false: Color.border, true: Color.hot }}
+                thumbColor="#FFF"
+              />
+            </View>
           </Card>
         </SectionHeader>
 
@@ -450,6 +468,7 @@ export default function SettingsScreen() {
 // Helper components khai báo ở module scope — định nghĩa trong thân component
 // khiến React remount cả subtree mỗi lần render (TextInput mất focus khi gõ).
 function SectionHeader({ title, icon, color, children }: { title: string; icon: string; color: string; children: React.ReactNode }) {
+  const styles = makeStyles(useTheme());
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
@@ -464,10 +483,13 @@ function SectionHeader({ title, icon, color, children }: { title: string; icon: 
 }
 
 function Card({ children, style }: { children: React.ReactNode; style?: any }) {
+  const styles = makeStyles(useTheme());
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
 function ModelItem({ item, active, onPress }: { item: { id: string; label: string }; active: boolean; onPress: () => void }) {
+  const C = useTheme();
+  const styles = makeStyles(C);
   return (
     <TouchableOpacity
       style={[styles.listItem, active && styles.listItemActive]}
@@ -476,12 +498,14 @@ function ModelItem({ item, active, onPress }: { item: { id: string; label: strin
     >
       <View style={[styles.listItemDot, active && styles.listItemDotActive]} />
       <Text style={[styles.listItemText, active && styles.listItemTextActive]} numberOfLines={1}>{item.label}</Text>
-      {active && <Ionicons name="checkmark" size={18} color={Color.hot} />}
+      {active && <Ionicons name="checkmark" size={18} color={C.hot} />}
     </TouchableOpacity>
   );
 }
 
 function ProviderCard({ p, active, onPress }: { p: typeof PROVIDERS[0]; active: boolean; onPress: () => void }) {
+  const C = useTheme();
+  const styles = makeStyles(C);
   return (
     <TouchableOpacity
       style={[styles.providerCard, active && styles.providerCardActive]}
@@ -489,7 +513,7 @@ function ProviderCard({ p, active, onPress }: { p: typeof PROVIDERS[0]; active: 
       activeOpacity={0.6}
     >
       <View style={[styles.providerCardIcon, active && styles.providerCardIconActive]}>
-        <Ionicons name={PROVIDER_ICONS[p.id] as any} size={20} color={active ? '#FFF' : Color.hot} />
+        <Ionicons name={PROVIDER_ICONS[p.id] as any} size={20} color={active ? '#FFF' : C.hot} />
       </View>
       <View style={styles.providerCardContent}>
         <Text style={[styles.providerCardLabel, active && styles.providerCardLabelActive]} numberOfLines={1}>{p.label}</Text>
@@ -502,6 +526,8 @@ function ProviderCard({ p, active, onPress }: { p: typeof PROVIDERS[0]; active: 
 
 // Stepper component
 function Stepper({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void }) {
+  const C = useTheme();
+  const styles = makeStyles(C);
   const increment = () => {
     const next = Math.round((value + step) * 10) / 10;
     if (next <= max) onChange(next);
@@ -516,18 +542,21 @@ function Stepper({ label, value, min, max, step, onChange }: { label: string; va
       <Text style={styles.stepperLabel}>{label}</Text>
       <View style={styles.stepperControl}>
         <TouchableOpacity style={styles.stepperBtn} onPress={decrement} activeOpacity={0.6} disabled={value <= min}>
-          <Ionicons name="remove" size={18} color={value <= min ? Color.textMuted : Color.hot} />
+          <Ionicons name="remove" size={18} color={value <= min ? C.textMuted : C.hot} />
         </TouchableOpacity>
         <Text style={styles.stepperValue}>{value.toFixed(1)}</Text>
         <TouchableOpacity style={styles.stepperBtn} onPress={increment} activeOpacity={0.6} disabled={value >= max}>
-          <Ionicons name="add" size={18} color={value >= max ? Color.textMuted : Color.hot} />
+          <Ionicons name="add" size={18} color={value >= max ? C.textMuted : C.hot} />
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → khối styles tự nhận màu
+// theo dark/light mà không phải sửa từng `Color.X`
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
   content: { padding: 16, paddingBottom: 120 },
 
@@ -568,7 +597,6 @@ const styles = StyleSheet.create({
     padding: 16,
     ...Shadow.card,
   },
-  dangerCard: { borderColor: Color.danger + '40' },
 
   // Labels & hints
   fieldLabel: { fontSize: Font.caption, fontWeight: '600', color: Color.text, marginBottom: 8 },
@@ -700,17 +728,10 @@ const styles = StyleSheet.create({
   previewBtnActive: { backgroundColor: Color.danger },
   previewBtnText: { color: '#FFF', fontWeight: '600', fontSize: Font.caption },
 
-  // Danger button
-  dangerBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
-  dangerIconBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 4,
-    backgroundColor: Color.dangerSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dangerBtnText: { color: Color.danger, fontWeight: '600', fontSize: Font.body },
+  // Appearance row (dark mode switch)
+  appearanceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  appearanceLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  appearanceTextWrap: { flex: 1 },
 
   // Save button — gradient cam→đỏ
   saveWrapper: { paddingTop: 24, paddingBottom: 16 },
@@ -724,3 +745,6 @@ const styles = StyleSheet.create({
   },
   saveBtnText: { color: '#FFF', fontWeight: '700', fontSize: Font.body, textTransform: 'uppercase', letterSpacing: 0.5 },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

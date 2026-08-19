@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import type { FeedItem } from '../types';
-import { Color, Font, Radius, Shadow } from '../constants/theme';
+import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -20,6 +20,8 @@ type Props = { navigation: NativeStackNavigationProp<any> };
 
 export default function SavedScreen({ navigation }: Props) {
   const [items, setItems] = useState<FeedItem[]>([]);
+  const C = useTheme();
+  const styles = makeStyles(C); // styles động theo dark mode
 
   useFocusEffect(
     useCallback(() => {
@@ -85,7 +87,7 @@ export default function SavedScreen({ navigation }: Props) {
               <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" />
             ) : (
               <View style={[styles.thumb, styles.thumbPh]}>
-                <Ionicons name="image-outline" size={22} color={Color.textMuted} />
+                <Ionicons name="image-outline" size={22} color={C.textMuted} />
               </View>
             )}
             <View style={styles.cardBody}>
@@ -104,7 +106,7 @@ export default function SavedScreen({ navigation }: Props) {
               activeOpacity={0.6}
               accessibilityLabel="Bỏ lưu bài"
             >
-              <Ionicons name="close" size={18} color={Color.textMuted} />
+              <Ionicons name="close" size={18} color={C.textMuted} />
             </TouchableOpacity>
           </TouchableOpacity>
         )}
@@ -112,7 +114,7 @@ export default function SavedScreen({ navigation }: Props) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyBadge}>
-              <Ionicons name="bookmark-outline" size={36} color={Color.textMuted} />
+              <Ionicons name="bookmark-outline" size={36} color={C.textMuted} />
             </View>
             <Text style={styles.emptyText}>Chưa có bài đã lưu</Text>
             <View style={styles.emptyHintRow}>
@@ -127,7 +129,9 @@ export default function SavedScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
   // Header — tiêu đề + vạch đỏ kiểu Kenh14
@@ -197,3 +201,6 @@ const styles = StyleSheet.create({
   emptyHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   emptyHint: { fontSize: Font.caption, color: Color.textMuted },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const styles = makeStyles(Color);

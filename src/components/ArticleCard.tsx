@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
-import { Color, Font, Radius } from '../constants/theme';
+import { Color, Font, Radius, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
 import { timeAgo } from '../utils/timeAgo';
 
@@ -11,8 +11,10 @@ interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
 // Thẻ dọc kiểu Kenh14 mobile: ảnh to trên, tiêu đề đậm, hợp giới trẻ
 function ArticleCard({ item, onPress }: Props) {
   const t = timeAgo(item.pubDate);
+  const C = useTheme();
+  const s = makeStyles(C); // styles động theo dark mode
   // Mỗi tờ báo 1 màu đặc trưng; '1A' = 10% alpha cho nền tint
-  const srcColor = SOURCE_COLORS[item.source] || Color.hot;
+  const srcColor = SOURCE_COLORS[item.source] || C.hot;
 
   return (
     <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.85}>
@@ -20,7 +22,7 @@ function ArticleCard({ item, onPress }: Props) {
         <Image source={{ uri: item.image }} style={s.img} resizeMode="cover" />
       ) : (
         <View style={[s.img, s.imgPh]}>
-          <Ionicons name="image-outline" size={40} color={Color.textMuted} />
+          <Ionicons name="image-outline" size={40} color={C.textMuted} />
         </View>
       )}
       <View style={s.body}>
@@ -43,7 +45,9 @@ function ArticleCard({ item, onPress }: Props) {
 // memo: FlatList re-render (scroll, filter đổi) không kéo theo re-render từng card
 export default React.memo(ArticleCard);
 
-const s = StyleSheet.create({
+// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
+type Palette = typeof Color;
+const makeStyles = (Color: Palette) => StyleSheet.create({
   card: {
     backgroundColor: Color.card,
     borderRadius: Radius.lg,
@@ -76,3 +80,6 @@ const s = StyleSheet.create({
   title: { fontSize: Font.title, fontWeight: '800', color: Color.text, lineHeight: 24, marginBottom: 6 },
   desc: { fontSize: Font.body, color: Color.textSecondary, lineHeight: 20 },
 });
+
+// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
+const s = makeStyles(Color);
