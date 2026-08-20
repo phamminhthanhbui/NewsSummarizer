@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
-import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection } from '../services/summarize';
+import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
 import { Color, Font, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
@@ -99,7 +99,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     const m = models[0]?.id || '';
     setModel(m);
-    AsyncStorage.getItem(cfg?.keyStorageKey || 'apiKey').then((val) => setApiKey(val || ''));
+    // NVIDIA: storage trống thì điền key mặc định vào ô (chạy được ngay khi start)
+    AsyncStorage.getItem(cfg?.keyStorageKey || 'apiKey').then((val) => setApiKey(val || (provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : '')));
     if (showCustomUrl) {
       AsyncStorage.getItem(KEYS.customBaseUrl).then((val) => setCustomBaseUrl(val || ''));
     }
@@ -125,10 +126,9 @@ export default function SettingsScreen() {
       speechSynthesis.cancel();
       webUtteranceRef.current = null;
     }
-    previewPlayer.pause();
+    try { const r: any = previewPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
     if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
   };
-
   const previewVoice = async () => {
     if (previewing) {
       stopAudio();
@@ -340,7 +340,7 @@ export default function SettingsScreen() {
         )}
 
         {/* Model Section */}
-        <SectionHeader title="Model AI" icon="cpu" color={SECTION_COLORS.model}>
+        <SectionHeader title="Model AI" icon="hardware-chip" color={SECTION_COLORS.model}>
           <Card>
             <TouchableOpacity
               style={styles.selectField}

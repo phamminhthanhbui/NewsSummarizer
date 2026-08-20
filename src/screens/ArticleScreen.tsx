@@ -288,7 +288,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   const toggleSpeak = async () => {
     if (speaking) {
       cancelledRef.current = true; // chặn continuation của speakEdge đang fetch dở
-      ttsPlayer.pause();
+      try { const r: any = ttsPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
       if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
@@ -417,7 +417,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
   const stopSpeaking = () => {
     cancelledRef.current = true; // chặn continuation của speakEdge/speakSystem đang chờ
-    ttsPlayer.pause();
+    try { const r: any = ttsPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
     if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
@@ -566,7 +566,7 @@ export default function ArticleScreen({ navigation, route }: any) {
 
       <ScrollView
         style={styles.body}
-        contentContainerStyle={[styles.bodyBottom, { paddingBottom: 90 + insets.bottom }]}
+        contentContainerStyle={[styles.bodyBottom, { paddingBottom: 90 }]}
       >
         <Text style={styles.title}>{item.title}</Text>
 
@@ -686,8 +686,9 @@ export default function ArticleScreen({ navigation, route }: any) {
         </View>
       </Modal>
 
-      {/* Floating bar */}
-      <View style={[styles.floatBar, { bottom: insets.bottom + 12 }]}>
+      {/* Floating bar — KHÔNG cộng insets.bottom: ArticleScreen nằm trong Tab,
+          tab bar đã chiếm safe area dưới cùng rồi, cộng thêm = thanh bị đẩy cao */}
+      <View style={[styles.floatBar, { bottom: 12 }]}>
         <TouchableOpacity
           style={styles.fabBtn}
           onPress={() => Linking.openURL(item.link)}

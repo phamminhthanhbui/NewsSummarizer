@@ -120,7 +120,6 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [selectedSource, setSelectedSource] = useState('Tất cả');
   const [showSourceModal, setShowSourceModal] = useState(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
   const [hasSearchText, setHasSearchText] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const searchInputRef = useRef<TextInput>(null);
@@ -159,7 +158,7 @@ export default function HomeScreen({ navigation }: Props) {
     setRefreshing(false);
     // Haptic feedback on refresh complete
     if (Platform.OS !== 'web') {
-      const { Haptics } = require('expo-haptics');
+      const Haptics = require('expo-haptics');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   }, [load]);
@@ -255,6 +254,76 @@ export default function HomeScreen({ navigation }: Props) {
     </View>
   ), [goArticle]);
 
+  // onScroll carousel — useCallback để listHeader memo không đổi identity mỗi render
+  const handleHeroScroll = useCallback((e: any) => {
+    const w = e.nativeEvent.layoutMeasurement.width || 1;
+    const idx = Math.min(Math.max(Math.round(e.nativeEvent.contentOffset.x / w), 0), 4);
+    setHeroIdx((prev) => (prev === idx ? prev : idx));
+  }, []);
+
+  // Header của list (video + hero carousel + section) — memo để FlatList không
+  // rebuild lại cả khối mỗi lần re-render (nguyên nhân VirtualizedList slow update)
+  const listHeader = useMemo(() => (
+    <View style={styles.listHeader}>
+      {/* Section VIDEO NỔI BẬT — crawl từ video.kenh14.vn / soha / video.vnexpress.net,
+          RSS không có video/live. Video từ box "Video nổi bật" gắn badge HOT, lên đầu.
+          Nằm trong ListHeaderComponent để cuộn cùng danh sách tin. */}
+      {sortedVideos.length > 0 && (
+        <View style={styles.videoSection}>
+          <View style={styles.videoHeader}>
+            <View style={styles.videoLabel}>
+              <Ionicons name="videocam" size={13} color="#FFF" />
+              <Text style={styles.videoLabelText}>VIDEO NỔI BẬT</Text>
+            </View>
+            <Text style={styles.videoSub}>mở tại nguồn</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
+            {sortedVideos.map((v) => (
+              <View key={v.link} style={styles.videoCardWrap}>
+                <VideoCard item={v} onPress={goVideo} featured={v.zone === 'Video nổi bật'} />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+      {heroes.length > 0 && (
+        <View style={styles.heroWrap}>
+          <FlatList
+            ref={heroListRef}
+            data={heroes}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item) => item.link}
+            renderItem={heroRenderItem}
+            // onScroll thay vì onMomentumScrollEnd — web (react-native-web)
+            // không có momentum events, indicator sẽ không bao giờ cập nhật
+            scrollEventThrottle={100}
+            onScroll={handleHeroScroll}
+          />
+          {heroes.length > 1 && (
+            <>
+              <TouchableOpacity style={[styles.heroArrow, styles.heroArrowLeft]} onPress={() => goHero(-1)} activeOpacity={0.7} accessibilityLabel="Tin trước">
+                <Ionicons name="chevron-back" size={20} color="#FFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.heroArrow, styles.heroArrowRight]} onPress={() => goHero(1)} activeOpacity={0.7} accessibilityLabel="Tin sau">
+                <Ionicons name="chevron-forward" size={20} color="#FFF" />
+              </TouchableOpacity>
+            </>
+          )}
+          {heroes.length > 1 && (
+            <View style={styles.heroDots}>
+              {heroes.map((h, i) => (
+                <View key={h.link} style={[styles.heroDot, i === heroIdx && styles.heroDotActive]} />
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+      <SectionHeader title={filtered.length ? 'TIN MỚI NHẤT' : 'KHÔNG CÓ DỮ LIỆU'} />
+    </View>
+  ), [sortedVideos, heroes, heroIdx, filtered.length, goVideo, goHero, heroRenderItem, handleHeroScroll]);
+
   // Callback ổn định cho chip (memo chỉ hiệu quả khi onPress không đổi)
   const handleCategoryPress = useCallback((category: string) => {
     setSelectedCategory(category);
@@ -290,7 +359,6 @@ export default function HomeScreen({ navigation }: Props) {
       searchTextRef.current = '';
       setHasSearchText(false);
       setDebouncedQuery('');
-      setShowSearchModal(false);
       Keyboard.dismiss();
     }
   }, []);
@@ -316,9 +384,6 @@ export default function HomeScreen({ navigation }: Props) {
             </View>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.iconBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
-              <Ionicons name="search-outline" size={20} color="#FFF" />
-            </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
               <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color="#FFF" style={refreshing ? styles.refreshSpin : {}} />
             </TouchableOpacity>
@@ -339,6 +404,27 @@ export default function HomeScreen({ navigation }: Props) {
           {THEME_COLORS.map((t) => (
             <View key={t.key} style={[styles.themeStripSeg, { backgroundColor: t.color }]} />
           ))}
+        </View>
+
+        {/* Search inline — gõ lọc trực tiếp, không modal (input nằm trên cao
+            nên keyboard không che). Uncontrolled + debounce 600ms như cũ */}
+        <View style={styles.searchPill}>
+          <Ionicons name="search" size={17} color={Color.textMuted} />
+          <TextInput
+            ref={searchInputRef}
+            style={styles.searchInputInline}
+            placeholder="Tìm kiếm tin tức..."
+            placeholderTextColor={Color.textMuted}
+            onChangeText={handleSearchChange}
+            returnKeyType="search"
+            autoCorrect={false}
+            accessibilityLabel="Tìm kiếm"
+          />
+          {hasSearchText && (
+            <Pressable onPress={() => { searchInputRef.current?.clear(); searchTextRef.current = ''; setHasSearchText(false); setDebouncedQuery(''); }} hitSlop={8} accessibilityLabel="Xóa tìm kiếm">
+              <Ionicons name="close-circle" size={18} color={Color.textMuted} />
+            </Pressable>
+          )}
         </View>
 
       </LinearGradient>
@@ -392,15 +478,15 @@ export default function HomeScreen({ navigation }: Props) {
 
       {/* Source Modal */}
       {showSourceModal && (
-        <Pressable style={styles.modalOverlay} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true}>
-          <Pressable
-            style={[
-              styles.modalContent,
-              { marginBottom: insets.bottom },
-              { transform: [{ translateY: showSourceModal ? 0 : 400 }] },
-            ]}
-            onPress={(e) => e.stopPropagation()}
-          >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true}>
+            <Pressable
+              style={[
+                styles.modalContent,
+                { marginBottom: insets.bottom },
+              ]}
+              onPress={(e) => e.stopPropagation()}
+            >
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Chọn nguồn tin</Text>
@@ -416,51 +502,9 @@ export default function HomeScreen({ navigation }: Props) {
               )}
               contentContainerStyle={styles.modalListContent}
             />
+            </Pressable>
           </Pressable>
-        </Pressable>
-      )}
-
-      {/* Search Modal */}
-      {showSearchModal && (
-        <Pressable style={styles.modalOverlay} onPress={() => setShowSearchModal(false)} accessibilityElementsHidden={true}>
-          <Pressable
-            style={[
-              styles.modalContent,
-              { marginBottom: insets.bottom },
-              { transform: [{ translateY: showSearchModal ? 0 : 400 }] },
-            ]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Tìm kiếm</Text>
-              <TouchableOpacity onPress={() => setShowSearchModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
-                <Ionicons name="close" size={22} color={Color.textMuted} />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.searchInputWrap}>
-              <Ionicons name="search-outline" size={20} color={Color.textMuted} style={styles.searchInputIcon} />
-              <TextInput
-                ref={searchInputRef}
-                style={styles.searchInput}
-                placeholder="Tìm tiêu đề, nội dung bài viết..."
-                onChangeText={handleSearchChange}
-                autoFocus
-                autoComplete="off"
-                placeholderTextColor={Color.textMuted}
-              />
-              {hasSearchText && (
-                <TouchableOpacity onPress={() => { searchInputRef.current?.clear(); searchTextRef.current = ''; setHasSearchText(false); setDebouncedQuery(''); }} style={styles.searchClearBtn} accessibilityLabel="Xóa">
-                  <Ionicons name="close-circle" size={22} color={Color.textMuted} />
-                </TouchableOpacity>
-              )}
-            </View>
-            <View style={styles.searchHint}>
-              <Ionicons name="information-circle-outline" size={13} color={Color.textMuted} />
-              <Text style={styles.searchHintText}>Kết quả: {filtered.length} bài</Text>
-            </View>
-          </Pressable>
-        </Pressable>
+        </View>
       )}
 
       {/* Content */}
@@ -472,72 +516,13 @@ export default function HomeScreen({ navigation }: Props) {
         <FlatList
           ref={flatListRef}
           data={rest}
-          keyExtractor={(item, i) => `${item.link}-${i}`}
+          keyExtractor={(item) => item.link}
           renderItem={renderItem}
-          ListHeaderComponent={
-            <View style={styles.listHeader}>
-              {/* Section VIDEO NỔI BẬT — crawl từ video.kenh14.vn / soha / video.vnexpress.net,
-                  RSS không có video/live. Video từ box "Video nổi bật" gắn badge HOT, lên đầu.
-                  Nằm trong ListHeaderComponent để cuộn cùng danh sách tin. */}
-              {sortedVideos.length > 0 && (
-                <View style={styles.videoSection}>
-                  <View style={styles.videoHeader}>
-                    <View style={styles.videoLabel}>
-                      <Ionicons name="videocam" size={13} color="#FFF" />
-                      <Text style={styles.videoLabelText}>VIDEO NỔI BẬT</Text>
-                    </View>
-                    <Text style={styles.videoSub}>mở tại nguồn</Text>
-                  </View>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
-                    {sortedVideos.map((v) => (
-                      <View key={v.link} style={styles.videoCardWrap}>
-                        <VideoCard item={v} onPress={goVideo} featured={v.zone === 'Video nổi bật'} />
-                      </View>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-              {heroes.length > 0 && (
-                <View style={styles.heroWrap}>
-                  <FlatList
-                    ref={heroListRef}
-                    data={heroes}
-                    horizontal
-                    pagingEnabled
-                    showsHorizontalScrollIndicator={false}
-                    keyExtractor={(item) => item.link}
-                    renderItem={heroRenderItem}
-                    // onScroll thay vì onMomentumScrollEnd — web (react-native-web)
-                    // không có momentum events, indicator sẽ không bao giờ cập nhật
-                    scrollEventThrottle={100}
-                    onScroll={(e) => {
-                      const w = e.nativeEvent.layoutMeasurement.width || 1;
-                      const idx = Math.min(Math.max(Math.round(e.nativeEvent.contentOffset.x / w), 0), heroes.length - 1);
-                      if (idx !== heroIdx) setHeroIdx(idx);
-                    }}
-                  />
-                  {heroes.length > 1 && (
-                    <>
-                      <TouchableOpacity style={[styles.heroArrow, styles.heroArrowLeft]} onPress={() => goHero(-1)} activeOpacity={0.7} accessibilityLabel="Tin trước">
-                        <Ionicons name="chevron-back" size={20} color="#FFF" />
-                      </TouchableOpacity>
-                      <TouchableOpacity style={[styles.heroArrow, styles.heroArrowRight]} onPress={() => goHero(1)} activeOpacity={0.7} accessibilityLabel="Tin sau">
-                        <Ionicons name="chevron-forward" size={20} color="#FFF" />
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  {heroes.length > 1 && (
-                    <View style={styles.heroDots}>
-                      {heroes.map((h, i) => (
-                        <View key={h.link} style={[styles.heroDot, i === heroIdx && styles.heroDotActive]} />
-                      ))}
-                    </View>
-                  )}
-                </View>
-              )}
-              <SectionHeader title={filtered.length ? 'TIN MỚI NHẤT' : 'KHÔNG CÓ DỮ LIỆU'} />
-            </View>
-          }
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          removeClippedSubviews
+          ListHeaderComponent={listHeader}
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
               <View style={styles.emptyIconBadge}>
@@ -596,6 +581,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconBtn: { padding: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.2)' },
+  searchPill: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 44, borderRadius: 22, backgroundColor: Color.card, paddingHorizontal: 16, marginTop: 12, ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6 }, android: { elevation: 4 } }) },
+  searchInputInline: { flex: 1, fontSize: Font.body, color: Color.text, paddingVertical: 0, maxHeight: 44 },
   logoBadge: {
     width: 38,
     height: 38,
@@ -657,7 +644,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   videoCardWrap: { width: 220 },
 
   // Modal
-  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end', zIndex: 100 },
+  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: Color.card,
     borderTopLeftRadius: Radius.xl,
@@ -675,14 +663,6 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   modalTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text },
   modalClose: { padding: 8 },
   modalListContent: { paddingHorizontal: 4, gap: 8, paddingBottom: 20 },
-
-  // Search Modal
-  searchInputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.surfaceAlt, borderRadius: Radius.md, paddingHorizontal: 12, paddingVertical: 4, marginBottom: 12 },
-  searchInputIcon: { marginRight: 8 },
-  searchInput: { flex: 1, fontSize: Font.body, color: Color.text, paddingVertical: 8 },
-  searchClearBtn: { padding: 4 },
-  searchHint: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
-  searchHintText: { fontSize: Font.caption, color: Color.textMuted },
 
   // Source Chips (in modal) — màu active theo thương hiệu báo (inline style)
   sourceChip: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: Color.surfaceAlt, borderWidth: 1, borderColor: Color.border },

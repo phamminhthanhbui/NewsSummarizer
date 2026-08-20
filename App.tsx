@@ -3,7 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Pressable, View, StyleSheet } from "react-native";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
 
@@ -76,9 +76,21 @@ const s = StyleSheet.create({
 const Tab = createBottomTabNavigator();
 
 export default function App() {
-  const C = useTheme();
   return (
     <SafeAreaProvider>
+      <AppTabs />
+    </SafeAreaProvider>
+  );
+}
+
+function AppTabs() {
+  const C = useTheme();
+  const insets = useSafeAreaInsets();
+  // Khe hở thêm dưới tab bar: máy 3 nút (insets.bottom = 0) tab bar sát nút
+  // điều hướng → thêm 8px. Máy gesture (insets.bottom > 0) vẫn giữ safe area.
+  const TAB_BAR_BASE = 49;
+  const TAB_BAR_EXTRA = 8;
+  return (
       <NavigationContainer>
         <Tab.Navigator
         screenOptions={{
@@ -88,7 +100,8 @@ export default function App() {
             backgroundColor: C.card,
             borderTopColor: C.border,
             borderTopWidth: StyleSheet.hairlineWidth,
-            height: 58,
+            height: TAB_BAR_BASE + insets.bottom + TAB_BAR_EXTRA,
+            paddingBottom: insets.bottom + TAB_BAR_EXTRA,
             paddingTop: 4,
             elevation: 8,
             shadowColor: "#000",
@@ -157,6 +170,5 @@ export default function App() {
         />
       </Tab.Navigator>
       </NavigationContainer>
-    </SafeAreaProvider>
   );
 }

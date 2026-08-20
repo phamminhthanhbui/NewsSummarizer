@@ -7,6 +7,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type LLMProvider = 'nvidia' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'custom';
 
+// Mặc định NVIDIA NIM — app chạy được ngay khi start, không cần vào Settings nhập key.
+// User nhập key khác trong Settings sẽ ghi đè (AsyncStorage ưu tiên hơn).
+export const DEFAULT_NVIDIA_KEY = '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';
+
 export interface ProviderConfig {
   id: LLMProvider;
   label: string;
@@ -310,7 +314,8 @@ export async function summarizeArticle(articleText: string): Promise<string> {
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Provider không hợp lệ');
 
-  const apiKey = await AsyncStorage.getItem(cfg.keyStorageKey);
+  let apiKey = await AsyncStorage.getItem(cfg.keyStorageKey);
+  if (!apiKey && provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY; // default sẵn, chạy ngay khi start
   if (!apiKey && cfg.needsKey) throw new Error(`Thiếu API key cho ${cfg.label}`);
 
   const model = provider === 'custom'
