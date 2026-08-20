@@ -12,7 +12,6 @@ import {
   Modal,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Audio } from 'expo-av';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -131,10 +130,23 @@ export default function ArticleScreen({ navigation, route }: any) {
   const [isSaved, setIsSaved] = useState(false);
   const [related, setRelated] = useState<FeedItem[]>([]);
   const [speaking, setSpeaking] = useState(false);
-  const audioRef = useRef<Audio.Sound | null>(null);
   // Guard async continuation: thoát/dừng khi speakEdge đang fetch dở
   // thì không cho continuation phát audio bài cũ sau khi fetch xong
   const cancelledRef = useRef(false);
+  // TTS audio (blob Edge TTS) phát qua expo-video player — expo-av đã bỏ
+  // (không tương thích expo-modules-core SDK 57). Không cần VideoView:
+  // player không gắn surface vẫn buffer + phát audio bình thường.
+  const ttsPlayer = useVideoPlayer(null, (p) => {
+    p.audioMixingMode = 'doNotMix';
+    p.addListener('playToEnd', () => {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      setSpeaking(false);
+      setHighlightWordIndex(-1);
+      setHighlightParaIndex(-1);
+      if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
+    });
+  });
+  const ttsUrlRef = useRef<string | null>(null);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
   // useCallback: giữ identity ổn định để SafeImg(memo) không re-render theo highlight tick
@@ -276,7 +288,8 @@ export default function ArticleScreen({ navigation, route }: any) {
   const toggleSpeak = async () => {
     if (speaking) {
       cancelledRef.current = true; // chặn continuation của speakEdge đang fetch dở
-      if (audioRef.current) { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); audioRef.current = null; }
+      ttsPlayer.pause();
+      if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
       setSpeaking(false);
@@ -362,33 +375,17 @@ export default function ArticleScreen({ navigation, route }: any) {
         const url = await speakEdge(text);
         // Đã dừng/thoát trong lúc fetch → bỏ kết quả, không phát nữa
         if (cancelledRef.current) { revokeAudioUrl(url); return; }
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: url },
-          { rate, volume: 1.0 },
-          (status) => {
-            // didJustFinish = đọc XONG → dọn highlight + revoke blob.
-            // (playAsync() resolve ngay khi BẮT ĐẦU phát, không chờ hết bài)
-            if (status.isLoaded && status.didJustFinish) {
-              if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-              setSpeaking(false);
-              setHighlightWordIndex(-1);
-              setHighlightParaIndex(-1);
-              revokeAudioUrl(url);
-            }
-          }
-        );
-        audioRef.current = sound;
-        // Highlight theo tiến trình phát (position/duration).
+        ttsUrlRef.current = url;
+        await ttsPlayer.replaceAsync(url);
+        ttsPlayer.playbackRate = rate;
+        // Highlight theo tiến trình phát (currentTime/duration).
         // Kiểm tra cancelledRef thay vì state `speaking` (closure giữ giá trị cũ)
         intervalRef.current = setInterval(() => {
           if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
-          sound.getStatusAsync().then(st => {
-            if (st.isLoaded && typeof st.durationMillis === 'number' && st.durationMillis > 0) {
-              applyProgress(Math.min(st.positionMillis / st.durationMillis, 1));
-            }
-          });
+          const dur = ttsPlayer.duration;
+          if (dur > 0) applyProgress(Math.min(ttsPlayer.currentTime / dur, 1));
         }, 500);
-        await sound.playAsync();
+        ttsPlayer.play();
         return;
       } catch {
         // Edge TTS failed → fall back to system TTS
@@ -420,7 +417,8 @@ export default function ArticleScreen({ navigation, route }: any) {
   // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
   const stopSpeaking = () => {
     cancelledRef.current = true; // chặn continuation của speakEdge/speakSystem đang chờ
-    if (audioRef.current) { audioRef.current.stopAsync(); audioRef.current.unloadAsync(); audioRef.current = null; }
+    ttsPlayer.pause();
+    if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
     webSpeech.stop();

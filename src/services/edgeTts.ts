@@ -75,7 +75,6 @@ export function isWebVoiceHung() { return webVoiceHung; }
 export function clearWebVoiceHung() { webVoiceHung = false; }
 
 // Fallback: use expo-speech (system TTS, no network needed)
-import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 
 export type TTSOptions = {

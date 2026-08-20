@@ -308,7 +308,7 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <View style={styles.logoBadge}>
-              <Ionicons name="flash" size={18} color={Color.hot} />
+              <Ionicons name="sparkles" size={18} color={Color.hot} />
             </View>
             <View>
               <Text style={styles.brand}>NewsSummarizer</Text>

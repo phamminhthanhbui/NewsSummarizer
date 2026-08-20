@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { useVideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection } from '../services/summarize';
 import { KEYS } from '../services/storage';
@@ -58,7 +58,16 @@ export default function SettingsScreen() {
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [aiUnlocked, setAiUnlocked] = useState(false); // ẩn mục AI mặc định; mở bằng mã 016527 ở ô tìm kiếm home
   const [darkMode, setDarkMode] = useState(getThemeMode() === 'dark');
-  const audioRef = useRef<Audio.Sound | null>(null);
+  // Preview giọng đọc (blob Edge TTS) phát qua expo-video — expo-av đã bỏ
+  // (không tương thích expo-modules-core SDK 57). Không cần VideoView.
+  const previewUrlRef = useRef<string | null>(null);
+  const previewPlayer = useVideoPlayer(null, (p) => {
+    p.audioMixingMode = 'doNotMix';
+    p.addListener('playToEnd', () => {
+      setPreviewing(false);
+      if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
+    });
+  });
   const webUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const cfg = PROVIDERS.find((p) => p.id === provider);
@@ -116,11 +125,8 @@ export default function SettingsScreen() {
       speechSynthesis.cancel();
       webUtteranceRef.current = null;
     }
-    if (audioRef.current) {
-      audioRef.current.stopAsync();
-      audioRef.current.unloadAsync();
-      audioRef.current = null;
-    }
+    previewPlayer.pause();
+    if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
   };
 
   const previewVoice = async () => {
@@ -186,23 +192,14 @@ export default function SettingsScreen() {
       // Edge TTS (native + web fallback khi browser thiếu giọng)
       setPreviewing(true); // có thể bị cleanup() của utterance bị cancel reset trước đó
       const url = await speakEdge(text);
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: url },
-        { volume: 1.0 },
-        (status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setPreviewing(false);
-            revokeAudioUrl(url);
-          }
-        }
-      );
-      audioRef.current = sound;
-      await sound.setRateAsync(rate, true);
-      await sound.playAsync();
+      previewUrlRef.current = url;
+      await previewPlayer.replaceAsync(url);
+      previewPlayer.playbackRate = rate;
+      previewPlayer.play();
       // 60s: câu preview ngắn nhưng Edge TTS upstream có thể chậm; kết thúc thật
-      // do didJustFinish xử lý. Kiểm tra ref thay vì state `previewing` (closure cũ).
+      // do playToEnd xử lý. Kiểm tra ref thay vì state `previewing` (closure cũ).
       setTimeout(() => {
-        if (audioRef.current) {
+        if (previewUrlRef.current) {
           stopAudio();
           setPreviewing(false);
         }

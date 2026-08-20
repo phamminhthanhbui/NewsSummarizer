@@ -3,6 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Pressable, View, StyleSheet } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
 
@@ -77,8 +78,9 @@ const Tab = createBottomTabNavigator();
 export default function App() {
   const C = useTheme();
   return (
-    <NavigationContainer>
-      <Tab.Navigator
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <Tab.Navigator
         screenOptions={{
           headerShown: false,
           tabBarInactiveTintColor: C.textMuted,
@@ -154,6 +156,7 @@ export default function App() {
           }}
         />
       </Tab.Navigator>
-    </NavigationContainer>
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
