@@ -122,7 +122,7 @@ function extractImage(block: string): string | undefined {
   // nếu title wrap CDATA (Thanh Niên...) thì lấy nhầm. data-src cho site lazy-load.
   const desc = block.match(/<description[^>]*>([\s\S]*?)<\/description>/i);
   const haystack = desc ? desc[1] : block;
-  const img = haystack.match(/<img[^>]+(?:src|data-src)="([^"]+)"/i);
+  const img = haystack.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["']/i);
   if (img) return decode(img[1]);
   // Media RSS: BBC <media:thumbnail url>, NYT <media:content ... url> — ảnh nằm ngoài description.
   const media = block.match(/<media:(?:thumbnail|content)[^>]+url="([^"]+)"/i);

@@ -37,7 +37,8 @@ type Props = { navigation: NativeStackNavigationProp<any> };
 
 // Slide carousel phải width pixel explicit — '100%' trong horizontal FlatList
 // là circular (content container tính width theo children) → collapse 0
-const HERO_W = Dimensions.get('window').width; // hero full-bleed, chạm 2 mép màn
+// Trừ safe area ngang (notch/Dynamic Island) để không tràn
+const getHeroWidth = (insets: { left: number; right: number }) => Dimensions.get('window').width - insets.left - insets.right;
 
 // Unified categories from feeds
 const CATEGORIES = ['Tất cả', ...new Set(FEEDS.map((f) => f.category))];
@@ -113,7 +114,7 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
 
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const styles = makeStyles(useTheme()); // styles động theo dark mode
+  const styles = makeStyles(useTheme(), insets); // styles động theo dark mode + safe area
   const [items, setItems] = useState<FeedItem[]>([]);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,17 +220,18 @@ export default function HomeScreen({ navigation }: Props) {
   // → setHeroIdx(index cũ) → scroll ngược lại → oscillation, carousel đứng yên.
   useEffect(() => {
     if (heroes.length < 2 || reduceMotion) return;
+    const heroW = getHeroWidth(insets);
     const t = setInterval(() => {
       if (Date.now() - lastManualRef.current < 4000) return; // vừa bấm mũi tên xong
       const next = (heroIdxRef.current + 1) % heroes.length;
       heroIdxRef.current = next;
       heroAutoRef.current = true;
       setHeroIdx(next);
-      heroListRef.current?.scrollToOffset({ offset: next * HERO_W, animated: true });
+      heroListRef.current?.scrollToOffset({ offset: next * heroW, animated: true });
       setTimeout(() => { heroAutoRef.current = false; }, 600); // > thời gian smooth scroll (~300-400ms)
     }, 4000);
     return () => clearInterval(t);
-  }, [heroes.length, reduceMotion]);
+  }, [heroes.length, reduceMotion, insets]);
 
   // Mũi tên qua lại: modulo để slide cuối quay về slide đầu (và ngược lại)
   const goHero = useCallback((delta: number) => {
@@ -240,9 +242,9 @@ export default function HomeScreen({ navigation }: Props) {
     heroAutoRef.current = true;
     lastManualRef.current = Date.now();
     setHeroIdx(next);
-    heroListRef.current?.scrollToOffset({ offset: next * HERO_W, animated: true });
+    heroListRef.current?.scrollToOffset({ offset: next * getHeroWidth(insets), animated: true });
     setTimeout(() => { heroAutoRef.current = false; }, 600);
-  }, [heroes.length]);
+  }, [heroes.length, insets]);
 
   // Video nổi bật lên đầu strip: video từ box "Video nổi bật" (VNExpress) trước,
   // còn lại giữ thứ tự crawl. Một strip duy nhất, không nhân đôi section.
@@ -306,6 +308,7 @@ export default function HomeScreen({ navigation }: Props) {
             showsHorizontalScrollIndicator={false}
             keyExtractor={(item) => item.link}
             renderItem={heroRenderItem}
+            contentContainerStyle={{ paddingHorizontal: 0 }}
             // onScroll thay vì onMomentumScrollEnd — web (react-native-web)
             // không có momentum events, indicator sẽ không bao giờ cập nhật
             scrollEventThrottle={100}
@@ -384,15 +387,14 @@ export default function HomeScreen({ navigation }: Props) {
       >
         {/* Row 1: Brand + actions */}
         <View style={styles.headerRow}>
-          <View style={styles.headerLeft}>
-            <View style={styles.logoBadge}>
-              <Ionicons name="sparkles" size={18} color={Color.hot} />
+<View style={styles.headerLeft}>
+              <View style={styles.logoBadge}>
+                <Ionicons name="sparkles" size={18} color={Color.hot} />
+              </View>
+              <View>
+                <Text style={styles.brandSub}>Tin nhanh · Tóm tắt bằng AI</Text>
+              </View>
             </View>
-            <View>
-              <Text style={styles.brand}>NewsSummarizer</Text>
-              <Text style={styles.brandSub}>Tin nhanh · Tóm tắt bằng AI</Text>
-            </View>
-          </View>
           <View style={styles.headerActions}>
             <TouchableOpacity style={styles.iconBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
               <Ionicons name="search-outline" size={20} color="#FFF" />
@@ -589,8 +591,8 @@ export default function HomeScreen({ navigation }: Props) {
 
 // Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
 type Palette = typeof Color;
-const makeStyles = (Color: Palette) => StyleSheet.create({
-  root: { flex: 1, backgroundColor: Color.bg },
+const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left: number; right: number }) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: Color.bg, paddingBottom: insets.bottom },
 
   // Header — gradient cam đỏ kiểu Kenh14 (LinearGradient bọc ngoài)
   header: {
@@ -621,7 +623,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   date: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
   statsText: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
   // Dải 7 màu chủ đạo ở đáy header
-  themeStrip: { flexDirection: 'row', marginTop: 12, marginHorizontal: -16, marginBottom: -12, height: 4 },
+  themeStrip: { flexDirection: 'row', marginTop: 12, marginHorizontal: -16, marginBottom: -12, height: 4, overflow: 'hidden' },
   themeStripSeg: { flex: 1 },
   refreshSpin: { transform: [{ rotate: '360deg' }] },
 
@@ -654,8 +656,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   hotStrip: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border, paddingVertical: 8 },
   hotLabel: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Color.hot, paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.sm, marginHorizontal: 12 },
   hotLabelText: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.5 },
-  hotScroll: { gap: 16, paddingRight: 16, alignItems: 'center' },
-  hotItem: { maxWidth: 260 },
+  hotScroll: { gap: 16, paddingRight: 16, paddingHorizontal: insets.left + insets.right || 16, alignItems: 'center' },
+  hotItem: { maxWidth: 260, flexShrink: 1 },
   hotItemText: { fontSize: Font.caption, fontWeight: '600', color: Color.text },
 
   // Section VIDEO
@@ -665,7 +667,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   videoLabelText: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.5 },
   videoSub: { fontSize: Font.tiny, color: Color.textMuted },
   videoScroll: { paddingHorizontal: 12, gap: 10 },
-  videoCardWrap: { width: 220 },
+  videoCardWrap: { width: 220, flexShrink: 0 },
 
   // Modal — scrim phủ kín màn; search = top sheet (treo dưới status bar, keyboard
   // không che input), source = bottom sheet như ban đầu. Radius/anchor tách riêng
@@ -696,7 +698,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   // Hero full-bleed: listHeader không padding ngang, các section tự bù riêng (videoScroll 12, SectionHeader 16, ArticleCard margin 12)
   listHeader: { paddingTop: 0 },
   heroWrap: { marginBottom: 12 },
-  heroSlide: { width: HERO_W },
+  heroSlide: { width: '100%' },
   heroArrow: {
     position: 'absolute', top: 108, width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', zIndex: 2,
@@ -737,4 +739,4 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
 });
 
 // Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
-const styles = makeStyles(Color);
+const styles = makeStyles(Color, { top: 0, bottom: 0, left: 0, right: 0 });
