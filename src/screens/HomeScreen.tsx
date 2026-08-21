@@ -698,7 +698,7 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   // Hero full-bleed: listHeader không padding ngang, các section tự bù riêng (videoScroll 12, SectionHeader 16, ArticleCard margin 12)
   listHeader: { paddingTop: 0 },
   heroWrap: { marginBottom: 12 },
-  heroSlide: { width: '100%' },
+  heroSlide: { width: getHeroWidth(insets) },
   heroArrow: {
     position: 'absolute', top: 108, width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', zIndex: 2,
