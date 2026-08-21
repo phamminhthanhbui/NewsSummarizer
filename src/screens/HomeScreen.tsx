@@ -14,6 +14,7 @@ import {
   TextInput,
   Pressable,
   Dimensions,
+  AccessibilityInfo,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,7 +37,7 @@ type Props = { navigation: NativeStackNavigationProp<any> };
 
 // Slide carousel phải width pixel explicit — '100%' trong horizontal FlatList
 // là circular (content container tính width theo children) → collapse 0
-const HERO_W = Dimensions.get('window').width - 24; // listHeader paddingHorizontal 12
+const HERO_W = Dimensions.get('window').width; // hero full-bleed, chạm 2 mép màn
 
 // Unified categories from feeds
 const CATEGORIES = ['Tất cả', ...new Set(FEEDS.map((f) => f.category))];
@@ -120,6 +121,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [selectedSource, setSelectedSource] = useState('Tất cả');
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
   const [hasSearchText, setHasSearchText] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const searchInputRef = useRef<TextInput>(null);
@@ -199,7 +201,15 @@ export default function HomeScreen({ navigation }: Props) {
     return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
   }, [filtered]);
   const [heroIdx, setHeroIdx] = useState(0);
+  const [reduceMotion, setReduceMotion] = useState(false);
   const heroListRef = useRef<FlatList<FeedItem>>(null);
+
+  // Tài khoản reduce-motion của hệ thống: không auto-slide khi bật (pro-rules)
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(setReduceMotion)
+      .catch(() => setReduceMotion(false));
+  }, []);
   const heroIdxRef = useRef(0); // mirror của heroIdx cho interval (đọc state trong setInterval không đáng tin)
   const heroAutoRef = useRef(false); // true khi đang scroll chương trình: onScroll không được ghi heroIdx ngược lại
   const lastManualRef = useRef(0); // thời điểm bấm mũi tên — interval nhường người dùng 4s
@@ -208,7 +218,7 @@ export default function HomeScreen({ navigation }: Props) {
   // smooth scroll (web) phát onScroll với offset trung gian → round() ra index cũ
   // → setHeroIdx(index cũ) → scroll ngược lại → oscillation, carousel đứng yên.
   useEffect(() => {
-    if (heroes.length < 2) return;
+    if (heroes.length < 2 || reduceMotion) return;
     const t = setInterval(() => {
       if (Date.now() - lastManualRef.current < 4000) return; // vừa bấm mũi tên xong
       const next = (heroIdxRef.current + 1) % heroes.length;
@@ -219,7 +229,7 @@ export default function HomeScreen({ navigation }: Props) {
       setTimeout(() => { heroAutoRef.current = false; }, 600); // > thời gian smooth scroll (~300-400ms)
     }, 4000);
     return () => clearInterval(t);
-  }, [heroes.length]);
+  }, [heroes.length, reduceMotion]);
 
   // Mũi tên qua lại: modulo để slide cuối quay về slide đầu (và ngược lại)
   const goHero = useCallback((delta: number) => {
@@ -384,6 +394,9 @@ export default function HomeScreen({ navigation }: Props) {
             </View>
           </View>
           <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => { Keyboard.dismiss(); setShowSearchModal(true); }} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
+              <Ionicons name="search-outline" size={20} color="#FFF" />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
               <Ionicons name={refreshing ? "refresh-circle" : "refresh-outline"} size={20} color="#FFF" style={refreshing ? styles.refreshSpin : {}} />
             </TouchableOpacity>
@@ -404,27 +417,6 @@ export default function HomeScreen({ navigation }: Props) {
           {THEME_COLORS.map((t) => (
             <View key={t.key} style={[styles.themeStripSeg, { backgroundColor: t.color }]} />
           ))}
-        </View>
-
-        {/* Search inline — gõ lọc trực tiếp, không modal (input nằm trên cao
-            nên keyboard không che). Uncontrolled + debounce 600ms như cũ */}
-        <View style={styles.searchPill}>
-          <Ionicons name="search" size={17} color={Color.textMuted} />
-          <TextInput
-            ref={searchInputRef}
-            style={styles.searchInputInline}
-            placeholder="Tìm kiếm tin tức..."
-            placeholderTextColor={Color.textMuted}
-            onChangeText={handleSearchChange}
-            returnKeyType="search"
-            autoCorrect={false}
-            accessibilityLabel="Tìm kiếm"
-          />
-          {hasSearchText && (
-            <Pressable onPress={() => { searchInputRef.current?.clear(); searchTextRef.current = ''; setHasSearchText(false); setDebouncedQuery(''); }} hitSlop={8} accessibilityLabel="Xóa tìm kiếm">
-              <Ionicons name="close-circle" size={18} color={Color.textMuted} />
-            </Pressable>
-          )}
         </View>
 
       </LinearGradient>
@@ -476,22 +468,16 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      {/* Source Modal */}
+      {/* Source Modal — bottom sheet như ban đầu, scrim token theo dark mode */}
       {showSourceModal && (
-        <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true}>
-            <Pressable
-              style={[
-                styles.modalContent,
-                { marginBottom: insets.bottom },
-              ]}
-              onPress={(e) => e.stopPropagation()}
-            >
+        <View style={styles.modalOverlay} pointerEvents="box-none">
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true} />
+          <View style={[styles.modalContent, styles.modalBottom, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Chọn nguồn tin</Text>
               <TouchableOpacity onPress={() => setShowSourceModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
-                <Ionicons name="close" size={22} color={Color.textMuted} />
+                <Ionicons name="close" size={20} color={Color.textSecondary} />
               </TouchableOpacity>
             </View>
             <FlatList
@@ -501,9 +487,47 @@ export default function HomeScreen({ navigation }: Props) {
                 <SourceChip source={item} active={selectedSource === item} onPress={handleSourcePress} />
               )}
               contentContainerStyle={styles.modalListContent}
+              showsVerticalScrollIndicator={false}
             />
-            </Pressable>
-          </Pressable>
+          </View>
+        </View>
+      )}
+
+      {/* Search Modal — top sheet treo dưới status bar, keyboard không che input */}
+      {showSearchModal && (
+        <View style={styles.modalOverlay} pointerEvents="box-none">
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowSearchModal(false)} accessibilityElementsHidden={true} />
+          <View style={[styles.modalContent, styles.modalTop, { top: insets.top }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Tìm kiếm</Text>
+              <TouchableOpacity onPress={() => setShowSearchModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
+                <Ionicons name="close" size={20} color={Color.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.searchInputWrap}>
+              <Ionicons name="search-outline" size={20} color={Color.hot} />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Tìm tiêu đề, nội dung bài viết..."
+                onChangeText={handleSearchChange}
+                autoFocus
+                autoComplete="off"
+                placeholderTextColor={Color.textMuted}
+                accessibilityLabel="Nhập từ khóa tìm kiếm"
+              />
+              {hasSearchText && (
+                <TouchableOpacity onPress={() => { searchInputRef.current?.clear(); searchTextRef.current = ''; setHasSearchText(false); setDebouncedQuery(''); }} style={styles.searchClearBtn} accessibilityLabel="Xóa">
+                  <Ionicons name="close-circle" size={22} color={Color.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.searchHint}>
+              <Ionicons name="information-circle-outline" size={13} color={Color.textMuted} />
+              <Text style={styles.searchHintText}>Kết quả: {filtered.length} bài</Text>
+            </View>
+          </View>
         </View>
       )}
 
@@ -518,10 +542,6 @@ export default function HomeScreen({ navigation }: Props) {
           data={rest}
           keyExtractor={(item) => item.link}
           renderItem={renderItem}
-          initialNumToRender={8}
-          maxToRenderPerBatch={8}
-          windowSize={7}
-          removeClippedSubviews
           ListHeaderComponent={listHeader}
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
@@ -581,8 +601,12 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconBtn: { padding: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.2)' },
-  searchPill: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 44, borderRadius: 22, backgroundColor: Color.card, paddingHorizontal: 16, marginTop: 12, ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6 }, android: { elevation: 4 } }) },
-  searchInputInline: { flex: 1, fontSize: Font.body, color: Color.text, paddingVertical: 0, maxHeight: 44 },
+  searchInputWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Color.surfaceAlt, borderRadius: Radius.md, paddingHorizontal: 12, marginBottom: 16 },
+  searchInputIcon: { marginRight: 4 },
+  searchInput: { flex: 1, fontSize: Font.body, color: Color.text, paddingVertical: 12 },
+  searchClearBtn: { padding: 4 },
+  searchHint: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 4 },
+  searchHintText: { fontSize: Font.caption, color: Color.textMuted },
   logoBadge: {
     width: 38,
     height: 38,
@@ -643,26 +667,24 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   videoScroll: { paddingHorizontal: 12, gap: 10 },
   videoCardWrap: { width: 220 },
 
-  // Modal
+  // Modal — scrim phủ kín màn; search = top sheet (treo dưới status bar, keyboard
+  // không che input), source = bottom sheet như ban đầu. Radius/anchor tách riêng
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: Color.scrim },
   modalContent: {
+    position: 'absolute', left: 0, right: 0,
     backgroundColor: Color.card,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 20,
-    ...Shadow.card,
-    maxHeight: '80%',
+    paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16,
+    maxHeight: '75%',
+    ...Shadow.level4,
   },
-  modalEnter: { translateY: 0 },
-  modalExit: { translateY: 400 },
-  modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: Color.border, alignSelf: 'center', marginBottom: 16 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginBottom: 8 },
-  modalTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text },
-  modalClose: { padding: 8 },
-  modalListContent: { paddingHorizontal: 4, gap: 8, paddingBottom: 20 },
+  modalTop: { borderBottomLeftRadius: Radius.xl, borderBottomRightRadius: Radius.xl },
+  modalBottom: { bottom: 0, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Color.border, alignSelf: 'center', marginBottom: 12 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  modalTitle: { fontSize: Font.title, fontWeight: '800', color: Color.text, letterSpacing: -0.3 },
+  modalClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center', marginRight: -4 },
+  modalListContent: { paddingHorizontal: 2, paddingTop: 2, paddingBottom: 8, gap: 8 },
 
   // Source Chips (in modal) — màu active theo thương hiệu báo (inline style)
   sourceChip: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: Color.surfaceAlt, borderWidth: 1, borderColor: Color.border },
@@ -671,18 +693,19 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
 
   // List
   listContent: { paddingBottom: 32 },
-  listHeader: { paddingHorizontal: 12, paddingTop: 4 },
-  heroWrap: { marginBottom: 8 },
+  // Hero full-bleed: listHeader không padding ngang, các section tự bù riêng (videoScroll 12, SectionHeader 16, ArticleCard margin 12)
+  listHeader: { paddingTop: 0 },
+  heroWrap: { marginBottom: 12 },
   heroSlide: { width: HERO_W },
   heroArrow: {
-    position: 'absolute', top: 87, width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+    position: 'absolute', top: 108, width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', zIndex: 2,
   },
-  heroArrowLeft: { left: 8 },
-  heroArrowRight: { right: 8 },
-  heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 10 },
+  heroArrowLeft: { left: 10 },
+  heroArrowRight: { right: 10 },
+  heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 12 },
   heroDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Color.border },
-  heroDotActive: { width: 18, backgroundColor: Color.primary },
+  heroDotActive: { width: 20, backgroundColor: Color.primary },
 
   // Skeletons
   skelWrap: { paddingTop: 8 },
