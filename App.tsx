@@ -86,10 +86,10 @@ export default function App() {
 function AppTabs() {
   const C = useTheme();
   const insets = useSafeAreaInsets();
-  // Khe hở thêm dưới tab bar: máy 3 nút (insets.bottom = 0) tab bar sát nút
-  // điều hướng → thêm 8px. Máy gesture (insets.bottom > 0) vẫn giữ safe area.
-  const TAB_BAR_BASE = 49;
-  const TAB_BAR_EXTRA = 8;
+  // Vùng nút tab luôn cao 56px ở MỌ device. Tổng height = 56 + insets.bottom:
+  // phần cộng thêm chỉ là safe area (home indicator) do OS bắt buộc chừa,
+  // web/máy 3 nút insets.bottom = 0 → đúng 56.
+  const TAB_BAR_HEIGHT = 56;
   return (
       <NavigationContainer>
         <Tab.Navigator
@@ -100,8 +100,8 @@ function AppTabs() {
             backgroundColor: C.card,
             borderTopColor: C.border,
             borderTopWidth: StyleSheet.hairlineWidth,
-            height: TAB_BAR_BASE + insets.bottom + TAB_BAR_EXTRA,
-            paddingBottom: insets.bottom + TAB_BAR_EXTRA,
+            height: TAB_BAR_HEIGHT + insets.bottom,
+            paddingBottom: insets.bottom,
             paddingTop: 4,
             elevation: 8,
             shadowColor: "#000",

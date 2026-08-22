@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FEEDS, fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { fetchVideos } from '../services/videos';
@@ -109,27 +110,25 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
 
 /* ─── Compact horizontal card ─── */
 
+// Card phủ kín: ảnh full + scrim gradient + title đè lên ảnh.
+// Height cố định 150 — không đổi theo số dòng title.
 const CompactCard = React.memo(({ item, onPress }: { item: FeedItem; onPress: (i: FeedItem) => void }) => {
   const C = useTheme();
   const srcColor = SOURCE_COLORS[item.source] || C.hot;
   return (
     <TouchableOpacity style={styles.compactCard} onPress={() => onPress(item)} activeOpacity={0.85}>
-      <View style={styles.compactImgWrap}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={styles.compactImg} resizeMode="cover" />
-        ) : (
-          <View style={[styles.compactImg, styles.compactImgPh]}>
-            <Ionicons name="image-outline" size={22} color={C.textMuted} />
-          </View>
-        )}
-        <View style={styles.compactImgOverlay} />
-        <View style={[styles.compactSrcBadge, { backgroundColor: srcColor }]}>
-          <Text style={styles.compactSrcText} numberOfLines={1}>{item.source}</Text>
+      {item.image ? (
+        <Image source={{ uri: item.image }} style={styles.compactImg} resizeMode="cover" />
+      ) : (
+        <View style={[styles.compactImg, styles.compactImgPh]}>
+          <Ionicons name="image-outline" size={26} color={C.textMuted} />
         </View>
+      )}
+      <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.85)']} locations={[0.3, 0.65, 1]} style={styles.compactScrim} />
+      <View style={[styles.compactSrcBadge, { backgroundColor: srcColor }]}>
+        <Text style={styles.compactSrcText} numberOfLines={1}>{item.source}</Text>
       </View>
-      <View style={styles.compactBody}>
-        <Text style={styles.compactTitle} numberOfLines={2}>{item.title}</Text>
-      </View>
+      <Text style={styles.compactTitle} numberOfLines={3}>{item.title}</Text>
     </TouchableOpacity>
   );
 });
@@ -608,21 +607,27 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   sectionVideoIcon: { width: 20, height: 20, borderRadius: 4, backgroundColor: Color.hot, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   sectionLine: { flex: 1, height: 1, backgroundColor: Color.border, marginLeft: 10 },
 
-  /* ── Top stories strip ── */
+  /* ── Top stories strip — card phủ kín, height cố định 150 ── */
   topStoriesScroll: { paddingHorizontal: 12, paddingBottom: 4, gap: 10 },
-  compactCard: { width: 200, backgroundColor: Color.card, borderRadius: Radius.md, overflow: 'hidden', ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 }, android: { elevation: 3 }, default: { boxShadow: '0 2px 8px rgba(0,0,0,0.08)' } }) },
-  compactImgWrap: { height: 110, position: 'relative' },
+  compactCard: {
+    width: 200, height: 150, borderRadius: Radius.md, overflow: 'hidden',
+    backgroundColor: Color.skeleton,
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8 }, android: { elevation: 3 }, default: { boxShadow: '0 2px 8px rgba(0,0,0,0.12)' } }),
+  },
   compactImg: { width: '100%', height: '100%' },
   compactImgPh: { backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
-  compactImgOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 40, backgroundColor: 'rgba(0,0,0,0.15)' },
-  compactSrcBadge: { position: 'absolute', top: 8, left: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  compactSrcText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
-  compactBody: { padding: 10 },
-  compactTitle: { fontSize: Font.caption, fontWeight: '700', color: Color.text, lineHeight: 18 },
+  compactScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '70%' },
+  compactSrcBadge: { position: 'absolute', top: 8, left: 8, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, maxWidth: 110 },
+  compactSrcText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.3 },
+  compactTitle: {
+    position: 'absolute', left: 10, right: 10, bottom: 10,
+    fontSize: Font.caption, fontWeight: '800', color: '#FFF', lineHeight: 17,
+    textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
+  },
 
-  /* ── Video strip ── */
+  /* ── Video strip — cùng width 200 để height khớp strip trên ── */
   videoScroll: { paddingHorizontal: 12, paddingBottom: 4, gap: 10 },
-  videoCardWrap: { width: 220, flexShrink: 0 },
+  videoCardWrap: { width: 200, flexShrink: 0 },
 
   /* ── Modal ── */
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
