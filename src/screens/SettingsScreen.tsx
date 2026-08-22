@@ -18,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
-import { Color, Font, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
+import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
 
@@ -468,11 +468,14 @@ function SectionHeader({ title, icon, color, children }: { title: string; icon: 
   const styles = makeStyles(useTheme());
   return (
     <View style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <View style={[styles.sectionIcon, { backgroundColor: color + '1A' }]}>
-          <Ionicons name={icon as any} size={15} color={color} />
+      {/* Header section đồng bộ Home: thanh màu + icon vuông nhỏ + title + vạch kẻ */}
+      <View style={styles.sectionRow}>
+        <View style={[styles.sectionBar, { backgroundColor: color }]} />
+        <View style={[styles.sectionIcon, { backgroundColor: color }]}>
+          <Ionicons name={icon as any} size={12} color="#FFF" />
         </View>
         <Text style={styles.sectionTitle}>{title}</Text>
+        <View style={styles.sectionLine} />
       </View>
       {children}
     </View>
@@ -566,7 +569,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   headerIconBadge: {
     width: 42,
     height: 42,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.25)',
@@ -579,16 +582,18 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   themeStrip: { flexDirection: 'row', marginHorizontal: -16, height: 4 },
   themeStripSeg: { flex: 1 },
 
-  // Sections — icon badge màu riêng từng mục
+  // Sections — header kiểu Home (thanh màu + icon vuông + title + vạch kẻ), màu riêng từng mục
   section: { marginTop: 20 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  sectionIcon: { width: 28, height: 28, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
-  sectionTitle: { fontSize: Font.headline, fontWeight: '800', color: Color.text, textTransform: 'uppercase', letterSpacing: 0.4 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  sectionBar: { width: 4, height: 16, borderRadius: 2, marginRight: 8 },
+  sectionIcon: { width: 20, height: 20, borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  sectionTitle: { fontSize: 13, fontWeight: '800', color: Color.text, textTransform: 'uppercase', letterSpacing: 0.6 },
+  sectionLine: { flex: 1, height: 1, backgroundColor: Color.border, marginLeft: 10 },
 
-  // Cards — trắng, góc vuông, border mỏng + shadow nhẹ
+  // Cards — nền surface, radius md đồng bộ card Home, border mỏng + shadow nhẹ
   card: {
     backgroundColor: Color.card,
-    borderRadius: 4,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Color.border,
     padding: 16,
@@ -607,7 +612,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 11,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: Color.accentSoft,
     borderWidth: 1,
     borderColor: Color.accent,
@@ -620,7 +625,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     alignItems: 'flex-start',
     gap: 8,
     padding: 10,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
   },
   testResultOk: { backgroundColor: Color.successSoft },
   testResultFail: { backgroundColor: Color.dangerSoft },
@@ -632,7 +637,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: Color.border,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: Font.body,
@@ -652,7 +657,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderRadius: 4,
+    borderRadius: Radius.md,
     backgroundColor: Color.card,
     borderWidth: 1,
     borderColor: Color.border,
@@ -664,7 +669,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     borderColor: Color.hot,
     ...Shadow.button,
   },
-  providerCardIcon: { width: 36, height: 36, borderRadius: 4, backgroundColor: Color.hotSoft, alignItems: 'center', justifyContent: 'center' },
+  providerCardIcon: { width: 36, height: 36, borderRadius: Radius.sm, backgroundColor: Color.hotSoft, alignItems: 'center', justifyContent: 'center' },
   providerCardIconActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
   providerCardContent: { flex: 1, minWidth: 0 },
   providerCardLabel: { fontSize: Font.body, fontWeight: '600', color: Color.text },
@@ -678,19 +683,19 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 12,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: Color.surfaceAlt,
     borderWidth: 1,
     borderColor: Color.border,
   },
   selectFieldLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
   selectFieldText: { fontSize: Font.body, fontWeight: '500', color: Color.text, flex: 1 },
-  fieldIcon: { width: 30, height: 30, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  fieldIcon: { width: 30, height: 30, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
 
   // Dropdown list
   selectDropdown: {
     marginTop: 8,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: Color.card,
     borderWidth: 1,
     borderColor: Color.border,
@@ -708,7 +713,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   stepper: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1 },
   stepperLabel: { fontSize: Font.body, color: Color.textSecondary, flex: 1 },
   stepperControl: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stepperBtn: { width: 36, height: 36, borderRadius: 4, backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
+  stepperBtn: { width: 40, height: 40, borderRadius: Radius.sm, backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
   stepperValue: { fontSize: Font.headline, fontWeight: '700', color: Color.text, minWidth: 36, textAlign: 'center' },
 
   // Preview button
@@ -719,7 +724,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 12,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: Color.hot,
   },
   previewBtnActive: { backgroundColor: Color.danger },
@@ -732,7 +737,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
 
   // Save button — gradient cam→đỏ
   saveWrapper: { paddingTop: 24, paddingBottom: 16 },
-  saveBtn: { borderRadius: 4, overflow: 'hidden', ...Shadow.button },
+  saveBtn: { borderRadius: Radius.md, overflow: 'hidden', ...Shadow.button },
   saveBtnGradient: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -6,12 +6,14 @@ import {
   TouchableOpacity,
   Image,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FeedItem } from '../types';
-import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
+import { Color, Font, Radius, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -20,6 +22,7 @@ type Props = { navigation: NativeStackNavigationProp<any> };
 
 export default function SavedScreen({ navigation }: Props) {
   const [items, setItems] = useState<FeedItem[]>([]);
+  const insets = useSafeAreaInsets();
   const C = useTheme();
   const styles = makeStyles(C); // styles động theo dark mode
 
@@ -62,15 +65,15 @@ export default function SavedScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Header — kiểu Kenh14: tiêu đề + vạch đỏ, nút outline vuông */}
-      <View style={styles.header}>
+      {/* Header — tiêu đề + vạch màu, nút xoá dạng pill tint */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <View style={styles.headerLeft}>
           <View style={styles.titleBar} />
           <Text style={styles.title}>Bài đã lưu</Text>
         </View>
         {items.length > 0 && (
           <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={15} color={Color.hot} />
+            <Ionicons name="trash-outline" size={14} color={Color.hot} />
             <Text style={styles.clearText}>Xoá tất cả</Text>
           </TouchableOpacity>
         )}
@@ -81,40 +84,45 @@ export default function SavedScreen({ navigation }: Props) {
         data={items}
         keyExtractor={(item) => item.link}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} onPress={() => open(item)} activeOpacity={0.7}>
-            {item.image ? (
-              <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" />
-            ) : (
-              <View style={[styles.thumb, styles.thumbPh]}>
-                <Ionicons name="image-outline" size={22} color={C.textMuted} />
+        renderItem={({ item }) => {
+          const srcColor = SOURCE_COLORS[item.source] || Color.hot;
+          return (
+            <TouchableOpacity style={styles.card} onPress={() => open(item)} activeOpacity={0.85}>
+              {item.image ? (
+                <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" />
+              ) : (
+                <View style={[styles.thumb, styles.thumbPh]}>
+                  <Ionicons name="image-outline" size={22} color={C.textMuted} />
+                </View>
+              )}
+              <View style={styles.cardBody}>
+                <View style={styles.cardHeader}>
+                  <View style={[styles.srcBadge, { backgroundColor: srcColor }]}>
+                    <Text style={styles.srcText} numberOfLines={1}>{item.source}</Text>
+                  </View>
+                  {item.pubDate && (
+                    <Text style={styles.dim} numberOfLines={1}>{new Date(item.pubDate).toLocaleString('vi-VN')}</Text>
+                  )}
+                </View>
+                <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
               </View>
-            )}
-            <View style={styles.cardBody}>
-              <View style={styles.cardHeader}>
-                <Text style={[styles.source, { color: SOURCE_COLORS[item.source] || Color.hot }]} numberOfLines={1}>{item.source}</Text>
-                {item.pubDate && (
-                  <Text style={styles.dim}>{new Date(item.pubDate).toLocaleString('vi-VN')}</Text>
-                )}
-              </View>
-              <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.remove}
-              onPress={() => handleDelete(item.link)}
-              hitSlop={10}
-              activeOpacity={0.6}
-              accessibilityLabel="Bỏ lưu bài"
-            >
-              <Ionicons name="close" size={18} color={C.textMuted} />
+              <TouchableOpacity
+                style={styles.remove}
+                onPress={() => handleDelete(item.link)}
+                hitSlop={10}
+                activeOpacity={0.6}
+                accessibilityLabel="Bỏ lưu bài"
+              >
+                <Ionicons name="close" size={16} color={C.textMuted} />
+              </TouchableOpacity>
             </TouchableOpacity>
-          </TouchableOpacity>
-        )}
+          );
+        }}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyBadge}>
-              <Ionicons name="bookmark-outline" size={36} color={C.textMuted} />
+              <Ionicons name="bookmark-outline" size={32} color={C.textMuted} />
             </View>
             <Text style={styles.emptyText}>Chưa có bài đã lưu</Text>
             <View style={styles.emptyHintRow}>
@@ -124,6 +132,7 @@ export default function SavedScreen({ navigation }: Props) {
             </View>
           </View>
         }
+        showsVerticalScrollIndicator={false}
       />
     </View>
   );
@@ -134,70 +143,71 @@ type Palette = typeof Color;
 const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
-  // Header — tiêu đề + vạch đỏ kiểu Kenh14
+  // Header — tiêu đề + vạch màu
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingBottom: 14,
     backgroundColor: Color.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
-  title: { fontSize: Font.hero, fontWeight: '800', color: Color.text },
+  title: { fontSize: Font.title, fontWeight: '800', color: Color.text, letterSpacing: -0.2 },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     backgroundColor: Color.hotSoft,
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: Color.hot,
+    borderRadius: 999,
   },
   clearText: { fontSize: Font.caption, color: Color.hot, fontWeight: '700' },
 
   // List
-  listContent: { padding: 16, paddingBottom: 24 },
+  listContent: { padding: 12, paddingBottom: 24 },
   separator: { height: 10 },
 
-  // Card — trắng, góc vuông, border mỏng
+  // Card — cùng ngôn ngữ với card Home: nền surface, radius md, shadow nhẹ
   card: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Color.card,
-    padding: 12,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: Color.border,
+    padding: 10,
+    borderRadius: Radius.md,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 2 },
+      default: { boxShadow: '0 2px 8px rgba(0,0,0,0.08)' },
+    }),
   },
-  thumb: { width: 84, height: 84, borderRadius: 4, backgroundColor: Color.skeleton, marginRight: 12 },
+  thumb: { width: 84, height: 84, borderRadius: Radius.sm, backgroundColor: Color.skeleton, marginRight: 12 },
   thumbPh: { alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, marginRight: 8 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  source: { fontSize: Font.tiny, color: Color.hot, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase' },
-  dim: { fontSize: Font.tiny, color: Color.textMuted },
-  cardTitle: { fontSize: Font.body, fontWeight: '700', color: Color.text, lineHeight: 20 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 6 },
+  srcBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, maxWidth: 120 },
+  srcText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.3 },
+  dim: { fontSize: Font.tiny, color: Color.textMuted, flexShrink: 1 },
+  cardTitle: { fontSize: Font.body, fontWeight: '800', color: Color.text, lineHeight: 20 },
 
   // Remove button
-  remove: { width: 32, height: 32, borderRadius: 4, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  remove: { width: 32, height: 32, borderRadius: 16, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
 
-  // Empty
-  empty: { paddingTop: 120, alignItems: 'center', gap: 12 },
+  // Empty — cùng kiểu với empty Home
+  empty: { paddingTop: 96, alignItems: 'center', gap: 12, paddingHorizontal: 24 },
   emptyBadge: {
-    width: 88,
-    height: 88,
-    borderRadius: 999,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: Color.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
   },
-  emptyText: { fontSize: 16, fontWeight: '700', color: Color.text },
+  emptyText: { fontSize: 17, fontWeight: '700', color: Color.text },
   emptyHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   emptyHint: { fontSize: Font.caption, color: Color.textMuted },
 });

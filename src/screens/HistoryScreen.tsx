@@ -5,17 +5,20 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SummaryRecord } from '../types';
-import { Color, Font, useTheme } from '../constants/theme';
+import { Color, Font, Radius, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { SOURCE_COLORS } from '../services/feeds';
 
 export default function HistoryScreen({ navigation }: any) {
   const [items, setItems] = useState<SummaryRecord[]>([]);
+  const insets = useSafeAreaInsets();
   const C = useTheme();
   const styles = makeStyles(C); // styles động theo dark mode
 
@@ -49,15 +52,15 @@ export default function HistoryScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      {/* Header — kiểu Kenh14: tiêu đề + vạch đỏ, nút outline vuông */}
-      <View style={styles.header}>
+      {/* Header — tiêu đề + vạch màu, nút xoá dạng pill tint */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <View style={styles.headerLeft}>
           <View style={styles.titleBar} />
           <Text style={styles.title}>Lịch sử tóm tắt</Text>
         </View>
         {items.length > 0 && (
           <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={15} color={Color.hot} />
+            <Ionicons name="trash-outline" size={14} color={Color.hot} />
             <Text style={styles.clearText}>Xoá tất cả</Text>
           </TouchableOpacity>
         )}
@@ -68,30 +71,39 @@ export default function HistoryScreen({ navigation }: any) {
         data={items}
         keyExtractor={(item, i) => `${item.url}-${i}`}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.card}
-            activeOpacity={0.7}
-            onPress={() => handlePressItem(item)}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={[styles.src, { color: SOURCE_COLORS[item.source] || Color.hot }]} numberOfLines={1}>{item.source}</Text>
-              <Text style={styles.dim}>{new Date(item.date).toLocaleString('vi-VN')}</Text>
-            </View>
-            <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-            <Text style={styles.cardSummary} numberOfLines={3}>{item.summary}</Text>
-          </TouchableOpacity>
-        )}
+        renderItem={({ item }) => {
+          const srcColor = SOURCE_COLORS[item.source] || Color.hot;
+          return (
+            <TouchableOpacity
+              style={styles.card}
+              activeOpacity={0.85}
+              onPress={() => handlePressItem(item)}
+            >
+              <View style={styles.cardHeader}>
+                <View style={[styles.srcBadge, { backgroundColor: srcColor }]}>
+                  <Text style={styles.srcText} numberOfLines={1}>{item.source}</Text>
+                </View>
+                <View style={styles.dateRow}>
+                  <Ionicons name="time-outline" size={12} color={C.textMuted} />
+                  <Text style={styles.dim}>{new Date(item.date).toLocaleString('vi-VN')}</Text>
+                </View>
+              </View>
+              <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
+              <Text style={styles.cardSummary} numberOfLines={3}>{item.summary}</Text>
+            </TouchableOpacity>
+          );
+        }}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyBadge}>
-              <Ionicons name="document-text-outline" size={36} color={C.textMuted} />
+              <Ionicons name="document-text-outline" size={32} color={C.textMuted} />
             </View>
             <Text style={styles.emptyText}>Chưa có lịch sử tóm tắt</Text>
             <Text style={styles.emptySub}>Mở bài báo đầu tiên để bắt đầu tóm tắt</Text>
           </View>
         }
+        showsVerticalScrollIndicator={false}
       />
     </View>
   );
@@ -102,65 +114,67 @@ type Palette = typeof Color;
 const makeStyles = (Color: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Color.bg },
 
-  // Header — tiêu đề + vạch đỏ kiểu Kenh14
+  // Header — tiêu đề + vạch màu
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingBottom: 14,
     backgroundColor: Color.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
-  title: { fontSize: Font.hero, fontWeight: '800', color: Color.text },
+  title: { fontSize: Font.title, fontWeight: '800', color: Color.text, letterSpacing: -0.2 },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     backgroundColor: Color.hotSoft,
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: Color.hot,
+    borderRadius: 999,
   },
   clearText: { fontSize: Font.caption, color: Color.hot, fontWeight: '700' },
 
   // List
-  listContent: { padding: 16, paddingBottom: 24 },
+  listContent: { padding: 12, paddingBottom: 24 },
   separator: { height: 10 },
 
-  // Card — trắng, góc vuông, border mỏng
+  // Card — cùng ngôn ngữ với card Home: nền surface, radius md, shadow nhẹ
   card: {
     backgroundColor: Color.card,
     padding: 14,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: Color.border,
+    borderRadius: Radius.md,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 2 },
+      default: { boxShadow: '0 2px 8px rgba(0,0,0,0.08)' },
+    }),
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  src: { fontSize: Font.tiny, color: Color.hot, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  srcBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, maxWidth: 150 },
+  srcText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.3 },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 0, marginLeft: 8 },
   dim: { fontSize: Font.tiny, color: Color.textMuted },
 
-  cardTitle: { fontSize: Font.headline, fontWeight: '700', color: Color.text, lineHeight: 22, marginBottom: 6 },
+  cardTitle: { fontSize: Font.headline, fontWeight: '800', color: Color.text, lineHeight: 22, marginBottom: 6 },
   cardSummary: { fontSize: Font.caption, color: Color.textSecondary, lineHeight: 19 },
 
-  // Empty
-  empty: { paddingTop: 120, alignItems: 'center', gap: 12 },
+  // Empty — cùng kiểu với empty Home
+  empty: { paddingTop: 96, alignItems: 'center', gap: 12, paddingHorizontal: 24 },
   emptyBadge: {
-    width: 88,
-    height: 88,
-    borderRadius: 999,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: Color.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
   },
-  emptyText: { fontSize: 16, fontWeight: '700', color: Color.text },
-  emptySub: { fontSize: Font.caption, color: Color.textMuted, textAlign: 'center', paddingHorizontal: 24 },
+  emptyText: { fontSize: 17, fontWeight: '700', color: Color.text },
+  emptySub: { fontSize: 13, color: Color.textMuted, textAlign: 'center' },
 });
 
 // Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode

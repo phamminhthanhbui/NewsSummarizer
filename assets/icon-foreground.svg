@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FB512A"/>
+      <stop offset="100%" stop-color="#A70E1A"/>
+    </linearGradient>
+  </defs>
+  <!-- Adaptive icon foreground: glyph thu về safe zone (~66% tâm), nền trong suốt -->
+  <g transform="translate(256 256) scale(0.66) translate(-256 -256)">
+    <rect x="96" y="112" width="276" height="288" rx="30" fill="#FFFFFF"/>
+    <rect x="130" y="148" width="208" height="72" rx="12" fill="url(#brand)"/>
+    <rect x="130" y="244" width="208" height="24" rx="12" fill="url(#brand)"/>
+    <rect x="130" y="286" width="208" height="24" rx="12" fill="url(#brand)"/>
+    <rect x="130" y="328" width="132" height="24" rx="12" fill="url(#brand)"/>
+    <circle cx="364" cy="364" r="72" fill="url(#brand)" stroke="#FFFFFF" stroke-width="10"/>
+    <path transform="translate(364 364)" fill="#FFFFFF"
+      d="M0 -40 C 7 -13, 13 -7, 40 0 C 13 7, 7 13, 0 40 C -7 13, -13 7, -40 0 C -13 -7, -7 -13, 0 -40 Z"/>
+  </g>
+</svg>

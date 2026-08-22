@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
-import { Color, Font, Shadow, useTheme } from '../constants/theme';
+import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
@@ -649,12 +649,13 @@ export default function ArticleScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </View>
 
-        {/* Related articles */}
+        {/* Related articles — section header cùng ngôn ngữ với Home (vạch màu + title + line) */}
         {related.length > 0 && (
           <View style={styles.relatedSection}>
-            <View style={styles.relatedTitleRow}>
-              <Ionicons name="newspaper-outline" size={17} color={C.primary} />
-              <Text style={styles.relatedTitle}>Bài viết liên quan</Text>
+            <View style={styles.sectionRow}>
+              <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
+              <Text style={[styles.sectionTitle, { color: C.hot }]}>BÀI VIẾT LIÊN QUAN</Text>
+              <View style={styles.sectionLine} />
             </View>
             {related.map((r) => (
               <ArticleCard key={r.link} item={r} onPress={goArticle} />
@@ -799,12 +800,12 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   metaSource: { fontSize: Font.tiny, color: Color.primary, fontWeight: '700' },
   metaDot: { fontSize: Font.tiny, color: Color.textMuted },
   metaTime: { fontSize: Font.tiny, color: Color.textMuted },
-  // Summary — kiểu Kenh14: nền trắng, góc vuông (radius 4), ảnh full-bleed, badge đỏ
+  // Summary — card phủ kiểu mới: nền surface, radius md, ảnh full-bleed, badge gradient
   summaryCard: {
     marginHorizontal: 16,
     marginBottom: 16,
     backgroundColor: Color.card,
-    borderRadius: 4,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Color.border,
     overflow: 'hidden',
@@ -824,7 +825,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     gap: 5,
     paddingHorizontal: 9,
     paddingVertical: 5,
-    borderRadius: 3,
+    borderRadius: Radius.sm,
   },
   summaryLabel: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.6 },
   speakBtn: {
@@ -833,7 +834,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     gap: 5,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 3,
+    borderRadius: Radius.sm,
     borderWidth: 1,
     borderColor: Color.hot,
     backgroundColor: Color.hotSoft,
@@ -849,7 +850,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   summaryErr: {
     backgroundColor: Color.dangerSoft,
     padding: 12,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -888,7 +889,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     gap: 6,
     paddingVertical: 7,
     paddingHorizontal: 13,
-    borderRadius: 3,
+    borderRadius: Radius.sm,
     borderWidth: 1,
     borderColor: Color.border,
     backgroundColor: Color.surfaceAlt,
@@ -899,13 +900,13 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   blockImg: {
     width: '100%',
     height: 220,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     backgroundColor: Color.skeleton,
     marginBottom: 14,
   },
   videoCard: {
     marginBottom: 14,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
     overflow: 'hidden',
     backgroundColor: Color.skeleton,
     alignItems: 'center',
@@ -930,21 +931,16 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   sourceTextRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, marginRight: 8 },
   sourceName: { fontSize: Font.caption, fontWeight: '700', color: Color.primary },
   sourceDate: { fontSize: Font.caption, color: Color.textMuted },
-  // Related
+  // Related — section header cùng ngôn ngữ Home
   relatedSection: {
     borderTopWidth: 1,
     borderColor: Color.border,
-    paddingTop: 12,
+    paddingTop: 4,
   },
-  relatedTitleRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    paddingHorizontal: 16, marginBottom: 8,
-  },
-  relatedTitle: {
-    fontSize: Font.headline,
-    fontWeight: '700',
-    color: Color.text,
-  },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10 },
+  sectionBar: { width: 4, height: 16, borderRadius: 2, marginRight: 8 },
+  sectionTitle: { fontSize: 13, fontWeight: '800', letterSpacing: 0.6 },
+  sectionLine: { flex: 1, height: 1, backgroundColor: Color.border, marginLeft: 10 },
   // Floating bar
   floatBar: {
     position: 'absolute',
