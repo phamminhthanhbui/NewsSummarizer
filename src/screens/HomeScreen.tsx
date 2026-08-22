@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useScrollToTop } from '@react-navigation/native';
 import { FEEDS, fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { fetchVideos } from '../services/videos';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -92,21 +93,118 @@ const CategoryChip = React.memo(({ category, active, onPress, styles }: { catego
   );
 });
 
-/* ─── Source chip (modal) ─── */
+/* ─── Source logo (monogram tile theo màu thương hiệu) ─── */
 
-const SourceChip = React.memo(({ source, active, onPress, styles }: { source: string; active: boolean; onPress: (s: string) => void; styles: ReturnType<typeof makeStyles> }) => {
-  const C = useTheme();
-  const c = source === 'Tất cả' ? C.hot : SOURCE_COLORS[source] || C.hot;
+const SOURCE_ABBR: Record<string, string> = {
+  'Tất cả': 'TC',
+  VNExpress: 'VNE',
+  'Tuổi Trẻ': 'TT',
+  'Thanh Niên': 'TN',
+  VietNamNet: 'VNN',
+  'Dân Trí': 'DT',
+  'Người Lao Động': 'NLD',
+  'Tiền Phong': 'TP',
+  'Sài Gòn Giải Phóng': 'SG',
+  CAND: 'CA',
+  'An ninh Thủ đô': 'AN',
+  'Sức khỏe & Đời sống': 'SK',
+  'Báo Chính phủ': 'CP',
+  'Báo Giao Thông': 'GT',
+  GenK: 'GK',
+  Cafebiz: 'CF',
+  BongDaPlus: 'BD',
+  Kenh14: 'K14',
+  HelloBacSi: 'HB',
+  Soha: 'SH',
+};
+
+// active = item đang được chọn (nền brand đậm) → tile chuyển nền trắng để tương phản
+const SourceLogo = React.memo(({ source, color, size = 24, active = false }: { source: string; color: string; size?: number; active?: boolean }) => {
+  const abbr = SOURCE_ABBR[source] || source.slice(0, 2).toUpperCase();
   return (
-    <TouchableOpacity
-      style={[styles.sourceChip, active && { backgroundColor: c, borderColor: c }]}
-      onPress={() => onPress(source)}
-      activeOpacity={0.7}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.32),
+        backgroundColor: active ? '#FFFFFF' : color + '22',
+        borderWidth: 1,
+        borderColor: active ? 'rgba(255,255,255,0.4)' : color + '3D',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
     >
-      <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]}>{source}</Text>
-    </TouchableOpacity>
+      <Text
+        style={{ color, fontSize: Math.round(size * 0.42), fontWeight: '800', letterSpacing: 0.2, lineHeight: Math.round(size * 0.42) + 2 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {abbr}
+      </Text>
+    </View>
+  );
+});
+
+/* ─── Source dropdown ─── */
+
+const SourceDropdown = React.memo(({ value, onChange, styles }: { value: string; onChange: (s: string) => void; styles: ReturnType<typeof makeStyles> }) => {
+  const C = useTheme();
+  const [open, setOpen] = useState(false);
+  const currentColor = value === 'Tất cả' ? C.hot : SOURCE_COLORS[value] || C.hot;
+  return (
+    <View style={styles.dropdownWrap}>
+      <TouchableOpacity
+        style={[styles.dropdownButton, { borderColor: currentColor }]}
+        onPress={() => setOpen((o) => !o)}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel="Lọc theo nguồn tin"
+      >
+        {value === 'Tất cả' ? (
+          <View style={{ width: 20, height: 20, borderRadius: 6, backgroundColor: currentColor + '22', alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons name="funnel-outline" size={12} color={currentColor} />
+          </View>
+        ) : (
+          <SourceLogo source={value} color={currentColor} size={20} />
+        )}
+        <Text style={[styles.dropdownValue, { color: currentColor }]} numberOfLines={1}>{value}</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={C.textMuted} />
+      </TouchableOpacity>
+      {open && (
+        <>
+          <Pressable style={styles.dropdownBackdrop} onPress={() => setOpen(false)} />
+          <View style={styles.dropdownPanel}>
+            <ScrollView style={styles.dropdownList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+              {SOURCES.map((src) => {
+                const active = src === value;
+                const sc = src === 'Tất cả' ? C.hot : SOURCE_COLORS[src] || C.hot;
+                return (
+                  <TouchableOpacity
+                    key={src}
+                    style={[styles.dropdownItem, active && { backgroundColor: sc }]}
+                    onPress={() => { onChange(src); setOpen(false); }}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    {src === 'Tất cả' ? (
+                      <View style={[styles.dropdownLogo, { backgroundColor: active ? '#FFF' : C.hot + '22', borderColor: active ? 'rgba(255,255,255,0.4)' : C.hot + '3D' }]}>
+                        <Ionicons name="funnel-outline" size={13} color={C.hot} />
+                      </View>
+                    ) : (
+                      <SourceLogo source={src} color={sc} size={22} active={active} />
+                    )}
+                    <Text style={[styles.dropdownItemText, active && styles.dropdownItemTextActive]} numberOfLines={1}>{src}</Text>
+                    {active && <Ionicons name="checkmark" size={15} color="#FFF" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </>
+      )}
+    </View>
   );
 });
 
@@ -147,7 +245,6 @@ export default function HomeScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [selectedSource, setSelectedSource] = useState('Tất cả');
-  const [showSourceModal, setShowSourceModal] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [hasSearchText, setHasSearchText] = useState(false);
@@ -158,6 +255,8 @@ export default function HomeScreen({ navigation }: Props) {
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
+  // Bấm lại icon tab Trang chủ khi đang ở tab này → scroll về đầu trang
+  useScrollToTop(flatListRef);
 
   useEffect(() => () => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -267,7 +366,8 @@ export default function HomeScreen({ navigation }: Props) {
   }, []);
   const handleSourcePress = useCallback((source: string) => {
     setSelectedSource(source);
-    setShowSourceModal(false);
+    setSelectedCategory('Tất cả');
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
 
   const handleSearchChange = useCallback(async (text: string) => {
@@ -462,6 +562,15 @@ export default function HomeScreen({ navigation }: Props) {
         </ScrollView>
       </Animated.View>
 
+      {/* SOURCE FILTER — dropdown các trang báo trong config */}
+      <View style={styles.sourceWrap}>
+        <View style={styles.sourceRow}>
+          <Ionicons name="funnel-outline" size={14} color={C.textMuted} />
+          <Text style={styles.sourceLabel}>Nguồn</Text>
+          <SourceDropdown value={selectedSource} onChange={handleSourcePress} styles={styles} />
+        </View>
+      </View>
+
       {/* BREAKING NEWS TICKER */}
       {heroes.length > 0 && (
         <View style={styles.breakingStrip}>
@@ -476,31 +585,6 @@ export default function HomeScreen({ navigation }: Props) {
               </TouchableOpacity>
             ))}
           </ScrollView>
-        </View>
-      )}
-
-      {/* SOURCE MODAL */}
-      {showSourceModal && (
-        <View style={styles.modalOverlay} pointerEvents="box-none">
-          <Pressable style={styles.modalBackdrop} onPress={() => setShowSourceModal(false)} accessibilityElementsHidden={true} />
-          <View style={[styles.modalContent, { paddingBottom: insets.bottom + 16 }]}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Chọn nguồn tin</Text>
-              <TouchableOpacity onPress={() => setShowSourceModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
-                <Ionicons name="close" size={20} color={C.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={SOURCES}
-              keyExtractor={(item) => item}
-              renderItem={({ item }) => (
-                <SourceChip source={item} active={selectedSource === item} onPress={handleSourcePress} styles={styles} />
-              )}
-              contentContainerStyle={styles.modalListContent}
-              showsVerticalScrollIndicator={false}
-            />
-          </View>
         </View>
       )}
 
@@ -634,18 +718,33 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   videoScroll: { paddingHorizontal: 12, paddingBottom: 4, gap: 10 },
   videoCardWrap: { width: 200, flexShrink: 0 },
 
-  /* ── Modal ── */
-  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
-  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: Color.scrim },
-  modalContent: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: Color.card, paddingHorizontal: 16, paddingTop: 10, maxHeight: '75%', borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl, ...Shadow.level4 },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Color.border, alignSelf: 'center', marginBottom: 12 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  modalTitle: { fontSize: Font.title, fontWeight: '800', color: Color.text, letterSpacing: -0.3 },
-  modalClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center', marginRight: -4 },
-  modalListContent: { paddingHorizontal: 2, paddingTop: 2, paddingBottom: 8, gap: 8 },
-  sourceChip: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: Color.surfaceAlt, borderWidth: 1, borderColor: Color.border },
-  sourceChipText: { fontSize: Font.body, fontWeight: '600', color: Color.text },
-  sourceChipTextActive: { color: '#FFF', fontWeight: '700' },
+  /* ── Source dropdown ── */
+  sourceWrap: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Color.border },
+  sourceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8 },
+  sourceLabel: { fontSize: 12, fontWeight: '700', color: Color.textSecondary, letterSpacing: 0.2 },
+  dropdownWrap: { flex: 1, position: 'relative', zIndex: 60 },
+  dropdownButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.md,
+    backgroundColor: Color.surfaceAlt, borderWidth: 1,
+  },
+  dropdownValue: { flex: 1, fontSize: Font.body, fontWeight: '700' },
+  dropdownBackdrop: { ...StyleSheet.absoluteFillObject, zIndex: 40 },
+  dropdownPanel: {
+    position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
+    backgroundColor: Color.card, borderRadius: Radius.md, overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: Color.border,
+    maxHeight: 320, zIndex: 50, elevation: 12,
+    ...Platform.select({ default: { boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18)' } }),
+  },
+  dropdownList: { maxHeight: 320 },
+  dropdownLogo: { width: 22, height: 22, borderRadius: 7, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  dropdownItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
+  dropdownItemText: { fontSize: Font.body, fontWeight: '600', color: Color.text, flexShrink: 1 },
+  dropdownItemTextActive: { color: '#FFF', fontWeight: '700' },
 
   /* ── List ── */
   listContent: { paddingBottom: 32 },

@@ -1,11 +1,15 @@
-import React from "react";
-import { NavigationContainer } from "@react-navigation/native";
+import React, { useEffect } from "react";
+import { createNavigationContainerRef, NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Pressable, View, StyleSheet } from "react-native";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
+import * as NotificationsService from "./src/services/notifications";
+import { readFeedsCache } from "./src/services/feeds";
+
+const navigationRef = createNavigationContainerRef<any>();
 
 // Mỗi tab 1 màu chủ đạo riêng (trong 7 màu THEME_COLORS)
 const TAB_COLORS: Record<string, string> = {
@@ -76,14 +80,33 @@ const s = StyleSheet.create({
 const Tab = createBottomTabNavigator();
 
 export default function App() {
+  useEffect(() => {
+    NotificationsService.getSettings().then((s) => {
+      if (s.enabled) NotificationsService.schedule(s.hour, s.minute);
+    });
+  }, []);
+
+  useEffect(() => {
+    const openArticle = (url: string) => {
+      if (!url || !navigationRef.isReady()) return;
+      readFeedsCache()
+        .then((items) => {
+          const item = items.find((i) => i.link === url);
+          if (item) navigationRef.navigate("HomeTab", { screen: "Article", params: { item } });
+        })
+        .catch(() => {});
+    };
+    return NotificationsService.onNotificationResponse(openArticle);
+  }, []);
+
   return (
     <SafeAreaProvider>
-      <AppTabs />
+      <AppTabs navRef={navigationRef} />
     </SafeAreaProvider>
   );
 }
 
-function AppTabs() {
+function AppTabs({ navRef }: { navRef: any }) {
   const C = useTheme();
   const insets = useSafeAreaInsets();
   // Vùng nút tab luôn cao 56px ở MỌ device. Tổng height = 56 + insets.bottom:
@@ -91,7 +114,7 @@ function AppTabs() {
   // web/máy 3 nút insets.bottom = 0 → đúng 56.
   const TAB_BAR_HEIGHT = 56;
   return (
-      <NavigationContainer>
+      <NavigationContainer ref={navRef}>
         <Tab.Navigator
         screenOptions={{
           headerShown: false,

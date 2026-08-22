@@ -18,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
+import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, schedule as scheduleNotif, sendTest as sendNotifTest, isNotifSupported } from '../services/notifications';
 import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
@@ -39,7 +40,11 @@ const SECTION_COLORS = {
   model: '#059669',    // Xanh lá
   voice: '#DB2777',    // Hồng
   security: '#DC2626', // Đỏ thời sự
+  notif: '#F0A52B',    // Vàng cam (thông báo)
 };
+
+// Giờ gửi bản tin hằng ngày — chọn nhanh từ preset
+const NOTIF_TIMES = ['06:00', '07:00', '08:00', '09:00', '12:00', '18:00', '21:00'];
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -58,6 +63,9 @@ export default function SettingsScreen() {
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [aiUnlocked, setAiUnlocked] = useState(false); // ẩn mục AI mặc định; mở bằng mã 016527 ở ô tìm kiếm home
   const [darkMode, setDarkMode] = useState(getThemeMode() === 'dark');
+  const [notifOn, setNotifOn] = useState(false);
+  const [notifTime, setNotifTime] = useState('07:00');
+  const [notifSending, setNotifSending] = useState(false);
   // Preview giọng đọc (blob Edge TTS) phát qua expo-video — expo-av đã bỏ
   // (không tương thích expo-modules-core SDK 57). Không cần VideoView.
   const previewUrlRef = useRef<string | null>(null);
@@ -86,6 +94,15 @@ export default function SettingsScreen() {
     AsyncStorage.getItem(KEYS.model).then((val) => val && setModel(val));
     AsyncStorage.getItem(KEYS.pitch).then((val) => setPitch(parseFloat(val || '') || 1.0));
     AsyncStorage.getItem(KEYS.rate).then((val) => setRate(parseFloat(val || '') || 1.0));
+  }, []);
+
+  // Load trạng thái thông báo
+  useEffect(() => {
+    getNotifSettings().then((s) => {
+      setNotifOn(s.enabled);
+      const t = `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`;
+      if (NOTIF_TIMES.includes(t)) setNotifTime(t);
+    });
   }, []);
 
   // Tab navigator giữ screen mounted sẵn — đọc lại cờ unlock mỗi lần focus
@@ -221,6 +238,51 @@ export default function SettingsScreen() {
       setTestResult({ ok: false, msg: e instanceof Error ? e.message : 'Lỗi không xác định' });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const parseNotifTime = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return { hour: h, minute: m };
+  };
+
+  const handleNotifToggle = async (v: boolean) => {
+    setNotifOn(v);
+    const { hour, minute } = parseNotifTime(notifTime);
+    if (v) {
+      const granted = await ensureNotifSetup();
+      if (!granted) {
+        setNotifOn(false);
+        alert('Cần bật quyền thông báo cho TIN TỨC trong Cài đặt hệ thống.');
+        return;
+      }
+    }
+    await persistNotifEnabled(v, hour, minute);
+  };
+
+  const handleNotifTimePress = async (t: string) => {
+    setNotifTime(t);
+    const { hour, minute } = parseNotifTime(t);
+    await AsyncStorage.multiSet([
+      [KEYS.notifHour, String(hour)],
+      [KEYS.notifMinute, String(minute)],
+    ]);
+    if (notifOn) await scheduleNotif(hour, minute);
+  };
+
+  const handleNotifTest = async () => {
+    if (notifSending) return;
+    setNotifSending(true);
+    try {
+      const granted = await ensureNotifSetup();
+      if (!granted) {
+        alert('Cần bật quyền thông báo cho TIN TỨC trước khi gửi thử.');
+        return;
+      }
+      await sendNotifTest();
+      alert('Đã gửi thông báo thử — xem trong khay thông báo của máy.');
+    } finally {
+      setNotifSending(false);
     }
   };
 
@@ -412,6 +474,67 @@ export default function SettingsScreen() {
               <Text style={styles.previewBtnText}>{previewing ? 'Đang phát...' : 'Nghe thử giọng đọc'}</Text>
             </TouchableOpacity>
             <Text style={styles.fieldHint}>Ưu tiên giọng máy (đọc tức thì); giọng máy lỗi tự chuyển Edge TTS (Microsoft, cần internet).</Text>
+          </Card>
+        </SectionHeader>
+
+        {/* Thông báo Section — bản tin hằng ngày (local push) */}
+        <SectionHeader title="Thông báo" icon="notifications" color={SECTION_COLORS.notif}>
+          <Card>
+            <View style={styles.appearanceRow}>
+              <View style={styles.appearanceLeft}>
+                <View style={[styles.fieldIcon, { backgroundColor: SECTION_COLORS.notif + '1A' }]}>
+                  <Ionicons name={notifOn ? 'notifications' : 'notifications-outline'} size={16} color={SECTION_COLORS.notif} />
+                </View>
+                <View style={styles.appearanceTextWrap}>
+                  <Text style={styles.fieldLabel}>Bản tin hằng ngày</Text>
+                  <Text style={styles.fieldHint}>Gửi tin nổi bật mỗi ngày vào giờ đã chọn</Text>
+                </View>
+              </View>
+              <Switch
+                value={notifOn}
+                onValueChange={handleNotifToggle}
+                trackColor={{ false: Color.border, true: SECTION_COLORS.notif }}
+                thumbColor="#FFF"
+                disabled={!isNotifSupported}
+              />
+            </View>
+
+            {notifOn && (
+              <>
+                <Text style={styles.notifTimeLabel}>Giờ gửi</Text>
+                <View style={styles.notifTimesRow}>
+                  {NOTIF_TIMES.map((t) => {
+                    const active = notifTime === t;
+                    return (
+                      <TouchableOpacity
+                        key={t}
+                        style={[styles.notifTimeChip, active && { backgroundColor: SECTION_COLORS.notif, borderColor: SECTION_COLORS.notif }]}
+                        onPress={() => handleNotifTimePress(t)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text style={[styles.notifTimeText, active && styles.notifTimeTextActive]}>{t}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            <TouchableOpacity
+              style={[styles.previewBtn, { backgroundColor: SECTION_COLORS.notif }, notifSending && styles.testBtnBusy]}
+              onPress={handleNotifTest}
+              activeOpacity={0.8}
+              disabled={!isNotifSupported || notifSending}
+            >
+              <Ionicons name="paper-plane" size={16} color="#FFF" />
+              <Text style={styles.previewBtnText}>{notifSending ? 'Đang gửi...' : 'Gửi thông báo thử'}</Text>
+            </TouchableOpacity>
+
+            {!isNotifSupported && (
+              <Text style={styles.fieldHint}>Thông báo chỉ hoạt động trên điện thoại (Android/iOS), không hỗ trợ trên web.</Text>
+            )}
           </Card>
         </SectionHeader>
 
@@ -734,6 +857,20 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   appearanceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   appearanceLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   appearanceTextWrap: { flex: 1 },
+
+  // Thông báo — giờ gửi chips
+  notifTimeLabel: { fontSize: Font.caption, fontWeight: '700', color: Color.text, marginTop: 14, marginBottom: 8 },
+  notifTimesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  notifTimeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: Color.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Color.border,
+  },
+  notifTimeText: { fontSize: Font.caption, fontWeight: '600', color: Color.textSecondary },
+  notifTimeTextActive: { color: '#FFF', fontWeight: '700' },
 
   // Save button — gradient cam→đỏ
   saveWrapper: { paddingTop: 24, paddingBottom: 16 },

@@ -24,7 +24,8 @@
     },
     "plugins": [
       "expo-video",
-      "expo-font"
+      "expo-font",
+      ["expo-notifications", { "color": "#FB512A", "defaultChannel": "daily-digest" }]
     ]
   }
 }
