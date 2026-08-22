@@ -1,7 +1,7 @@
 // Video crawl — RSS không có video/live, phải parse trang video của báo.
 // Server crawl (server/proxy.js /api/videos), client chỉ lấy JSON.
-// CDN chặn phát trực tiếp (mp4 trả 400, hls.mediacdn.vn resolve IP private)
-// nên bấm video = mở trang gốc trong browser.
+// VNExpress/Kenh14/Soha có stream (m3u8/mp4) → phát trong popup qua /api/hls
+// proxy (CDN chặn browser gọi thẳng). Video crawl hụt stream → mở trang gốc.
 
 import Constants from 'expo-constants';
 import type { VideoItem } from '../types';

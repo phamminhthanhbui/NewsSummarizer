@@ -67,6 +67,7 @@ app.get('/api/fetch', async (req, res) => {
 const decodeHtml = (s) => s
   .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
   .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
   .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (compatible; NewsSummarizer RSS reader)' };
@@ -86,6 +87,8 @@ async function crawlKenh14() {
     const link = attr('data-share');
     if (!title || !link || seen.has(link)) continue;
     seen.add(link);
+    // data-vid là đường dẫn mp4 tương đối (kenh14cdn.com/...) — dùng làm stream
+    const vid = attr('data-vid');
     videos.push({
       title,
       link,
@@ -95,9 +98,26 @@ async function crawlKenh14() {
       pubDate: attr('data-distribution-date'),
       zone: attr('data-zone-name'),
       source: 'Kenh14',
+      stream: vid ? (vid.startsWith('http') ? vid : 'https://' + vid) : '',
     });
   }
   return videos;
+}
+
+// Soha: bài không kèm data-vid trong listing → fetch trang chi tiết để lấy mp4.
+// Giới hạn song song 5, mỗi request 8s; bài nào fail thì giữ stream rỗng
+// (popup fallback mở trang gốc).
+async function fetchSohaStream(link) {
+  try {
+    const r = await fetch(link, { headers: UA, signal: AbortSignal.timeout(8000) });
+    const h = await r.text();
+    const vid = (h.match(/data-vid="([^"]+)"/) || [])[1] || '';
+    if (!vid) return '';
+    return vid.startsWith('http') ? vid : 'https://' + vid;
+  } catch (e) {
+    console.log('[soha] stream fail', link, '→', e?.message || e);
+    return '';
+  }
 }
 
 async function crawlSoha() {
@@ -121,7 +141,26 @@ async function crawlSoha() {
       pubDate: (block.match(/time-ago" title="([^"]+)"/) || [])[1] || '',
       zone: '',
       source: 'Soha',
+      stream: '',
     });
+  }
+  // Stream có sẵn trong các player div ẩn trên listing: data-share="...video-123.htm"
+  // → data-vid. Ghép theo id cuối URL.
+  const streamById = new Map();
+  for (const block of html.split('<div class="VCSortableInPreviewMode').slice(1)) {
+    const id = (block.match(/data-share="[^"]*video-(\d+)\.htm"/) || [])[1] || '';
+    const vid = (block.match(/data-vid="([^"]+)"/) || [])[1] || '';
+    if (id && vid) streamById.set(id, vid.startsWith('http') ? vid : 'https://' + vid);
+  }
+  const idOf = (link) => (link.match(/-(\d+)\.htm$/) || [])[1] || '';
+  const need = videos.filter((v) => !streamById.has(idOf(v.link)));
+  for (let i = 0; i < need.length; i += 5) {
+    const batch = await Promise.all(need.slice(i, i + 5).map((v) => fetchSohaStream(v.link)));
+    need.slice(i, i + 5).forEach((v, j) => { v.stream = batch[j]; });
+  }
+  for (const v of videos) {
+    const id = idOf(v.link);
+    if (!v.stream && streamById.has(id)) v.stream = streamById.get(id);
   }
   return videos;
 }
@@ -155,32 +194,134 @@ async function crawlVnExpressVideo() {
   return videos;
 }
 
+// Thanh Niên: <a class="box-category-link-with-avatar" href title data-vid> + img src
+async function crawlThanhNien() {
+  const response = await fetch('https://thanhnien.vn/video.htm', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<a class="box-category-link-with-avatar').slice(1)) {
+    const href = (block.match(/href="(\/[^"]+\.htm)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const vid = (block.match(/data-vid="([^"]+)"/) || [])[1] || '';
+    const thumb = (block.match(/<img[^>]+src="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || !href.startsWith('/') || seen.has(href)) continue;
+    seen.add(href);
+    videos.push({
+      title,
+      link: 'https://thanhnien.vn' + href,
+      thumb,
+      duration: '',
+      pubDate: '',
+      zone: '',
+      source: 'Thanh Niên',
+      stream: vid ? (vid.startsWith('http') ? vid : 'https://' + vid) : '',
+    });
+  }
+  return videos;
+}
+
+// NLD: <div class="box-category-item" data-id> > <a href title> > <video data-src="...mp4">
+async function crawlNld() {
+  const response = await fetch('https://nld.com.vn/video.htm', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<div class="box-category-item"').slice(1)) {
+    const href = (block.match(/href="(\/nld\/video[^"]+\.htm)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const stream = (block.match(/data-src="(https:[^"]+\.mp4)"/) || [])[1] || '';
+    const thumb = (block.match(/poster="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    videos.push({
+      title,
+      link: 'https://nld.com.vn' + href,
+      thumb,
+      duration: '',
+      pubDate: '',
+      zone: '',
+      source: 'Người Lao Động',
+      stream,
+    });
+  }
+  return videos;
+}
+
+// Tuổi Trẻ: <article class="box-category-item" data-newsid> > <a href title data-trailer data-thumb>
+// data-trailer = "tuoitre/.../video.mp4" → stream = https://cdn2.tuoitre.vn/ + path (bỏ tiền tố tuoitre/)
+async function crawlTuoitre() {
+  const response = await fetch('https://tuoitre.vn/video/moi-nhat.htm', { headers: UA });
+  if (!response.ok) return [];
+  const html = await response.text();
+  const videos = [];
+  const seen = new Set();
+  for (const block of html.split('<article class="box-category-item"').slice(1)) {
+    const href = (block.match(/href="(\/video\/[^"]+\.htm)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const trailer = (block.match(/data-trailer="([^"]+)"/) || [])[1] || '';
+    const thumb = (block.match(/data-thumb="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const rel = trailer.replace(/^tuoitre\//, '');
+    videos.push({
+      title,
+      link: 'https://tuoitre.vn' + href,
+      thumb,
+      duration: '',
+      pubDate: '',
+      zone: '',
+      source: 'Tuổi Trẻ',
+      stream: trailer ? 'https://cdn2.tuoitre.vn/' + rel : '',
+    });
+  }
+  return videos;
+}
+
 app.get('/api/videos', async (req, res) => {
   try {
     // Nguồn nào chết thì trả list rỗng, không kéo sập cả endpoint
-    const [kenh14, soha, vnexpress] = await Promise.all([
+    const [kenh14, soha, vnexpress, thanhnien, nld, tuoitre] = await Promise.all([
       crawlKenh14().catch(() => []),
       crawlSoha().catch(() => []),
       crawlVnExpressVideo().catch(() => []),
+      crawlThanhNien().catch(() => []),
+      crawlNld().catch(() => []),
+      crawlTuoitre().catch(() => []),
     ]);
-    res.json({ videos: [...kenh14, ...soha, ...vnexpress] });
+    res.json({ videos: [...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre] });
   } catch (e) {
     res.status(502).json({ error: 'Video crawl failed', message: e.message });
   }
 });
 
-// Proxy HLS của VNExpress: CDN chặn browser phát trực tiếp (segment trả 407/406
-// theo Referer) nên server fetch hộ với Referer đúng. Playlist .m3u8 được rewrite
-// mọi URL tuyệt đối về lại /api/hls?url=... để hls.js chỉ nói chuyện với proxy.
+// Proxy media (HLS + mp4): CDN chặn browser phát trực tiếp (segment trả 407/406
+// theo Referer) nên server fetch hộ với Referer đúng theo nguồn. Playlist .m3u8
+// được rewrite mọi URL tuyệt đối về lại /api/hls?url=... để hls.js chỉ nói
+// chuyện với proxy. File mp4 đi qua thẳng, hỗ trợ Range để seek.
+const MEDIA_REFERERS = {
+  'vnecdn.net': 'https://video.vnexpress.net/',
+  'kenh14cdn.com': 'https://video.kenh14.vn/',
+  'sohanews.sohacdn.com': 'https://soha.vn/',
+  'thanhnien.mediacdn.vn': 'https://thanhnien.vn/',
+  'nld.mediacdn.vn': 'https://nld.com.vn/',
+  'cdn2.tuoitre.vn': 'https://tuoitre.vn/',
+};
+
 app.get('/api/hls', async (req, res) => {
   const url = req.query.url;
-  if (!url || typeof url !== 'string' || !/^https:\/\/[^/]*vnecdn\.net\//.test(url)) {
+  if (!url || typeof url !== 'string' || !/^https:\/\/([^/]*\.)?(vnecdn\.net|kenh14cdn\.com|sohanews\.sohacdn\.com|thanhnien\.mediacdn\.vn|nld\.mediacdn\.vn|cdn2\.tuoitre\.vn)\//.test(url)) {
     return res.status(400).json({ error: 'Missing or disallowed url' });
   }
   try {
-    const upstream = await fetch(url, {
-      headers: { ...UA, Referer: 'https://video.vnexpress.net/' },
-    });
+    const host = new URL(url).hostname;
+    const referer = Object.keys(MEDIA_REFERERS).find((k) => host === k || host.endsWith('.' + k));
+    const headers = { ...UA, Referer: referer ? MEDIA_REFERERS[referer] : 'https://video.vnexpress.net/' };
+    const range = req.headers.range;
+    if (range) headers.Range = range;
+    const upstream = await fetch(url, { headers });
     if (!upstream.ok) return res.status(upstream.status).json({ error: `Upstream ${upstream.status}` });
     const ct = upstream.headers.get('content-type') || '';
     if (url.endsWith('.m3u8') || ct.includes('mpegurl')) {
@@ -203,10 +344,28 @@ app.get('/api/hls', async (req, res) => {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       return res.send(rewritten);
     }
-    // .ts / .key: stream nguyên bản
+    // .ts / .key / .mp4: stream nguyên bản (mp4 hỗ trợ Range → seek được)
+    res.status(upstream.status);
     res.setHeader('Content-Type', ct || 'application/octet-stream');
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    return res.send(buf);
+    if (upstream.headers.get('content-range')) res.setHeader('Content-Range', upstream.headers.get('content-range'));
+    if (upstream.headers.get('accept-ranges')) res.setHeader('Accept-Ranges', upstream.headers.get('accept-ranges'));
+    const len = upstream.headers.get('content-length');
+    if (len) res.setHeader('Content-Length', len);
+    if (upstream.body) {
+      const reader = upstream.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+        res.end();
+      } catch (e) {
+        res.end();
+      }
+    } else {
+      res.send(Buffer.from(await upstream.arrayBuffer()));
+    }
   } catch (e) {
     res.status(502).json({ error: 'HLS proxy failed', message: e.message });
   }

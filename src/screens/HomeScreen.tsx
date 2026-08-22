@@ -70,8 +70,9 @@ const today = () => {
 
 /* ─── Category chip ─── */
 
-const CategoryChip = React.memo(({ category, active, onPress }: { category: string; active: boolean; onPress: (c: string) => void }) => {
-  const c = CATEGORY_COLORS[category] || Color.hot;
+const CategoryChip = React.memo(({ category, active, onPress, styles }: { category: string; active: boolean; onPress: (c: string) => void; styles: ReturnType<typeof makeStyles> }) => {
+  const C = useTheme();
+  const c = CATEGORY_COLORS[category] || C.hot;
   return (
     <TouchableOpacity
       style={[styles.pill, active && { backgroundColor: c, borderColor: c }]}
@@ -93,8 +94,9 @@ const CategoryChip = React.memo(({ category, active, onPress }: { category: stri
 
 /* ─── Source chip (modal) ─── */
 
-const SourceChip = React.memo(({ source, active, onPress }: { source: string; active: boolean; onPress: (s: string) => void }) => {
-  const c = source === 'Tất cả' ? Color.hot : SOURCE_COLORS[source] || Color.hot;
+const SourceChip = React.memo(({ source, active, onPress, styles }: { source: string; active: boolean; onPress: (s: string) => void; styles: ReturnType<typeof makeStyles> }) => {
+  const C = useTheme();
+  const c = source === 'Tất cả' ? C.hot : SOURCE_COLORS[source] || C.hot;
   return (
     <TouchableOpacity
       style={[styles.sourceChip, active && { backgroundColor: c, borderColor: c }]}
@@ -112,7 +114,7 @@ const SourceChip = React.memo(({ source, active, onPress }: { source: string; ac
 
 // Card phủ kín: ảnh full + scrim gradient + title đè lên ảnh.
 // Height cố định 150 — không đổi theo số dòng title.
-const CompactCard = React.memo(({ item, onPress }: { item: FeedItem; onPress: (i: FeedItem) => void }) => {
+const CompactCard = React.memo(({ item, onPress, styles }: { item: FeedItem; onPress: (i: FeedItem) => void; styles: ReturnType<typeof makeStyles> }) => {
   const C = useTheme();
   const srcColor = SOURCE_COLORS[item.source] || C.hot;
   return (
@@ -137,6 +139,8 @@ const CompactCard = React.memo(({ item, onPress }: { item: FeedItem; onPress: (i
 
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const C = useTheme();
+  const styles = useMemo(() => makeStyles(C, insets), [C, insets]);
   const [items, setItems] = useState<FeedItem[]>([]);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -309,7 +313,7 @@ export default function HomeScreen({ navigation }: Props) {
     <View style={styles.heroSlide}>
       <FeaturedCard item={item} onPress={goArticle} />
     </View>
-  ), [goArticle]);
+  ), [goArticle, styles]);
 
   const handleHeroScroll = useCallback((e: any) => {
     const w = e.nativeEvent.layoutMeasurement.width || 1;
@@ -357,13 +361,13 @@ export default function HomeScreen({ navigation }: Props) {
       {heroes.length > 0 && (
         <>
           <View style={styles.sectionRow}>
-            <View style={[styles.sectionBar, { backgroundColor: Color.hot }]} />
-            <Text style={[styles.sectionTitle, { color: Color.hot }]}>TIN NỔI BẬT</Text>
+            <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
+            <Text style={[styles.sectionTitle, { color: C.hot }]}>TIN NỔI BẬT</Text>
             <View style={styles.sectionLine} />
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.topStoriesScroll}>
             {heroes.map((h) => (
-              <CompactCard key={h.link} item={h} onPress={goArticle} />
+              <CompactCard key={h.link} item={h} onPress={goArticle} styles={styles} />
             ))}
           </ScrollView>
         </>
@@ -373,11 +377,11 @@ export default function HomeScreen({ navigation }: Props) {
       {sortedVideos.length > 0 && (
         <>
           <View style={styles.sectionRow}>
-            <View style={[styles.sectionBar, { backgroundColor: Color.hot }]} />
+            <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
             <View style={styles.sectionVideoIcon}>
               <Ionicons name="videocam" size={12} color="#FFF" />
             </View>
-            <Text style={[styles.sectionTitle, { color: Color.hot }]}>VIDEO</Text>
+            <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO</Text>
             <View style={styles.sectionLine} />
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoScroll}>
@@ -392,12 +396,12 @@ export default function HomeScreen({ navigation }: Props) {
 
       {/* SECTION: LATEST */}
       <View style={styles.sectionRow}>
-        <View style={[styles.sectionBar, { backgroundColor: Color.accent }]} />
-        <Text style={[styles.sectionTitle, { color: Color.accent }]}>TIN MỚI NHẤT</Text>
+        <View style={[styles.sectionBar, { backgroundColor: C.accent }]} />
+        <Text style={[styles.sectionTitle, { color: C.accent }]}>TIN MỚI NHẤT</Text>
         <View style={styles.sectionLine} />
       </View>
     </View>
-  ), [sortedVideos, heroes, heroIdx, goVideo, goHero, heroRenderItem, handleHeroScroll, goArticle]);
+  ), [sortedVideos, heroes, heroIdx, goVideo, goHero, heroRenderItem, handleHeroScroll, goArticle, styles]);
 
   return (
     <Animated.View style={[styles.root, { opacity: headerAnim }]}>
@@ -406,7 +410,7 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <View style={styles.masthead}>
-              <Ionicons name="newspaper" size={15} color="#FFF" />
+              <Image source={require('../../assets/icon.png')} style={styles.mastheadImg} resizeMode="cover" />
             </View>
             <View>
               <Text style={styles.brand}>TIN TỨC</Text>
@@ -415,10 +419,10 @@ export default function HomeScreen({ navigation }: Props) {
           </View>
           <View style={styles.headerRight}>
             <TouchableOpacity style={styles.headerIcon} onPress={handleSearchToggle} activeOpacity={0.7} accessibilityLabel="Tìm kiếm">
-              <Ionicons name={showSearch ? 'close' : 'search-outline'} size={19} color={Color.text} />
+              <Ionicons name={showSearch ? 'close' : 'search-outline'} size={19} color={C.text} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.headerIcon} onPress={onRefresh} activeOpacity={0.7} accessibilityLabel="Làm mới" disabled={refreshing}>
-              <Ionicons name={refreshing ? 'refresh-circle' : 'refresh-outline'} size={19} color={Color.text} />
+              <Ionicons name={refreshing ? 'refresh-circle' : 'refresh-outline'} size={19} color={C.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -426,12 +430,12 @@ export default function HomeScreen({ navigation }: Props) {
         {/* SEARCH BAR */}
         {showSearch && (
           <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={16} color={Color.hot} />
+            <Ionicons name="search-outline" size={16} color={C.hot} />
             <TextInput
               ref={searchInputRef}
               style={styles.searchInput}
               placeholder="Tìm tiêu đề, nội dung..."
-              placeholderTextColor={Color.textMuted}
+              placeholderTextColor={C.textMuted}
               value={searchText}
               onChangeText={(t) => {
                 setSearchText(t);
@@ -442,7 +446,7 @@ export default function HomeScreen({ navigation }: Props) {
             />
             {hasSearchText && (
               <TouchableOpacity onPress={() => { searchInputRef.current?.clear(); setSearchText(''); setHasSearchText(false); setDebouncedQuery(''); }} accessibilityLabel="Xóa">
-                <Ionicons name="close-circle" size={18} color={Color.textMuted} />
+                <Ionicons name="close-circle" size={18} color={C.textMuted} />
               </TouchableOpacity>
             )}
           </View>
@@ -453,7 +457,7 @@ export default function HomeScreen({ navigation }: Props) {
       <Animated.View style={[styles.categoryWrap, { opacity: categoryAnim, transform: [{ translateY: categoryAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
           {CATEGORIES.map((cat) => (
-            <CategoryChip key={cat} category={cat} active={selectedCategory === cat} onPress={handleCategoryPress} />
+            <CategoryChip key={cat} category={cat} active={selectedCategory === cat} onPress={handleCategoryPress} styles={styles} />
           ))}
         </ScrollView>
       </Animated.View>
@@ -484,14 +488,14 @@ export default function HomeScreen({ navigation }: Props) {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Chọn nguồn tin</Text>
               <TouchableOpacity onPress={() => setShowSourceModal(false)} style={styles.modalClose} accessibilityLabel="Đóng">
-                <Ionicons name="close" size={20} color={Color.textSecondary} />
+                <Ionicons name="close" size={20} color={C.textSecondary} />
               </TouchableOpacity>
             </View>
             <FlatList
               data={SOURCES}
               keyExtractor={(item) => item}
               renderItem={({ item }) => (
-                <SourceChip source={item} active={selectedSource === item} onPress={handleSourcePress} />
+                <SourceChip source={item} active={selectedSource === item} onPress={handleSourcePress} styles={styles} />
               )}
               contentContainerStyle={styles.modalListContent}
               showsVerticalScrollIndicator={false}
@@ -515,7 +519,7 @@ export default function HomeScreen({ navigation }: Props) {
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
               <View style={styles.emptyIcon}>
-                <Ionicons name="file-tray-outline" size={32} color={Color.textMuted} />
+                <Ionicons name="file-tray-outline" size={32} color={C.textMuted} />
               </View>
               <Text style={styles.emptyText}>Không có bài báo</Text>
               <Text style={styles.emptySub}>
@@ -535,8 +539,8 @@ export default function HomeScreen({ navigation }: Props) {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor={Color.primary}
-              colors={[Color.primary]}
+              tintColor={C.primary}
+              colors={[C.primary]}
               progressViewOffset={insets.top + 80}
             />
           }
@@ -565,7 +569,8 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  masthead: { width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Color.hot, alignItems: 'center', justifyContent: 'center' },
+  masthead: { width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Color.hot, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  mastheadImg: { width: 34, height: 34 },
   brand: { fontSize: Font.title, fontWeight: '900', color: Color.text, letterSpacing: 0.8 },
   brandDate: { fontSize: Font.tiny, color: Color.textMuted, marginTop: 1, letterSpacing: 0.1 },
   headerIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
@@ -657,5 +662,3 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   emptyBtn: { marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 999, backgroundColor: Color.primary, flexDirection: 'row', alignItems: 'center', gap: 6, ...Shadow.card },
   emptyBtnText: { color: '#FFF', fontWeight: '700', fontSize: 13 },
 });
-
-const styles = makeStyles(Color, { top: 0, bottom: 0, left: 0, right: 0 });

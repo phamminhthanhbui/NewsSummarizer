@@ -13,23 +13,30 @@ interface Props { video: VideoItem; onClose: () => void; }
 
 // Web: Chrome KHÔNG chơi HLS native → hls.js phát qua proxy /api/hls
 // (CDN vnecdn chặn browser gọi segment trực tiếp, 407/406 theo Referer).
-function WebHlsPlayer({ stream, width, height }: { stream: string; width: number; height: number }) {
+// Stream mp4 (Kenh14/Soha) phát bằng <video> thường qua cùng proxy — server
+// chuyển tiếp kèm Range nên seek được.
+function WebVideoPlayer({ stream, width, height }: { stream: string; width: number; height: number }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const isHls = /\.m3u8(\?|$)/i.test(stream);
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const src = `${PROXY_BASE}/api/hls?url=${encodeURIComponent(stream)}`;
-    let hls: Hls | null = null;
-    if (Hls.isSupported()) {
-      hls = new Hls();
-      hls.loadSource(src);
-      hls.attachMedia(video);
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src; // Safari chơi HLS native
+    if (isHls) {
+      let hls: Hls | null = null;
+      if (Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src; // Safari chơi HLS native
+      }
+      video.play().catch(() => {}); // autoplay có thể bị chặn → user bấm play qua controls
+      return () => { if (hls) hls.destroy(); };
     }
-    video.play().catch(() => {}); // autoplay có thể bị chặn → user bấm play qua controls
-    return () => { if (hls) hls.destroy(); };
-  }, [stream]);
+    video.src = src; // mp4: <video> phát trực tiếp qua proxy
+    video.play().catch(() => {});
+  }, [stream, isHls]);
   return (
     <video
       ref={videoRef}
@@ -53,9 +60,9 @@ function NativeVideoPlayer({ stream, width, height }: { stream: string; width: n
   );
 }
 
-// Popup phát video nổi bật ngay trong app. Video có stream HLS (VNExpress) phát
-// trực tiếp; video KHÔNG có stream (Kenh14/Soha — CDN DRM, hls.mediacdn.vn IP
-// private) hiện thumb + nút mở tại nguồn thay vì nhảy thẳng ra browser.
+// Popup phát video nổi bật ngay trong app. Video có stream (VNExpress HLS m3u8,
+// Kenh14/Soha mp4) phát trực tiếp qua proxy; video KHÔNG có stream (CDN chặn,
+// crawl lấy hụt) hiện thumb + nút mở tại nguồn thay vì nhảy thẳng ra browser.
 // Chỉ mount khi có video → hooks ổn định.
 export default function VideoModal({ video, onClose }: Props) {
   const C = useTheme();
@@ -92,7 +99,7 @@ export default function VideoModal({ video, onClose }: Props) {
           {/* Player hoặc thumb fallback */}
           {playable ? (
             Platform.OS === 'web'
-              ? <WebHlsPlayer stream={video.stream || ''} width={w} height={h} />
+              ? <WebVideoPlayer stream={video.stream || ''} width={w} height={h} />
               : <NativeVideoPlayer stream={video.stream || ''} width={w} height={h} />
           ) : (
             <TouchableOpacity style={{ width: w, height: h }} onPress={() => Linking.openURL(video.link)} activeOpacity={0.85} accessibilityLabel="Mở video tại nguồn">

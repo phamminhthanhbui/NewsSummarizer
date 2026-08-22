@@ -277,6 +277,11 @@ export default function ArticleScreen({ navigation, route }: any) {
   }, [summary]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Tự hiệu chỉnh tốc độ đọc thực RIÊNG CHO TỪNG rate (ms/ký tự đo được). Không quy đổi
+  // về rate=1 rồi chia lại: rate TTS không tuyến tính (nén pause nhanh hơn ở tốc độ cao)
+  // nên ước lượng tuyến tính bị dài → highlight trễ hơn giọng. Đo thẳng tại rate đang dùng,
+  // lần sau cùng tốc độ sẽ khớp ngay.
+  const sysCalibRef = useRef<Record<string, number>>({});
 
   // Reset highlight khi summary đổi
   useEffect(() => {
@@ -338,7 +343,7 @@ export default function ArticleScreen({ navigation, route }: any) {
             boundarySeen = true;
             applyProgress(Math.min(charIndex / Math.max(summary.length, 1), 1));
           });
-          const estMs = Math.max((summary.length / 16) * 1000, 3000) / rate; // ~16 ký tự/giây tiếng Việt
+          const estMs = Math.max((summary.length / 10) * 1000, 3000) / rate; // ~10 ký tự/giây tiếng Việt đọc thực
           const t0 = Date.now();
           intervalRef.current = setInterval(() => {
             if (boundarySeen) return; // boundary đang dẫn highlight rồi
@@ -391,9 +396,24 @@ export default function ArticleScreen({ navigation, route }: any) {
         // Edge TTS failed → fall back to system TTS
       }
 
-      // Fallback: expo-speech (system TTS) — không có timing, nội suy theo thời gian ước tính
+      // Fallback: expo-speech (system TTS) — không có timing, nội suy theo thời gian ước tính.
+      // Ước lượng ưu tiên ms/ký tự đã đo TẠI rate này (sysCalibRef); chưa có thì mặc định
+      // 90ms/char ở rate 1 và chia tuyến tính theo rate (tạm, lần sau sẽ hiệu chỉnh).
       if (cancelledRef.current) return; // Edge TTS fail nhưng đã dừng/thoát rồi
-      const sysEstMs = Math.max((text.length / 16) * 1000, 3000) / rate;
+      const rateKey = rate.toFixed(1);
+      let sysMsPerChar = sysCalibRef.current[rateKey];
+      if (!sysMsPerChar) {
+        // Chưa đo tại rate này: seed từ bản đo ở rate gần nhất, co giãn phi tuyến nhẹ
+        // (rate cao nén pause nhanh hơn tuyến tính) để đỡ trễ ngay lần đọc đầu.
+        const keys = Object.keys(sysCalibRef.current).map(Number);
+        if (keys.length) {
+          const near = keys.reduce((a, b) => Math.abs(a - rate) < Math.abs(b - rate) ? a : b);
+          sysMsPerChar = sysCalibRef.current[near.toFixed(1)] * Math.pow(near / rate, 1.15);
+        } else {
+          sysMsPerChar = 90 / Math.max(rate, 0.01);
+        }
+      }
+      const sysEstMs = Math.max(text.length * sysMsPerChar, 3000);
       const sysT0 = Date.now();
       intervalRef.current = setInterval(() => {
         if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
@@ -401,6 +421,9 @@ export default function ArticleScreen({ navigation, route }: any) {
       }, 400);
 
       await speakSystem(text, { pitch, rate });
+      // Đo tốc độ THỰC tại rate này và lưu riêng — lần sau cùng tốc độ highlight khớp chính xác
+      const measuredMs = Date.now() - sysT0;
+      if (text.length > 20 && measuredMs > 500) sysCalibRef.current[rateKey] = measuredMs / text.length;
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setSpeaking(false);
       setHighlightWordIndex(-1);
@@ -474,8 +497,9 @@ export default function ArticleScreen({ navigation, route }: any) {
     // Phân loại đoạn: dòng gạch đầu dòng (- / • / *) = điểm nhấn, đoạn đầu tiên = lead
     const isBullet = (s: string) => /^[-•*]\s/.test(s);
 
-    if (isWeb && paraWords.length > 0) {
-      // WEB: word-level karaoke highlighting PER PARAGRAPH + interleaved media
+    if (paraWords.length > 0) {
+      // Word-level karaoke highlighting PER PARAGRAPH + interleaved media
+      // (cả web lẫn native — highlightWordIndex được applyProgress cập nhật chung)
       const renderPara = (pi: number) => {
         const words = paraWords[pi];
         if (!words) return null; // guard: index lệch (không xảy ra khi wordMap là useMemo, nhưng chặn crash)
@@ -519,7 +543,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       return nodes;
     }
 
-    // NATIVE: paragraph-level highlighting with interleaved media
+    // Fallback (summary trống/từ vựng rỗng): paragraph-level highlighting với interleaved media
     const renderParaNative = (i: number) => {
       const p = paras[i];
       const bullet = isBullet(p);
