@@ -23,7 +23,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
-import { speakEdge, warmEdgeTts, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
+import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 
@@ -270,11 +270,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Pre-warm cache TTS: summary vừa hiện là tổng hợp NGẦM ngay (fire-and-forget),
   // user click Nghe sau đó = cache hit tức thì, khỏi chờ 5-30s tổng hợp.
   // Text phải giống hệt toggleSpeak (replace \n) để key cache khớp.
-  useEffect(() => {
-    if (!summary) return;
-    const text = summary.replace(/\n+/g, '， ');
-    warmEdgeTts(text);
-  }, [summary]);
+  // [Edge TTS đã chuyển thành fallback nên không warm nữa]
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tự hiệu chỉnh tốc độ đọc thực RIÊNG CHO TỪNG rate (ms/ký tự đo được). Không quy đổi
@@ -368,23 +364,53 @@ export default function ArticleScreen({ navigation, route }: any) {
         }
       }
 
-      // Native + web fallback: Edge TTS blob audio — không có word timing,
-      // highlight nội suy từ tiến trình phát (position/duration): từ đang đọc
-      // suy ra đoạn. (ponytail: muốn timing chính xác phải parse WordBoundary
-      // events từ Edge TTS websocket — chưa cần)
+      // NATIVE: ưu tiên expo-speech (thư viện RN, offline, không cần proxy/mạng).
+      // Không có word timing → highlight nội suy theo thời gian ước tính, hiệu chỉnh
+      // ms/ký tự riêng cho từng rate (sysCalibRef). Nếu fail (thiếu giọng vi) →
+      // fallback Edge TTS.
+      // Web: sau Web Speech fail → đi thẳng Edge TTS (expo-speech trên web kém ổn định).
       const text = summary.replace(/\n+/g, '， ');
+      if (!isWeb) {
+        try {
+          if (cancelledRef.current) return;
+          const rateKey = rate.toFixed(1);
+          let sysMsPerChar = sysCalibRef.current[rateKey];
+          if (!sysMsPerChar) {
+            const keys = Object.keys(sysCalibRef.current).map(Number);
+            if (keys.length) {
+              const near = keys.reduce((a, b) => Math.abs(a - rate) < Math.abs(b - rate) ? a : b);
+              sysMsPerChar = sysCalibRef.current[near.toFixed(1)] * Math.pow(near / rate, 1.15);
+            } else {
+              sysMsPerChar = 90 / Math.max(rate, 0.01);
+            }
+          }
+          const sysEstMs = Math.max(text.length * sysMsPerChar, 3000);
+          const sysT0 = Date.now();
+          intervalRef.current = setInterval(() => {
+            if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
+            applyProgress(Math.min((Date.now() - sysT0) / sysEstMs, 0.98));
+          }, 400);
 
-      // Try Edge TTS (native + web fallback). Cache đã được warm ngầm khi summary
-      // hiện (warmEdgeTts) nên thường là cache hit tức thì.
+          await speakSystem(text, { pitch, rate });
+          const measuredMs = Date.now() - sysT0;
+          if (text.length > 20 && measuredMs > 500) sysCalibRef.current[rateKey] = measuredMs / text.length;
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          setSpeaking(false);
+          setHighlightWordIndex(-1);
+          setHighlightParaIndex(-1);
+          return;
+        } catch {
+          // expo-speech fail (thiếu giọng vi) → fallback Edge TTS bên dưới
+        }
+      }
+
+      // Edge TTS (web fallback sau Web Speech; native fallback sau expo-speech).
       try {
         const url = await speakEdge(text);
-        // Đã dừng/thoát trong lúc fetch → bỏ kết quả, không phát nữa
         if (cancelledRef.current) { revokeAudioUrl(url); return; }
         ttsUrlRef.current = url;
-        await ttsPlayer.replaceAsync(url);
+        ttsPlayer.replace(url);
         ttsPlayer.playbackRate = rate;
-        // Highlight theo tiến trình phát (currentTime/duration).
-        // Kiểm tra cancelledRef thay vì state `speaking` (closure giữ giá trị cũ)
         intervalRef.current = setInterval(() => {
           if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
           const dur = ttsPlayer.duration;
@@ -393,41 +419,8 @@ export default function ArticleScreen({ navigation, route }: any) {
         ttsPlayer.play();
         return;
       } catch {
-        // Edge TTS failed → fall back to system TTS
+        // Edge TTS cũng fail → outer catch cleanup
       }
-
-      // Fallback: expo-speech (system TTS) — không có timing, nội suy theo thời gian ước tính.
-      // Ước lượng ưu tiên ms/ký tự đã đo TẠI rate này (sysCalibRef); chưa có thì mặc định
-      // 90ms/char ở rate 1 và chia tuyến tính theo rate (tạm, lần sau sẽ hiệu chỉnh).
-      if (cancelledRef.current) return; // Edge TTS fail nhưng đã dừng/thoát rồi
-      const rateKey = rate.toFixed(1);
-      let sysMsPerChar = sysCalibRef.current[rateKey];
-      if (!sysMsPerChar) {
-        // Chưa đo tại rate này: seed từ bản đo ở rate gần nhất, co giãn phi tuyến nhẹ
-        // (rate cao nén pause nhanh hơn tuyến tính) để đỡ trễ ngay lần đọc đầu.
-        const keys = Object.keys(sysCalibRef.current).map(Number);
-        if (keys.length) {
-          const near = keys.reduce((a, b) => Math.abs(a - rate) < Math.abs(b - rate) ? a : b);
-          sysMsPerChar = sysCalibRef.current[near.toFixed(1)] * Math.pow(near / rate, 1.15);
-        } else {
-          sysMsPerChar = 90 / Math.max(rate, 0.01);
-        }
-      }
-      const sysEstMs = Math.max(text.length * sysMsPerChar, 3000);
-      const sysT0 = Date.now();
-      intervalRef.current = setInterval(() => {
-        if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
-        applyProgress(Math.min((Date.now() - sysT0) / sysEstMs, 0.98));
-      }, 400);
-
-      await speakSystem(text, { pitch, rate });
-      // Đo tốc độ THỰC tại rate này và lưu riêng — lần sau cùng tốc độ highlight khớp chính xác
-      const measuredMs = Date.now() - sysT0;
-      if (text.length > 20 && measuredMs > 500) sysCalibRef.current[rateKey] = measuredMs / text.length;
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-      setSpeaking(false);
-      setHighlightWordIndex(-1);
-      setHighlightParaIndex(-1);
     } catch {
       setSpeaking(false);
       setHighlightWordIndex(-1);
@@ -480,7 +473,10 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Bỏ same-host filter: nhiều site để ảnh ở subdomain CDN khác (vd vnecnd.net vs vnexpress.net);
   // isEditorialImage() ở summarize.ts đã chặn svg/gif/icon + thumb w<400, Jina strip aside/sidebar rồi.
   const renderSummaryNodes = () => {
-    const media = blocks.filter((b) => b.type === 'video' || b.type === 'image');
+    // Summary là tóm tắt chữ thuần — không đan xen ảnh/video (card đã có ảnh chính
+    // ở đầu). Tránh hẳn ảnh/video không liên quan (widget video liên quan, thumbnail
+    // bài khác, placeholder) lọt vào tóm tắt.
+    const media: ArticleBlock[] = [];
     const paras = summary.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     const nodes: any[] = [];
 

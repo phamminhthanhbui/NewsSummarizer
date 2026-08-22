@@ -4,6 +4,7 @@
 import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getProxyBase } from '../utils/proxy';
 
 export type LLMProvider = 'nvidia' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'custom';
 
@@ -214,9 +215,8 @@ async function sendLlmRequest(
   const supportsCorsNatively = ['openrouter', 'google'];
   const useNativeCors = isWeb && supportsCorsNatively.includes(provider);
 
-  // Local proxy server (server/proxy.js) — runs on localhost:3001
-  // Configure via EXPO_PUBLIC_PROXY_URL env var or default to localhost
-  const localProxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (isWeb ? 'http://localhost:3001' : '');
+  // Local proxy server (server/proxy.js) — tự nhận IP LAN/localhost/EXPO_PUBLIC_PROXY_URL
+  const localProxyUrl = isWeb ? getProxyBase() : '';
 
   // Use CORS Anywhere proxy for providers that don't support CORS
   const corsProxy = isWeb && !useNativeCors && localProxyUrl
@@ -265,16 +265,22 @@ export async function summarizeWithProvider(
   model: string,
   customBaseUrl?: string,
 ): Promise<string> {
-  const prompt = `Bạn là biên tập viên tóm tắt tin tức. Tóm tắt bài báo sau bằng tiếng Việt, đầy đủ và mạch lạc, theo cấu trúc:
-- Mở đầu: 1-2 câu nêu sự kiện chính và bối cảnh.
-- Nội dung chính: dùng gạch đầu dòng (-) liệt kê các ý quan trọng, giữ nguyên số liệu, tên riêng, địa điểm, thời gian.
-- Kết luận: 1-2 câu nêu kết quả hoặc ý nghĩa của sự kiện.
-Viết tự nhiên, mạch lạc, không sao chép nguyên văn, không thêm thông tin không có trong bài. Chỉ trả về nội dung tóm tắt.`;
+  const prompt = `Bạn là biên tập viên tin tức. Viết TÓM TẮT bằng tiếng Việt vừa phải: khoảng 5-6 câu (100-140 từ), chi tiết nhưng đầy đủ, không quá dài cũng không quá ngắn.
+Cấu trúc: 1-2 câu đầu nêu sự kiện chính và bối cảnh; các câu giữa nêu diễn biến, nguyên nhân và điểm quan trọng; câu cuối nêu kết quả hoặc ý nghĩa.
+Giữ số liệu, tên riêng, địa điểm, thời gian. Không sao chép nguyên văn, không thêm thông tin không có trong bài, không lan man chi tiết vụn vặt.
+Chỉ trả về phần tóm tắt.`;
 
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
 
-  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, articleText, 1024, customBaseUrl);
+  // Cắt input quá dài → model tập trung vào phần đầu (thường chứa ý chính),
+  // giảm chi phí/latency và hạn chế bản tóm tắt lan man.
+  const MAX_INPUT_CHARS = 4000;
+  const inputText = articleText.length > MAX_INPUT_CHARS
+    ? articleText.slice(0, MAX_INPUT_CHARS) + '\n…(phần sau đã cắt)'
+    : articleText;
+
+  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 350, customBaseUrl);
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
 
   // Parse response based on provider
@@ -390,6 +396,7 @@ const NON_EDITORIAL_FILENAME_PATTERNS = [
   /tracking|pixel|beacon/i,       // tracking pixels
   /social|share|facebook|zalo|tiktok|instagram|youtube/i, // social icons — KHÔNG viết tắt fb/tw/ig/yt: khớp giữa chuỗi (vd signature CDN "...Jdpweig") chặn nhầm ảnh thật
   /newslette|newsletter/i,          // newsletter signup banners
+  /no-ava|no_ava|default-ava|avatar-default|placeholder|thumb-default/i, // placeholder avatar (Tiền Phong/TP NOW...)
 ];
 // Fake video: .gif.mp4, .webp.mp4 = animated images, not real videos
 const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
@@ -533,7 +540,7 @@ export function blocksToText(blocks: ArticleBlock[]): string {
 // Ưu tiên qua proxy local (không dính CORS + có retry khi Jina 503);
 // fallback gọi thẳng nếu không có proxy.
 export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {
-  const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (Platform.OS === 'web' ? 'http://localhost:3001' : '');
+  const proxyUrl = getProxyBase();
   const jinaHeaders = {
     'Accept': 'text/markdown',
     'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',

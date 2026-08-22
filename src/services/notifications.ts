@@ -23,6 +23,13 @@ if (isNotifSupported) {
 
 const CHANNEL_ID = 'daily-digest';
 
+// Parse "HH:MM" hợp lệ (0-23 giờ, 0-59 phút), trả null nếu sai
+export function parseTime(s: string): { hour: number; minute: number } | null {
+  const m = s.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  return { hour: +m[1], minute: +m[2] };
+}
+
 export async function ensureSetup(): Promise<boolean> {
   if (!isNotifSupported || !Notifications) return false;
   if (Platform.OS === 'android') {
@@ -40,32 +47,54 @@ export async function ensureSetup(): Promise<boolean> {
   return true;
 }
 
-export async function getSettings(): Promise<{ enabled: boolean; hour: number; minute: number }> {
+export async function getSettings(): Promise<{ enabled: boolean; times: string[] }> {
   const enabled = (await AsyncStorage.getItem(KEYS.notifEnabled)) === '1';
-  const hour = parseInt((await AsyncStorage.getItem(KEYS.notifHour)) || '7', 10);
-  const minute = parseInt((await AsyncStorage.getItem(KEYS.notifMinute)) || '0', 10);
-  return { enabled, hour, minute };
+  let times: string[] = [];
+  const raw = await AsyncStorage.getItem(KEYS.notifTimes);
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) times = arr.filter((t): t is string => typeof t === 'string' && !!parseTime(t));
+    } catch {}
+  }
+  // Migrate từ phiên bản cũ (1 giờ cố định @notif_hour/@notif_minute)
+  if (!raw) {
+    const hour = parseInt((await AsyncStorage.getItem(KEYS.notifHour)) || '', 10);
+    const minute = parseInt((await AsyncStorage.getItem(KEYS.notifMinute)) || '', 10);
+    if (hour >= 0 && hour <= 23) times = [`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`];
+  }
+  if (!times.length) times = ['07:00'];
+  return { enabled, times };
 }
 
-export async function setEnabled(enabled: boolean, hour: number, minute: number): Promise<boolean> {
+export async function setEnabled(enabled: boolean, times: string[]): Promise<boolean> {
   await AsyncStorage.multiSet([
     [KEYS.notifEnabled, enabled ? '1' : '0'],
-    [KEYS.notifHour, String(hour)],
-    [KEYS.notifMinute, String(minute)],
+    [KEYS.notifTimes, JSON.stringify(times)],
   ]);
   if (enabled) {
     const granted = await ensureSetup();
     if (!granted) return false;
-    await schedule(hour, minute);
+    await schedule(times);
     return true;
   }
   if (Notifications) await Notifications.cancelAllScheduledNotificationsAsync();
   return true;
 }
 
-export async function schedule(hour: number, minute: number) {
-  if (!isNotifSupported || !Notifications) return;
-  await Notifications.cancelAllScheduledNotificationsAsync();
+// Lưu giờ (không bật/tắt) rồi reschedule nếu đang bật
+export async function saveTimes(times: string[]): Promise<boolean> {
+  await AsyncStorage.setItem(KEYS.notifTimes, JSON.stringify(times));
+  const enabled = (await AsyncStorage.getItem(KEYS.notifEnabled)) === '1';
+  if (enabled) {
+    await schedule(times);
+    return true;
+  }
+  return true;
+}
+
+async function scheduleOne(hour: number, minute: number) {
+  if (!Notifications) return;
   let title = 'Tin tức mới đã có';
   let body = 'Mở ứng dụng để xem tin nóng nhất hôm nay';
   let link = '';
@@ -92,6 +121,18 @@ export async function schedule(hour: number, minute: number) {
       channelId: Platform.OS === 'android' ? CHANNEL_ID : undefined,
     },
   });
+}
+
+// Lên lịch 1 bản tin hằng ngày cho MỖI khung giờ đã chọn (dedupe giờ trùng)
+export async function schedule(times: string[]) {
+  if (!isNotifSupported || !Notifications) return;
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  const clean = times
+    .map(parseTime)
+    .filter((t): t is { hour: number; minute: number } => t !== null)
+    .filter((t, i, a) => a.findIndex((x) => x.hour === t.hour && x.minute === t.minute) === i)
+    .sort((a, b) => a.hour * 60 + a.minute - (b.hour * 60 + b.minute));
+  for (const t of clean) await scheduleOne(t.hour, t.minute);
 }
 
 export async function sendTest() {

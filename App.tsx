@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
 import * as NotificationsService from "./src/services/notifications";
 import { readFeedsCache } from "./src/services/feeds";
+import { AlertProvider } from "./src/components/AppAlert";
 
 const navigationRef = createNavigationContainerRef<any>();
 
@@ -82,7 +83,7 @@ const Tab = createBottomTabNavigator();
 export default function App() {
   useEffect(() => {
     NotificationsService.getSettings().then((s) => {
-      if (s.enabled) NotificationsService.schedule(s.hour, s.minute);
+      if (s.enabled) NotificationsService.schedule(s.times);
     });
   }, []);
 
@@ -101,7 +102,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <AppTabs navRef={navigationRef} />
+      <AlertProvider>
+        <AppTabs navRef={navigationRef} />
+      </AlertProvider>
     </SafeAreaProvider>
   );
 }

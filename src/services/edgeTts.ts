@@ -1,16 +1,17 @@
 // Edge TTS (Microsoft) — free, no key, high-quality Vietnamese voice
 // Chỉ dùng 1 giọng nam vi-VN-NamMinhNeural (giọng nữ đã bỏ: Web Speech local
 // không đảm bảo có giọng nữ vi, vd Chrome chỉ có giọng nam "Microsoft An").
+import { getProxyBase } from '../utils/proxy';
 
 export const EDGE_VOICE = 'vi-VN-NamMinhNeural';
 
 export async function speakEdge(text: string): Promise<string> {
   const voice = EDGE_VOICE;
 
-  // Use local proxy server (server/proxy.js) or deployed endpoint
-  // Configure via EXPO_PUBLIC_PROXY_URL env var or default to localhost
-  const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (typeof window !== 'undefined' ? 'http://localhost:3001' : '');
-  const endpoint = proxyUrl ? `${proxyUrl}/api/edge-tts` : '/api/edge-tts';
+  // Proxy local (server/proxy.js) — tự nhận IP LAN khi chạy trên điện thoại,
+  // localhost khi web local; override bằng EXPO_PUBLIC_PROXY_URL khi deploy.
+  const proxyUrl = getProxyBase();
+  const endpoint = `${proxyUrl}/api/edge-tts`;
 
   // KHÔNG retry phía client: proxy (server/proxy.js) đã retry 3 lần với backoff.
   // Client retry thêm = 3×3 = tối đa 9 lần tổng hợp, mỗi lần cold 7-15s → chờ 15-20s+.
@@ -37,8 +38,8 @@ export function revokeAudioUrl(url: string) {
 // Lỗi thì im lặng — click Nghe vẫn fallback tổng hợp bình thường.
 export function warmEdgeTts(text: string): void {
   const voice = EDGE_VOICE;
-  const proxyUrl = process.env.EXPO_PUBLIC_PROXY_URL || (typeof window !== 'undefined' ? 'http://localhost:3001' : '');
-  const endpoint = proxyUrl ? `${proxyUrl}/api/edge-tts` : '/api/edge-tts';
+  const proxyUrl = getProxyBase();
+  const endpoint = `${proxyUrl}/api/edge-tts`;
   fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

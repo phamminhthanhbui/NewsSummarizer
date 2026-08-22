@@ -5,9 +5,11 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
 import { KEYS, LIMITS } from '../services/storage';
+import { getProxyBase } from '../utils/proxy';
 
-// Web: RSS đi qua proxy local (server/proxy.js, port 3001) — Vercel proxy cũ hay 502 + thiếu CORS
-const PROXY = (process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001') + '/api/fetch?url=';
+// RSS đi qua proxy local (server/proxy.js, port 3001) — tự nhận IP LAN trên
+// điện thoại, localhost trên web local; override bằng EXPO_PUBLIC_PROXY_URL.
+const PROXY = getProxyBase() + '/api/fetch?url=';
 
 // Màu thương hiệu của từng tờ báo — badge nguồn trên card dùng màu này
 export const SOURCE_COLORS: Record<string, string> = {

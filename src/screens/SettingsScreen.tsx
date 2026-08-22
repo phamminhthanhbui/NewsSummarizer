@@ -17,8 +17,9 @@ import { useVideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakEdge, revokeAudioUrl, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
-import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, schedule as scheduleNotif, sendTest as sendNotifTest, isNotifSupported } from '../services/notifications';
+import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
+import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
+import { useAlert } from '../components/AppAlert';
 import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
 
 const isWeb = Platform.OS === 'web';
@@ -50,6 +51,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const C = useTheme(); // palette theo dark mode — styles dùng C thay vì Color tĩnh
   const styles = makeStyles(C); // styles động: đổi mode là cả màn hình đổi màu ngay
+  const { showAlert } = useAlert();
   const [provider, setProvider] = useState<LLMProvider>('nvidia');
   const [apiKey, setApiKey] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
@@ -64,7 +66,8 @@ export default function SettingsScreen() {
   const [aiUnlocked, setAiUnlocked] = useState(false); // ẩn mục AI mặc định; mở bằng mã 016527 ở ô tìm kiếm home
   const [darkMode, setDarkMode] = useState(getThemeMode() === 'dark');
   const [notifOn, setNotifOn] = useState(false);
-  const [notifTime, setNotifTime] = useState('07:00');
+  const [notifTimes, setNotifTimes] = useState<string[]>([]);
+  const [notifCustom, setNotifCustom] = useState('');
   const [notifSending, setNotifSending] = useState(false);
   // Preview giọng đọc (blob Edge TTS) phát qua expo-video — expo-av đã bỏ
   // (không tương thích expo-modules-core SDK 57). Không cần VideoView.
@@ -100,8 +103,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     getNotifSettings().then((s) => {
       setNotifOn(s.enabled);
-      const t = `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`;
-      if (NOTIF_TIMES.includes(t)) setNotifTime(t);
+      setNotifTimes(s.times);
     });
   }, []);
 
@@ -138,13 +140,14 @@ export default function SettingsScreen() {
   };
 
   const stopAudio = () => {
-    // Web có thể dùng Web Speech HOẶC Edge TTS fallback → dừng cả 2 đường
+    // Dừng cả 2 đường: Web Speech (web) + Edge TTS player + expo-speech (native)
     if (isWeb) {
       speechSynthesis.cancel();
       webUtteranceRef.current = null;
     }
     try { const r: any = previewPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
     if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
+    stopSystem();
   };
   const previewVoice = async () => {
     if (previewing) {
@@ -155,6 +158,16 @@ export default function SettingsScreen() {
     setPreviewing(true);
     try {
       const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
+      if (!isWeb) {
+        // Native: ưu tiên expo-speech (thư viện RN, offline, không cần proxy/mạng)
+        try {
+          await speakSystem(text, { pitch, rate });
+          setPreviewing(false);
+          return;
+        } catch {
+          // Máy thiếu giọng vi → fallback Edge TTS bên dưới
+        }
+      }
       if (isWeb) {
         // Browser có giọng vi và chưa từng bị treo → Web Speech (offline, tức thì)
         const matched = isWebVoiceHung() ? null : await resolveWebVoice();
@@ -210,7 +223,7 @@ export default function SettingsScreen() {
       setPreviewing(true); // có thể bị cleanup() của utterance bị cancel reset trước đó
       const url = await speakEdge(text);
       previewUrlRef.current = url;
-      await previewPlayer.replaceAsync(url);
+      previewPlayer.replace(url);
       previewPlayer.playbackRate = rate;
       previewPlayer.play();
       // 60s: câu preview ngắn nhưng Edge TTS upstream có thể chậm; kết thúc thật
@@ -222,7 +235,7 @@ export default function SettingsScreen() {
         }
       }, 60000);
     } catch (e) {
-      alert('Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown'));
+      showAlert({ type: 'error', message: 'Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown') });
       setPreviewing(false);
     }
   };
@@ -241,33 +254,35 @@ export default function SettingsScreen() {
     }
   };
 
-  const parseNotifTime = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return { hour: h, minute: m };
-  };
-
   const handleNotifToggle = async (v: boolean) => {
     setNotifOn(v);
-    const { hour, minute } = parseNotifTime(notifTime);
     if (v) {
       const granted = await ensureNotifSetup();
       if (!granted) {
         setNotifOn(false);
-        alert('Cần bật quyền thông báo cho TIN TỨC trong Cài đặt hệ thống.');
+        showAlert({ type: 'warning', title: 'Quyền thông báo', message: 'Cần bật quyền thông báo cho TIN TỨC trong Cài đặt hệ thống.' });
         return;
       }
     }
-    await persistNotifEnabled(v, hour, minute);
+    await persistNotifEnabled(v, notifTimes);
   };
 
-  const handleNotifTimePress = async (t: string) => {
-    setNotifTime(t);
-    const { hour, minute } = parseNotifTime(t);
-    await AsyncStorage.multiSet([
-      [KEYS.notifHour, String(hour)],
-      [KEYS.notifMinute, String(minute)],
-    ]);
-    if (notifOn) await scheduleNotif(hour, minute);
+  const handleNotifTimeToggle = async (t: string) => {
+    const next = notifTimes.includes(t) ? notifTimes.filter((x) => x !== t) : [...notifTimes, t];
+    setNotifTimes(next);
+    await saveNotifTimes(next);
+  };
+
+  const handleNotifAddCustom = async () => {
+    const t = notifCustom.trim();
+    if (!parseTime(t)) {
+      showAlert({ type: 'warning', title: 'Giờ không hợp lệ', message: 'Nhập giờ theo định dạng HH:MM (ví dụ 07:30, 18:00).' });
+      return;
+    }
+    const next = notifTimes.includes(t) ? notifTimes : [...notifTimes, t];
+    setNotifTimes(next);
+    setNotifCustom('');
+    await saveNotifTimes(next);
   };
 
   const handleNotifTest = async () => {
@@ -276,11 +291,11 @@ export default function SettingsScreen() {
     try {
       const granted = await ensureNotifSetup();
       if (!granted) {
-        alert('Cần bật quyền thông báo cho TIN TỨC trước khi gửi thử.');
+        showAlert({ type: 'warning', title: 'Quyền thông báo', message: 'Cần bật quyền thông báo cho TIN TỨC trước khi gửi thử.' });
         return;
       }
       await sendNotifTest();
-      alert('Đã gửi thông báo thử — xem trong khay thông báo của máy.');
+      showAlert({ type: 'success', message: 'Đã gửi thông báo thử.' });
     } finally {
       setNotifSending(false);
     }
@@ -501,15 +516,15 @@ export default function SettingsScreen() {
 
             {notifOn && (
               <>
-                <Text style={styles.notifTimeLabel}>Giờ gửi</Text>
+                <Text style={styles.notifTimeLabel}>Giờ gửi (chọn nhiều khung giờ)</Text>
                 <View style={styles.notifTimesRow}>
                   {NOTIF_TIMES.map((t) => {
-                    const active = notifTime === t;
+                    const active = notifTimes.includes(t);
                     return (
                       <TouchableOpacity
                         key={t}
                         style={[styles.notifTimeChip, active && { backgroundColor: SECTION_COLORS.notif, borderColor: SECTION_COLORS.notif }]}
-                        onPress={() => handleNotifTimePress(t)}
+                        onPress={() => handleNotifTimeToggle(t)}
                         activeOpacity={0.7}
                         accessibilityRole="button"
                         accessibilityState={{ selected: active }}
@@ -519,6 +534,42 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
+
+                {/* Custom time */}
+                <View style={styles.notifCustomRow}>
+                  <TextInput
+                    style={styles.notifCustomInput}
+                    value={notifCustom}
+                    onChangeText={setNotifCustom}
+                    placeholder="HH:MM"
+                    placeholderTextColor={C.textMuted}
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    maxLength={5}
+                    onSubmitEditing={handleNotifAddCustom}
+                  />
+                  <TouchableOpacity style={[styles.notifAddBtn, { backgroundColor: SECTION_COLORS.notif }]} onPress={handleNotifAddCustom} activeOpacity={0.8}>
+                    <Ionicons name="add" size={18} color="#FFF" />
+                    <Text style={styles.notifAddBtnText}>Thêm</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Custom chips đã thêm (bấm X để xóa) */}
+                {notifTimes.filter((t) => !NOTIF_TIMES.includes(t)).length > 0 && (
+                  <View style={styles.notifTimesRow}>
+                    {notifTimes.filter((t) => !NOTIF_TIMES.includes(t)).map((t) => (
+                      <TouchableOpacity
+                        key={t}
+                        style={[styles.notifTimeChip, styles.notifCustomChip, { backgroundColor: SECTION_COLORS.notif, borderColor: SECTION_COLORS.notif }]}
+                        onPress={() => handleNotifTimeToggle(t)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.notifTimeTextActive}>{t}</Text>
+                        <Ionicons name="close" size={13} color="#FFF" />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
               </>
             )}
 
@@ -871,6 +922,14 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   },
   notifTimeText: { fontSize: Font.caption, fontWeight: '600', color: Color.textSecondary },
   notifTimeTextActive: { color: '#FFF', fontWeight: '700' },
+  notifCustomRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  notifCustomInput: {
+    flex: 1, borderWidth: 1, borderColor: Color.border, borderRadius: Radius.sm,
+    paddingHorizontal: 12, paddingVertical: 9, fontSize: Font.body, backgroundColor: Color.surfaceAlt, color: Color.text,
+  },
+  notifAddBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 16, borderRadius: Radius.sm },
+  notifAddBtnText: { color: '#FFF', fontWeight: '700', fontSize: Font.caption },
+  notifCustomChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   // Save button — gradient cam→đỏ
   saveWrapper: { paddingTop: 24, paddingBottom: 16 },

@@ -3,23 +3,22 @@
 // VNExpress/Kenh14/Soha có stream (m3u8/mp4) → phát trong popup qua /api/hls
 // proxy (CDN chặn browser gọi thẳng). Video crawl hụt stream → mở trang gốc.
 
-import Constants from 'expo-constants';
 import type { VideoItem } from '../types';
+import { getProxyBase } from '../utils/proxy';
 
 // localhost:3001 chỉ đúng trên PC/emulator. Điện thoại thật phải gọi proxy qua
 // IP LAN của máy chạy metro — hostUri (vd "192.168.1.19:8087") mang IP đó.
 // Thử lần lượt từng địa chỉ: cái nào sống thì dùng, chết thử cái tiếp.
 function proxyCandidates(): string[] {
-  if (process.env.EXPO_PUBLIC_PROXY_URL) return [process.env.EXPO_PUBLIC_PROXY_URL];
-  const host = (Constants.expoConfig?.hostUri || '').split(':')[0];
   const list = ['http://localhost:3001'];
-  if (host && host !== 'localhost') list.unshift(`http://${host}:3001`);
+  const base = getProxyBase();
+  if (base !== 'http://localhost:3001') list.unshift(base);
   return list;
 }
 
 export async function fetchVideos(): Promise<VideoItem[]> {
   const candidates = proxyCandidates();
-  console.log('[videos] hostUri =', Constants.expoConfig?.hostUri, '| thử:', candidates.join(', '));
+  console.log('[videos] thử:', candidates.join(', '));
   for (const base of candidates) {
     try {
       const controller = new AbortController();

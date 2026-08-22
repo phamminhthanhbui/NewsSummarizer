@@ -23,12 +23,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useScrollToTop } from '@react-navigation/native';
 import { FEEDS, fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
+import { useAlert } from '../components/AppAlert';
 import { fetchVideos } from '../services/videos';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KEYS } from '../services/storage';
 import type { FeedItem, VideoItem } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
-import ArticleCard from '../components/ArticleCard';
+import ArticleCardCompact from '../components/ArticleCardCompact';
 import FeaturedCard from '../components/FeaturedCard';
 import SkeletonCard from '../components/SkeletonCard';
 import VideoCard from '../components/VideoCard';
@@ -257,6 +258,7 @@ export default function HomeScreen({ navigation }: Props) {
   const flatListRef = useRef<FlatList<FeedItem>>(null);
   // Bấm lại icon tab Trang chủ khi đang ở tab này → scroll về đầu trang
   useScrollToTop(flatListRef);
+  const { showAlert } = useAlert();
 
   useEffect(() => () => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -354,6 +356,42 @@ export default function HomeScreen({ navigation }: Props) {
     setTimeout(() => { heroAutoRef.current = false; }, 600);
   }, [heroes.length, insets]);
 
+  /* Marquee ticker "NÓNG" — tự chạy liên tục; chạm/kéo thì dừng để lướt qua lại,
+     thả ra ~2.5s sau tự chạy tiếp. Loop mượt nhờ nhân đôi nội dung. */
+  const marqueeScrollRef = useRef<ScrollView>(null);
+  const marqueeXRef = useRef(0);
+  const marqueeAutoRef = useRef(true);
+  const marqueeResumeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [marqueeCopyW, setMarqueeCopyW] = useState(0);
+
+  useEffect(() => {
+    if (heroes.length < 2 || reduceMotion || marqueeCopyW <= 0) return;
+    const t = setInterval(() => {
+      if (!marqueeAutoRef.current) return;
+      let x = marqueeXRef.current + 2; // ~66px/s
+      if (x >= marqueeCopyW) x = 0; // hết bản copy 1 → quay về đầu (nội dung giống hệt)
+      marqueeXRef.current = x;
+      marqueeScrollRef.current?.scrollTo({ x, animated: false });
+    }, 30);
+    return () => clearInterval(t);
+  }, [heroes.length, reduceMotion, marqueeCopyW]);
+
+  useEffect(() => () => {
+    if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
+  }, []);
+
+  const marqueePause = useCallback(() => {
+    marqueeAutoRef.current = false;
+    if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
+  }, []);
+  const marqueeResume = useCallback(() => {
+    if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
+    marqueeResumeRef.current = setTimeout(() => { marqueeAutoRef.current = true; }, 2500);
+  }, []);
+  const marqueeScroll = useCallback((e: any) => {
+    marqueeXRef.current = e.nativeEvent.contentOffset.x;
+  }, []);
+
   const sortedVideos = useMemo(() => {
     const feat = videos.filter((v) => v.zone === 'Video nổi bật');
     return feat.concat(videos.filter((v) => v.zone !== 'Video nổi bật'));
@@ -381,10 +419,10 @@ export default function HomeScreen({ navigation }: Props) {
       const unlocked = (await AsyncStorage.getItem(KEYS.aiUnlocked)) === '1';
       if (unlocked) {
         await AsyncStorage.removeItem(KEYS.aiUnlocked);
-        alert('Đã ẩn cấu hình AI trong Cài đặt');
+        showAlert({ type: 'success', message: 'Đã ẩn cấu hình AI trong Cài đặt' });
       } else {
         await AsyncStorage.setItem(KEYS.aiUnlocked, '1');
-        alert('Đã mở khóa cấu hình AI trong Cài đặt');
+        showAlert({ type: 'success', message: 'Đã mở khóa cấu hình AI trong Cài đặt' });
       }
       searchInputRef.current?.clear();
       searchTextRef.current = '';
@@ -392,7 +430,7 @@ export default function HomeScreen({ navigation }: Props) {
       setDebouncedQuery('');
       Keyboard.dismiss();
     }
-  }, []);
+  }, [showAlert]);
 
   const handleSearchToggle = useCallback(() => {
     setShowSearch((prev) => {
@@ -421,7 +459,7 @@ export default function HomeScreen({ navigation }: Props) {
     setHeroIdx((prev) => (prev === idx ? prev : idx));
   }, []);
 
-  const renderItem = useCallback(({ item }: { item: FeedItem }) => <ArticleCard item={item} onPress={goArticle} />, [goArticle]);
+  const renderItem = useCallback(({ item }: { item: FeedItem }) => <ArticleCardCompact item={item} onPress={goArticle} />, [goArticle]);
 
   const listHeader = useMemo(() => (
     <View style={styles.listHeader}>
@@ -571,18 +609,35 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       </View>
 
-      {/* BREAKING NEWS TICKER */}
+      {/* BREAKING NEWS TICKER — nền đỏ đặc, chữ trắng, tự chạy + cho lướt */}
       {heroes.length > 0 && (
         <View style={styles.breakingStrip}>
           <View style={styles.breakingBadge}>
-            <Ionicons name="flash" size={10} color="#FFF" />
+            <Ionicons name="flash" size={11} color={C.danger} />
             <Text style={styles.breakingText}>NÓNG</Text>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.breakingScroll}>
-            {heroes.map((h) => (
-              <TouchableOpacity key={h.link} style={styles.breakingItem} onPress={() => goArticle(h)} activeOpacity={0.7}>
-                <Text style={styles.breakingItemText} numberOfLines={1}>{h.title}</Text>
-              </TouchableOpacity>
+          <ScrollView
+            ref={marqueeScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.breakingViewport}
+            contentContainerStyle={styles.breakingRow}
+            onContentSizeChange={(w) => setMarqueeCopyW(w / 2)}
+            onScroll={marqueeScroll}
+            scrollEventThrottle={16}
+            onScrollBeginDrag={marqueePause}
+            onScrollEndDrag={marqueeResume}
+            onMomentumScrollEnd={marqueeResume}
+            onTouchStart={marqueePause}
+            onTouchEnd={marqueeResume}
+          >
+            {[...heroes, ...heroes].map((h, i) => (
+              <React.Fragment key={`${h.link}-${i}`}>
+                {i > 0 && <Text style={styles.breakingDot}>•</Text>}
+                <TouchableOpacity style={styles.breakingItem} onPress={() => goArticle(h)} activeOpacity={0.8}>
+                  <Text style={styles.breakingItemText} numberOfLines={1}>{h.title}</Text>
+                </TouchableOpacity>
+              </React.Fragment>
             ))}
           </ScrollView>
         </View>
@@ -671,13 +726,20 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   pillText: { fontSize: 13, fontWeight: '600', color: Color.textSecondary },
   pillTextActive: { color: '#FFF', fontWeight: '700' },
 
-  /* ── Breaking news ── */
-  breakingStrip: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Color.border, paddingVertical: 6 },
-  breakingBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: Color.hot, paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm, marginLeft: 12 },
-  breakingText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.5 },
-  breakingScroll: { gap: 14, paddingLeft: 12, paddingRight: 16, alignItems: 'center' },
-  breakingItem: { maxWidth: 260, flexShrink: 1 },
-  breakingItemText: { fontSize: Font.caption, fontWeight: '600', color: Color.text },
+  /* ── Breaking news — ticker truyền hình nền đỏ + chữ trắng chạy marquee ── */
+  breakingStrip: { flexDirection: 'row', alignItems: 'center', backgroundColor: Color.danger, paddingVertical: 8 },
+  breakingBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#FFF', paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 999, marginLeft: 12,
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 3 }, android: { elevation: 2 }, default: { boxShadow: '0 2px 6px rgba(0,0,0,0.25)' } }),
+  },
+  breakingText: { fontSize: 11, fontWeight: '900', color: Color.danger, letterSpacing: 0.6 },
+  breakingViewport: { flex: 1 },
+  breakingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  breakingItem: { maxWidth: 260 },
+  breakingDot: { fontSize: 8, color: 'rgba(255,255,255,0.7)' },
+  breakingItemText: { fontSize: Font.caption, fontWeight: '700', color: '#FFF' },
 
   /* ── Hero carousel ── */
   heroSection: { marginBottom: 0 },

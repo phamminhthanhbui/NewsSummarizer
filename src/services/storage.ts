@@ -18,7 +18,8 @@ export const KEYS = {
   rate: '@voice_rate',
   aiUnlocked: '@ai_unlocked', // mã 016527 ở ô tìm kiếm home → hiện/ẩn mục AI trong Settings
   notifEnabled: '@notif_enabled', // bật/tắt bản tin hằng ngày (thông báo đẩy local)
-  notifHour: '@notif_hour',
+  notifTimes: '@notif_times',     // mảng giờ gửi ["HH:MM", ...] — chọn nhiều khung giờ
+  notifHour: '@notif_hour',       // (legacy — chỉ dùng để migrate sang notifTimes)
   notifMinute: '@notif_minute',
 } as const;
 
