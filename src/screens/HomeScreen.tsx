@@ -13,7 +13,6 @@ import {
   Keyboard,
   Platform,
   TextInput,
-  Pressable,
   Dimensions,
   AccessibilityInfo,
 } from 'react-native';
@@ -36,6 +35,9 @@ import VideoCard from '../components/VideoCard';
 import VideoModal from '../components/VideoModal';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
+
+// Cờ E2E — tắt auto-play (marquee, carousel) trong Playwright để click không bị timeout
+const E2E = typeof globalThis !== 'undefined' && (globalThis as any).__E2E__ === true;
 
 const getHeroWidth = (insets: { left: number; right: number }) =>
   Dimensions.get('window').width - insets.left - insets.right;
@@ -95,7 +97,6 @@ const CategoryChip = React.memo(({ category, active, onPress, styles }: { catego
 });
 
 /* ─── Source logo (monogram tile theo màu thương hiệu) ─── */
-
 const SOURCE_ABBR: Record<string, string> = {
   'Tất cả': 'TC',
   VNExpress: 'VNE',
@@ -173,9 +174,7 @@ const SourceDropdown = React.memo(({ value, onChange, styles }: { value: string;
         <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={C.textMuted} />
       </TouchableOpacity>
       {open && (
-        <>
-          <Pressable style={styles.dropdownBackdrop} onPress={() => setOpen(false)} />
-          <View style={styles.dropdownPanel}>
+          <View style={styles.dropdownPanel} testID="sourceDropdownPanel">
             <ScrollView style={styles.dropdownList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
               {SOURCES.map((src) => {
                 const active = src === value;
@@ -187,7 +186,8 @@ const SourceDropdown = React.memo(({ value, onChange, styles }: { value: string;
                     onPress={() => { onChange(src); setOpen(false); }}
                     activeOpacity={0.7}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
+testID={'sourceOption-' + src}
+accessibilityState={{ selected: active }}
                   >
                     {src === 'Tất cả' ? (
                       <View style={[styles.dropdownLogo, { backgroundColor: active ? '#FFF' : C.hot + '22', borderColor: active ? 'rgba(255,255,255,0.4)' : C.hot + '3D' }]}>
@@ -203,7 +203,6 @@ const SourceDropdown = React.memo(({ value, onChange, styles }: { value: string;
               })}
             </ScrollView>
           </View>
-        </>
       )}
     </View>
   );
@@ -266,10 +265,19 @@ export default function HomeScreen({ navigation }: Props) {
 
   const load = useCallback(async () => {
     const cached = await readFeedsCache();
-    if (cached.length) setItems(cached);
-    const [data, vids] = await Promise.all([fetchAllFeeds(), fetchVideos()]);
+    if (cached.length) {
+      setItems(cached);
+      setLoading(false); // có cache → hiện ngay (stale-while-revalidate), fetch mới chạy nền
+    }
+    // Video tải nền riêng — không chặn nội dung chính (proxy chết phải chờ timeout 8s/candidates)
+    fetchVideos().then(setVideos).catch(() => {});
+    // Feed xong đến đâu hiện đến đó, không chờ feed chậm nhất
+    let shown = cached.length > 0;
+    const data = await fetchAllFeeds((partial) => {
+      if (!shown && partial.length) { shown = true; setLoading(false); }
+      setItems(partial);
+    });
     if (data.length) setItems(data);
-    setVideos(vids);
   }, []);
 
   useEffect(() => {
@@ -330,7 +338,7 @@ export default function HomeScreen({ navigation }: Props) {
   const lastManualRef = useRef(0);
 
   useEffect(() => {
-    if (heroes.length < 2 || reduceMotion) return;
+    if (heroes.length < 2 || reduceMotion || E2E) return;
     const heroW = getHeroWidth(insets);
     const t = setInterval(() => {
       if (Date.now() - lastManualRef.current < 4000) return;
@@ -365,7 +373,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [marqueeCopyW, setMarqueeCopyW] = useState(0);
 
   useEffect(() => {
-    if (heroes.length < 2 || reduceMotion || marqueeCopyW <= 0) return;
+    if (heroes.length < 2 || reduceMotion || marqueeCopyW <= 0 || E2E) return;
     const t = setInterval(() => {
       if (!marqueeAutoRef.current) return;
       let x = marqueeXRef.current + 2; // ~66px/s
@@ -784,19 +792,18 @@ const makeStyles = (Color: Palette, insets: { top: number; bottom: number; left:
   sourceWrap: { backgroundColor: Color.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Color.border },
   sourceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8 },
   sourceLabel: { fontSize: 12, fontWeight: '700', color: Color.textSecondary, letterSpacing: 0.2 },
-  dropdownWrap: { flex: 1, position: 'relative', zIndex: 60 },
+  dropdownWrap: { flex: 1, position: 'relative', zIndex: 100 },
   dropdownButton: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.md,
     backgroundColor: Color.surfaceAlt, borderWidth: 1,
   },
   dropdownValue: { flex: 1, fontSize: Font.body, fontWeight: '700' },
-  dropdownBackdrop: { ...StyleSheet.absoluteFillObject, zIndex: 40 },
   dropdownPanel: {
     position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
     backgroundColor: Color.card, borderRadius: Radius.md, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth, borderColor: Color.border,
-    maxHeight: 320, zIndex: 50, elevation: 12,
+    maxHeight: 320, zIndex: 100, elevation: 100,
     ...Platform.select({ default: { boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18)' } }),
   },
   dropdownList: { maxHeight: 320 },

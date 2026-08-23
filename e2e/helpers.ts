@@ -30,6 +30,8 @@ export const KEYS = {
   rate: '@voice_rate',
   aiUnlocked: '@ai_unlocked',
   themeMode: '@theme_mode',
+  notifEnabled: '@notif_enabled',
+  notifTimes: '@notif_times',
 } as const;
 
 // ---- Dữ liệu giả ----
@@ -130,9 +132,43 @@ export const SUMMARY_TEXT = 'Tóm tắt AI giả lập: giá vàng tăng mạnh 
 
 // ---- Mock network ----
 export async function mockNetwork(page: Page) {
-  // RSS qua proxy: /api/fetch?url=... — trả cùng 1 XML cho mọi feed
+  // Cờ E2E: tắt auto-play (marquee NÓNG, carousel hero) để click không bị timeout
+  await page.addInitScript(() => {
+    (window as any).__E2E__ = true;
+  });
+
+  // Catch-all phải đăng ký ĐẦU TIÊN: Playwright xét route theo thứ tự NGƯỢC
+  // (đăng ký sau kiểm tra trước), nên các route cụ thể phía dưới sẽ thắng.
+  // Chặn mọi URL http ngoài localhost + placehold.co để test khỏi chậm.
+  await page.route('**/*', (route) => {
+    const url = route.request().url();
+    if (url.startsWith('http') && !/localhost|127\.0\.0\.1|placehold\.co|data:/.test(url)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+
+  // RSS qua proxy: /api/fetch?url=... — app gán source/category theo feed được yêu
+  // cầu, nên mock phải trả item khác nhau theo category của feed (URL RSS chứa
+  // keyword). Nếu không, dedup theo link sẽ dồn mọi item về feed đầu tiên.
   await page.route('**/api/fetch?url=**', async (route) => {
-    const xml = `<?xml version="1.0"?><rss><channel>${FEED_ITEMS.map((i) => `
+    const reqUrl = decodeURIComponent(route.request().url());
+    // Keyword trong URL RSS → category của feed
+    let cat: string = 'Việt Nam';
+    if (/so-hoa|cong-nghe|genk/i.test(reqUrl)) cat = 'Công nghệ';
+    else if (/kinh-doanh|kinh-te|cafebiz/i.test(reqUrl)) cat = 'Kinh doanh';
+    else if (/the-thao|bongda/i.test(reqUrl)) cat = 'Thể thao';
+    else if (/giai-tri|kenh14/i.test(reqUrl)) cat = 'Giải trí';
+    else if (/suc-khoe|hellobacsi|suckhoedoisong/i.test(reqUrl)) cat = 'Sức khỏe';
+
+    // Feed "nổi bật" (noi-bat): trả bài featured để hero/ticker nhận item0
+    let items = /noi-bat/i.test(reqUrl)
+      ? FEED_ITEMS.filter((i) => i.featured)
+      : FEED_ITEMS.filter((i) => i.category === cat);
+    if (!items.length) items = FEED_ITEMS.filter((i) => i.category === 'Việt Nam');
+    if (!items.length) items = [FEED_ITEMS[0]];
+
+    const xml = `<?xml version="1.0"?><rss><channel>${items.map((i) => `
       <item>
         <title><![CDATA[${i.title}]]></title>
         <link>${i.link}</link>
@@ -186,15 +222,6 @@ export async function mockNetwork(page: Page) {
 
   // HLS segment (nếu video stream được phát) — chặn nhẹ, tránh treo
   await page.route('**/*.m3u8', (route) => route.fulfill({ status: 200, contentType: 'application/vnd.apple.mpegurl', body: '#EXTM3U\n#EXT-X-ENDLIST\n' }));
-
-  // Ảnh placeholder cho phép load (placehold.co). CDN khác chặn để khỏi chậm.
-  await page.route('**/*', (route) => {
-    const url = route.request().url();
-    if (url.startsWith('http') && !/localhost|127\.0\.0\.1|placehold\.co|data:/.test(url)) {
-      return route.abort();
-    }
-    return route.continue();
-  });
 }
 
 // ---- Seed / đọc localStorage ----
@@ -213,27 +240,33 @@ export async function clearAppStorage(page: Page) {
 }
 
 // ---- Điều hướng tab (label tiếng Việt của bottom tab) ----
+// Dùng text trong tablist thay vì role=button: trên màn stack (Article) các nút
+// tab mất role button nên getByRole('button') không khớp.
 export async function gotoTab(page: Page, label: 'Trang chủ' | 'Lịch sử' | 'Đã lưu' | 'Cài đặt') {
-  await page.getByRole('button', { name: label, exact: true }).click();
+  await page.getByRole('tablist').getByText(label).first().click();
 }
 
 // ---- Mở modal tìm kiếm + nhập mã/từ khóa ----
 export async function openSearch(page: Page) {
   await page.getByLabel('Tìm kiếm').click();
-  await expect(page.getByText('Tìm kiếm', { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toBeVisible();
 }
 
 export async function typeSearch(page: Page, text: string) {
-  await page.getByPlaceholder('Tìm tiêu đề, nội dung bài viết...').fill(text);
+  await page.getByPlaceholder('Tìm tiêu đề, nội dung...').fill(text);
 }
 
-// Nhập mã bí mật: fill rồi chờ alert (alert tự đến sau khi AsyncStorage resolve)
+// Nhập mã bí mật: fill rồi chờ custom alert (Modal), bấm OK, trả về message.
 export async function enterSecretCode(page: Page, code: string = SECRET_CODE) {
-  const dialogPromise = page.waitForEvent('dialog');
   await typeSearch(page, code);
-  const dialog = await dialogPromise;
-  const msg = dialog.message();
-  await dialog.accept();
+  // Custom alert hiện message
+  const unlock = page.getByText('Đã mở khóa cấu hình AI trong Cài đặt');
+  const hide = page.getByText('Đã ẩn cấu hình AI trong Cài đặt');
+  await expect(unlock.or(hide)).toBeVisible({ timeout: 5000 });
+  const msg = (await unlock.isVisible()) ? 'Đã mở khóa cấu hình AI trong Cài đặt' : 'Đã ẩn cấu hình AI trong Cài đặt';
+  // Bấm OK để đóng alert
+  await page.getByText('OK', { exact: true }).click();
+  await expect(unlock.or(hide)).toBeHidden();
   return msg;
 }
 

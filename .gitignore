@@ -40,5 +40,8 @@ yarn-error.*
 /ios
 /android
 
+# test results
+test-results/
+
 # Edge TTS MP3 disk cache (server/proxy.js)
 server/.tts-cache/

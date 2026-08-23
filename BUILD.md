@@ -114,7 +114,7 @@ EAS trả link tải khi xong. Free tier giới hạn build/tháng.
 
 ## Ghi chú
 
-- App dùng native modules (expo-video, expo-av, async-storage) nên **Expo Go không chạy được**, phải prebuild.
+- App dùng các module chuẩn SDK (expo-video, expo-notifications, async-storage...) nên **chạy được trong Expo Go**. Chỉ cần prebuild/build APK khi muốn bản standalone (icon/splash/thông báo riêng của app, không phụ thuộc Expo Go).
 - Package name: `com.autoship.NewsSummarizer` (set trong app.json).
-- APK release chưa ký, cài trực tiếp được. Lên Play Store cần AAB + signing key (EAS tự lo).
-- Đổi icon/splash: sửa assets + app.json rồi `prebuild --clean`.
+- APK release được ký bằng debug keystore (build.gradle mặc định), nên cài trực tiếp được. Lên Play Store cần AAB + signing key (EAS tự lo).
+- Đổi icon/splash: sửa assets + app.json rồi `prebuild --clean`. Icon màu thông báo Android (`app.json` plugin `expo-notifications`) cũng là build-time — đổi xong phải prebuild lại mới áp dụng.

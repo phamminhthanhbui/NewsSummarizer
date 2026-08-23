@@ -182,22 +182,10 @@ function writeFeedsCache(items: FeedItem[]) {
   AsyncStorage.setItem(KEYS.feedsCache, JSON.stringify(items.slice(0, FEED_CACHE_MAX))).catch(() => {});
 }
 
-export async function fetchAllFeeds(): Promise<FeedItem[]> {
-  const [results, featuredResults] = await Promise.all([
-    Promise.all(
-      FEEDS.map(async (d) => {
-        const items = await fetchFeed(d.url);
-        return items.map((i) => ({ ...i, source: d.name, category: d.category }));
-      }),
-    ),
-    Promise.all(
-      FEATURED_FEEDS.map(async (d) => {
-        const items = await fetchFeed(d.url);
-        return items.map((i) => ({ ...i, source: d.name, category: d.category, featured: true }));
-      }),
-    ),
-  ]);
-  const all = results.flat().sort((a, b) => {
+// Sắp xếp theo ngày mới nhất & gộp bài trùng link. Dùng cho cả kết quả cuối
+// lẫn snapshot từng phần (onProgress) để màn hình hiện bài ngay khi feed đầu tiên xong.
+function finalize(results: FeedItem[], featured: FeedItem[]): FeedItem[] {
+  const all = results.slice().sort((a, b) => {
     const da = new Date(a.pubDate).getTime();
     const db = new Date(b.pubDate).getTime();
     if (isNaN(da) && isNaN(db)) return 0;
@@ -212,13 +200,43 @@ export async function fetchAllFeeds(): Promise<FeedItem[]> {
   for (const item of all) {
     if (!seen.has(item.link)) seen.set(item.link, item);
   }
-  for (const item of featuredResults.flat()) {
+  for (const item of featured) {
     const prev = seen.get(item.link);
     if (prev) prev.featured = true;
     else seen.set(item.link, item);
   }
-  const deduped = [...seen.values()];
-  writeFeedsCache(deduped);
-  return deduped;
+  return [...seen.values()];
+}
+
+export async function fetchAllFeeds(onProgress?: (items: FeedItem[]) => void): Promise<FeedItem[]> {
+  const regularTasks = FEEDS.map(async (d) => {
+    const items = await fetchFeed(d.url);
+    return items.map((i) => ({ ...i, source: d.name, category: d.category }));
+  });
+  const featuredTasks = FEATURED_FEEDS.map(async (d) => {
+    const items = await fetchFeed(d.url);
+    return items.map((i) => ({ ...i, source: d.name, category: d.category, featured: true }));
+  });
+  const allTasks = [...regularTasks, ...featuredTasks];
+
+  // Snapshot từng phần: feed nào xong trước thì bài của nó lên màn hình trước,
+  // không phải chờ feed chậm nhất (timeout 15s).
+  const accRegular: FeedItem[] = [];
+  const accFeatured: FeedItem[] = [];
+  regularTasks.forEach((t) => t.then((items) => {
+    accRegular.push(...items);
+    onProgress?.(finalize(accRegular, accFeatured));
+  }).catch(() => {}));
+  featuredTasks.forEach((t) => t.then((items) => {
+    accFeatured.push(...items);
+    onProgress?.(finalize(accRegular, accFeatured));
+  }).catch(() => {}));
+
+  const settled = await Promise.allSettled(allTasks);
+  const results = settled.slice(0, FEEDS.length).flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  const featuredResults = settled.slice(FEEDS.length).flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+
+  writeFeedsCache(finalize(results, featuredResults));
+  return finalize(results, featuredResults);
 }
 

@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
 test.describe('Dark mode', () => {
   test('bật: chữ đổi màu tối, hint "Đang bật", ghi storage', async ({ page }) => {
     await expect(page.getByText('Đang tắt')).toBeVisible();
-    await page.getByRole('switch').click();
+    await page.getByTestId('dark-mode-switch').click();
 
     await expect(page.getByText('Đang bật')).toBeVisible();
     expect(await getStorage(page, KEYS.themeMode)).toBe('dark');
@@ -34,13 +34,13 @@ test.describe('Dark mode', () => {
     await gotoTab(page, 'Cài đặt');
     await expect(page.getByText('Đang bật')).toBeVisible();
 
-    await page.getByRole('switch').click();
+    await page.getByTestId('dark-mode-switch').click();
     await expect(page.getByText('Đang tắt')).toBeVisible();
     expect(await getStorage(page, KEYS.themeMode)).toBe('light');
   });
 
   test('dark mode giữ qua reload + áp dụng cho tab khác', async ({ page }) => {
-    await page.getByRole('switch').click();
+    await page.getByTestId('dark-mode-switch').click();
     await page.reload();
     await gotoTab(page, 'Cài đặt');
     await expect(page.getByText('Đang bật')).toBeVisible();

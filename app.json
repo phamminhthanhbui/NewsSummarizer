@@ -25,7 +25,7 @@
     "plugins": [
       "expo-video",
       "expo-font",
-      ["expo-notifications", { "color": "#FB512A", "defaultChannel": "daily-digest" }]
+      ["expo-notifications", { "color": "#FB512A", "icon": "./assets/android-icon-monochrome.png", "defaultChannel": "daily-digest" }]
     ]
   }
 }

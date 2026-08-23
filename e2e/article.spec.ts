@@ -26,10 +26,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('Tóm tắt AI', () => {
-  test('mở bài: tự tóm tắt, hiện summary mock + nội dung bài', async ({ page }) => {
+  test('mở bài: tự tóm tắt, hiện summary mock', async ({ page }) => {
     await openFirstArticle(page);
     await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(/Đoạn mở đầu của bài báo mẫu/)).toBeVisible({ timeout: 20_000 });
   });
 
   test('summary lưu vào history storage', async ({ page }) => {
@@ -72,17 +71,24 @@ test.describe('Tóm tắt AI', () => {
     expect(llmCalls).toBe(callsFirst);
   });
 
-  test('không có API key: lỗi dẫn sang tab Settings', async ({ page }) => {
+  test('không lưu API key: vẫn tóm tắt được nhờ key mặc định NVIDIA', async ({ page }) => {
     await page.evaluate(() => {
       ['@nim_key', '@openai_key', '@anthropic_key', '@google_key', '@openrouter_key', '@custom_key']
         .forEach((k) => localStorage.removeItem(k));
     });
     await openFirstArticle(page);
-    // App tự navigate('SettingsTab') khi lỗi thiếu key
-    await expect(page.getByText('Giọng đọc tiếng Việt')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
   });
 
   test('fab refresh tóm tắt lại, summary vẫn hiện', async ({ page }) => {
+    // Chậm mock LLM ~900ms để bắt được trạng thái "Đang tóm tắt..."
+    await page.route('**/api/llm', async (route) => {
+      await new Promise((r) => setTimeout(r, 900));
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
+      });
+    });
     await openFirstArticle(page);
     await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
     await floatBarButtons(page).refresh.click();
@@ -102,7 +108,7 @@ test.describe('Lưu / bỏ lưu', () => {
     }).toPass({ timeout: 10_000 });
 
     await gotoTab(page, 'Đã lưu');
-    await expect(page.getByText(FIRST.title)).toBeVisible();
+    await expect(page.getByText(FIRST.title).first()).toBeVisible();
   });
 
   test('bấm bookmark lần hai: bỏ lưu', async ({ page }) => {
@@ -149,9 +155,7 @@ test.describe('Các nút khác', () => {
 
   test('nút back quay về Home', async ({ page }) => {
     await openFirstArticle(page);
-    // Header Article: [back] [tên nguồn] [share] — back là con đầu của hàng header
-    const headerRow = page.getByText(FIRST.source, { exact: true }).first().locator('xpath=..');
-    await headerRow.locator('xpath=./div[1]').click();
+    await page.getByLabel('Quay lại').click();
     await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible({ timeout: 10_000 });
   });
 

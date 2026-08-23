@@ -19,7 +19,7 @@ test.describe('Mã bí mật — mở khóa', () => {
     expect(msg).toBe('Đã mở khóa cấu hình AI trong Cài đặt');
 
     // Modal tìm kiếm đóng, input không còn text
-    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung bài viết...')).toHaveCount(0);
+    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveCount(0);
     expect(await getStorage(page, KEYS.aiUnlocked)).toBe('1');
   });
 
@@ -118,7 +118,7 @@ test.describe('Không phải mã — không toggle', () => {
     await openSearch(page);
     await typeSearch(page, '01652'); // thiếu 1 số
     await page.waitForTimeout(900); // debounce 600ms + dư
-    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung bài viết...')).toHaveValue('01652');
+    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveValue('01652');
     expect(await getStorage(page, KEYS.aiUnlocked)).toBeNull();
 
     // Nhập từ khóa thật sự vẫn lọc được

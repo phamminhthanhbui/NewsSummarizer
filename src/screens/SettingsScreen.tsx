@@ -511,6 +511,7 @@ export default function SettingsScreen() {
                 trackColor={{ false: Color.border, true: SECTION_COLORS.notif }}
                 thumbColor="#FFF"
                 disabled={!isNotifSupported}
+                testID="notif-switch"
               />
             </View>
 
@@ -584,7 +585,7 @@ export default function SettingsScreen() {
             </TouchableOpacity>
 
             {!isNotifSupported && (
-              <Text style={styles.fieldHint}>Thông báo chỉ hoạt động trên điện thoại (Android/iOS), không hỗ trợ trên web.</Text>
+              <Text style={styles.fieldHint}>Thông báo không hỗ trợ trên web và trong Expo Go — dùng bản APK cài trực tiếp để bật.</Text>
             )}
           </Card>
         </SectionHeader>
@@ -607,6 +608,7 @@ export default function SettingsScreen() {
                 onValueChange={(v) => { setDarkMode(v); setThemeMode(v ? 'dark' : 'light'); }}
                 trackColor={{ false: Color.border, true: Color.hot }}
                 thumbColor="#FFF"
+                testID="dark-mode-switch"
               />
             </View>
           </Card>

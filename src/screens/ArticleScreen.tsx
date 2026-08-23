@@ -575,7 +575,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     <View style={styles.container}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.hBtn}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.hBtn} accessibilityLabel="Quay lại">
           <Ionicons name="chevron-back" size={26} color={C.accent} />
         </TouchableOpacity>
         <Text style={[styles.hTitle, { color: SOURCE_COLORS[item.source] || C.text }]} numberOfLines={1}>{item.source}</Text>
