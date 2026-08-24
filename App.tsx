@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { createNavigationContainerRef, NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Pressable, View, StyleSheet } from "react-native";
+import { Pressable, View, StyleSheet, Platform } from "react-native";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Color, Font, THEME_COLORS, useTheme } from "./src/constants/theme";
@@ -19,6 +19,7 @@ const TAB_COLORS: Record<string, string> = {
   Saved: THEME_COLORS[5].color,        // Hồng
   SettingsTab: THEME_COLORS[3].color,  // Tím
 };
+
 import HomeScreen from "./src/screens/HomeScreen";
 import ArticleScreen from "./src/screens/ArticleScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
@@ -31,7 +32,7 @@ function HomeStackScreen() {
     <HomeStack.Navigator screenOptions={{ headerShown: false }}>
       <HomeStack.Screen name="HomeMain" component={HomeScreen} />
       <HomeStack.Screen name="Article" component={ArticleScreen} />
-          </HomeStack.Navigator>
+    </HomeStack.Navigator>
   );
 }
 
@@ -58,7 +59,6 @@ function TabBarBtn(props: any) {
   );
 }
 
-// tabBarButton nhận màu riêng từng tab qua closure (props không mang tên route)
 const tabButton = (color: string) => (props: any) => <TabBarBtn {...props} dotColor={color} />;
 
 const s = StyleSheet.create({
@@ -112,13 +112,14 @@ export default function App() {
 function AppTabs({ navRef }: { navRef: any }) {
   const C = useTheme();
   const insets = useSafeAreaInsets();
-  // Vùng nút tab luôn cao 56px ở MỌ device. Tổng height = 56 + insets.bottom:
-  // phần cộng thêm chỉ là safe area (home indicator) do OS bắt buộc chừa,
-  // web/máy 3 nút insets.bottom = 0 → đúng 56.
+  
+  // Nếu chạy trên Web, ép bottom inset về 0 vì trình duyệt không có thanh Home Indicator
+  const bottomInset = Platform.OS === "web" ? 0 : insets.bottom;
   const TAB_BAR_HEIGHT = 56;
+
   return (
-      <NavigationContainer ref={navRef}>
-        <Tab.Navigator
+    <NavigationContainer ref={navRef}>
+      <Tab.Navigator
         screenOptions={{
           headerShown: false,
           tabBarInactiveTintColor: C.textMuted,
@@ -126,8 +127,8 @@ function AppTabs({ navRef }: { navRef: any }) {
             backgroundColor: C.card,
             borderTopColor: C.border,
             borderTopWidth: StyleSheet.hairlineWidth,
-            height: TAB_BAR_HEIGHT + insets.bottom,
-            paddingBottom: insets.bottom,
+            height: TAB_BAR_HEIGHT + bottomInset,
+            paddingBottom: bottomInset,
             paddingTop: 4,
             elevation: 8,
             shadowColor: "#000",
@@ -195,6 +196,6 @@ function AppTabs({ navRef }: { navRef: any }) {
           }}
         />
       </Tab.Navigator>
-      </NavigationContainer>
+    </NavigationContainer>
   );
 }
