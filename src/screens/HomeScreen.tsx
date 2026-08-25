@@ -42,7 +42,7 @@ import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
 import ArticleCardCompact from "../components/ArticleCardCompact";
 import FeaturedCard from "../components/FeaturedCard";
 import SkeletonCard from "../components/SkeletonCard";
-import VideoRow from "../components/VideoRow";
+import VideoGrid from "../components/VideoGrid";
 import VideoModal from "../components/VideoModal";
 
 type Props = { navigation: NativeStackNavigationProp<any> };
@@ -805,7 +805,7 @@ export default function HomeScreen({ navigation }: Props) {
           </>
         )}
 
-        {/* SECTION: VIDEO NỔI BẬT — dọc, không cuộn ngang */}
+        {/* SECTION: VIDEO NỔI BẬT — hero + grid 2 cột, không scroll ngang */}
         {sortedVideos.length > 0 && (
           <View style={styles.videoSection}>
             <View style={styles.sectionRow}>
@@ -816,14 +816,7 @@ export default function HomeScreen({ navigation }: Props) {
               <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO NỔI BẬT</Text>
               <View style={styles.sectionLine} />
             </View>
-            {sortedVideos.slice(0, 10).map((v) => (
-              <VideoRow
-                key={v.link}
-                item={v}
-                onPress={goVideo}
-                featured={v.zone === "Video nổi bật"}
-              />
-            ))}
+            <VideoGrid videos={sortedVideos} onPress={goVideo} />
           </View>
         )}
 
