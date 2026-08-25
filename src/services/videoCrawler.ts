@@ -215,6 +215,10 @@ async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[
 
 /* ─── main ─── */
 
+// Xoay vòng chọn video nổi bật theo mốc 3 phút — mỗi lần crawl/app mở sẽ hiện
+// bộ video khác, tránh lúc nào cũng là 4 video đầu mỗi nguồn.
+const ROTATE_BUCKET_MS = 3 * 60 * 1000;
+
 export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
   const featured = await crawlVnExpressVideo().catch(() => [] as VideoItem[]);
   onPartial?.(featured);
@@ -227,13 +231,23 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
   // Gộp tất cả
   const all = [...featured, ...others];
 
-  // Đánh dấu featured cho source không phải VNExpress (first N mỗi source)
-  const seenSources = new Map<string, number>();
+  // Đánh dấu featured cho source không phải VNExpress — XOAY VÒNG theo mốc 10
+  // phút: offset đổi mỗi bucket nên mỗi lần crawl hiện bộ video nổi bật khác.
+  const bucket = Math.floor(Date.now() / ROTATE_BUCKET_MS);
+  const sourceVideos = new Map<string, VideoItem[]>();
   for (const v of all) {
     if (v.source === 'VNExpress') continue;
-    const count = (seenSources.get(v.source) || 0) + 1;
-    seenSources.set(v.source, count);
-    if (count <= FEATURED_PER_SOURCE) v.zone = 'Video nổi bật';
+    const list = sourceVideos.get(v.source) || [];
+    list.push(v);
+    sourceVideos.set(v.source, list);
+  }
+  for (const [src, list] of sourceVideos) {
+    const n = list.length;
+    if (!n) continue;
+    const offset = bucket % n;
+    for (let i = 0; i < Math.min(FEATURED_PER_SOURCE, n); i++) {
+      list[(offset + i) % n].zone = 'Video nổi bật';
+    }
   }
 
   // Fill stream cho video thiếu (ưu tiên featured trước)
@@ -245,12 +259,18 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
     if (stream) v.stream = stream;
   }
 
-  // Featured lên đầu
+  // Featured lên đầu; trong nhóm featured xáo thứ tự theo bucket (đổi mỗi 10 phút)
   all.sort((a, b) => {
     if (a.zone === 'Video nổi bật' && b.zone !== 'Video nổi bật') return -1;
     if (a.zone !== 'Video nổi bật' && b.zone === 'Video nổi bật') return 1;
-    return 0;
+    return (hashStr(a.link + bucket) % 100) - (hashStr(b.link + bucket) % 100);
   });
 
   return all;
+}
+
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
 }

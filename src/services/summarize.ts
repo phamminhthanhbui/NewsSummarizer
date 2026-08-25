@@ -573,6 +573,80 @@ export function isVideoPageUrl(url: string): boolean {
   return /(\/\/video\.|\/video[./-])/i.test(url);
 }
 
+// Lấy ảnh/video BÀI GỐC trực tiếp từ HTML trang (native fetch không bị CORS).
+// Jina đôi khi bọc ảnh nội dung trong link bài liên quan (bị lọc) hoặc trang
+// video giấu stream — fallback này bổ sung og:image + img + video thật vào blocks.
+const UA_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+
+const decodeHtml = (s: string) => s
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+
+async function fetchRawHtml(pageUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(pageUrl, { headers: UA_HEADERS, signal: controller.signal });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Bóc media từ HTML bài gốc: og:image (hero), <meta og:video>, <video>/<source>,
+// data-vid/data-src mp4 (Kenh14/Soha), m3u8. Trả list block media đã lọc rác.
+async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
+  const html = await fetchRawHtml(pageUrl);
+  if (!html) return [];
+  const out: ArticleBlock[] = [];
+  const seen = new Set<string>();
+
+  // og:image — ảnh hero chuẩn nhất của bài
+  const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  if (ogImage && isEditorialImage(ogImage[1])) {
+    seen.add(ogImage[1]);
+    out.push({ type: 'image', url: ogImage[1] });
+  }
+
+  // og:video / video stream (m3u8, mp4)
+  const ogVideo = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i);
+  if (ogVideo) {
+    const v = classifyVideo(ogVideo[1]);
+    if (v && !seen.has(ogVideo[1])) { seen.add(ogVideo[1]); out.push(v); }
+  }
+  const m3u8 = html.match(/https?:\/\/[^"'\s>]+\.m3u8[^"'\s>]*/i);
+  if (m3u8 && !seen.has(m3u8[0])) {
+    seen.add(m3u8[0]);
+    out.push({ type: 'video', url: m3u8[0], kind: 'file' });
+  }
+  // data-vid/data-src chứa mp4 (Kenh14, Soha, Thanh Niên, NLD)
+  const vidAttrs = [...html.matchAll(/data-vid=["']([^"']+)["']/g)].map((m) => m[1]);
+  for (const raw of vidAttrs) {
+    const u = raw.startsWith('//') ? 'https:' + raw : raw;
+    if (!seen.has(u) && classifyVideo(u)) { seen.add(u); out.push({ type: 'video', url: u, kind: 'file' }); }
+  }
+  const dataSrc = [...html.matchAll(/data-src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/g)].map((m) => m[1]);
+  for (const u of dataSrc) {
+    if (!seen.has(u) && classifyVideo(u)) { seen.add(u); out.push({ type: 'video', url: u, kind: 'file' }); }
+  }
+
+  // <img> trong nội dung — ưu tiên vùng có class bài viết; lọc qua isEditorialImage
+  const imgs = [...html.matchAll(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/g)].map((m) => m[1]);
+  for (const raw of imgs) {
+    const u = decodeHtml(raw);
+    if (!isEditorialImage(u) || seen.has(u)) continue;
+    seen.add(u);
+    out.push({ type: 'image', url: u });
+  }
+
+  return out;
+}
+
 // Hỏi proxy lấy stream HLS nhúng trong trang. Không có proxy / lỗi / không
 // thấy stream → null (im lặng, article vẫn đọc bình thường).
 async function fetchEmbeddedVideo(pageUrl: string): Promise<ArticleBlock | null> {
@@ -616,7 +690,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
     const v = await fetchEmbeddedVideo(url);
     if (v) blocks.unshift(v);
   }
-  if (blocksToText(blocks).length < LIMITS.articleMinLength) throw new Error('Bài báo quá ngắn hoặc không có nội dung');
+
+  // Bổ sung media bài gốc từ HTML trực tiếp — Jina hay bọc ảnh trong link bài
+  // liên quan (bị lọc) hoặc bỏ sót video. Media mới gộp theo thứ tự gặp trong
+  // HTML; đã có URL nào rồi thì không thêm trùng.
+  const mediaHtml = await fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+  const existingUrls = new Set(blocks.filter((b) => b.url).map((b) => b.url));
+  const toAdd = mediaHtml.filter((b) => b.url && !existingUrls.has(b.url));
+  const insertAt = blocks.length - 1 >= 0 ? blocks.length - 1 : 0;
+  blocks.splice(insertAt, 0, ...toAdd);
+
+  if (blocksToText(blocks).length < LIMITS.articleMinLength && !blocks.some((b) => b.type === 'image' || b.type === 'video')) {
+    throw new Error('Bài báo quá ngắn hoặc không có nội dung');
+  }
   return blocks;
 }
 

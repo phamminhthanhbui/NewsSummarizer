@@ -21,6 +21,7 @@ import {
   TextInput,
   Dimensions,
   AccessibilityInfo,
+  AppState,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -488,12 +489,22 @@ export default function HomeScreen({ navigation }: Props) {
     ]).start();
   }, [load]);
 
-  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 5 phút khi ở Home
+  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 3 phút khi ở Home
   useEffect(() => {
     const t = setInterval(() => {
       fetchVideos(setVideos).catch(() => {});
-    }, 5 * 60 * 1000);
+    }, 3 * 60 * 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Mở app / quay lại từ nền → crawl video mới ngay (featured xoay vòng theo bucket)
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        fetchVideos(setVideos).catch(() => {});
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   const onRefresh = useCallback(async () => {
