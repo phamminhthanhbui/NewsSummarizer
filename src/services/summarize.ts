@@ -449,16 +449,14 @@ function isEditorialImage(url: string): boolean {
     if (/(related|sidebar|widget|recommend|more.?news|box.|list.|also.?read|xem.?them|tin.?lien.?quan|doc.?nhieu|khac.?bai)(\/|_|-|\.)/i.test(url)) return false;
     // Filter thumbnail suffixes: -thumb, _thumb, -small, _small, -preview, _preview
     if (/(-|_)(thumb|small|preview|teaser|crop)\d*(\/|_|-|\.|$)/i.test(url)) return false;
-    // Filter by aspect ratio hints: square/portrait thumbnails often have h~w, main images are landscape (w > h*1.2)
+    // Chỉ chặn avatar vuông nhỏ (w=h<=100). Không chặn ảnh nội dung tỷ lệ ngang/dọc
+    // vì Jina giữ nguyên tham số w/h của site gốc (VD VnExpress dùng ?w=300&h=180).
     const wParam = url.match(/[?&](?:w|width)=(\d+)/i);
     const hParam = url.match(/[?&](?:h|height)=(\d+)/i);
     if (wParam && hParam) {
       const w = +wParam[1], h = +hParam[1];
-      if (w > 0 && h > 0 && w / h < 1.2) return false; // square/portrait = likely thumbnail
+      if (w > 0 && h > 0 && w <= 100 && h <= 100) return false;
     }
-    // Filter very small images (likely tracking/ads). w=0/h=0 là "auto" (VnExpress), đừng chặn.
-    if (wParam && +wParam[1] > 0 && +wParam[1] < 400) return false;
-    if (hParam && +hParam[1] > 0 && +hParam[1] < 300) return false;
     // Filter 1x1, 2x2 tracking pixels
     if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
     // Ad/tracking pixel đội lốt ảnh (vd cl.vlitag.com/tf-v1.jpeg?e=...): query
