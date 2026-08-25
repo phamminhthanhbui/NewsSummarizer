@@ -133,10 +133,10 @@ function buildLlmRequest(
   customBaseUrl?: string,
 ): { url: string; headers: Record<string, string>; body: any } {
   const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   const baseUrl = provider === 'custom' ? (customBaseUrl || '') : cfg.baseUrl;
-  if (!baseUrl) throw new Error('Thiếu base URL cho custom provider');
+  if (!baseUrl) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   // Build request based on provider type
   const isAnthropic = provider === 'anthropic';
@@ -242,8 +242,9 @@ async function sendLlmRequest(
       signal: controller?.signal,
     });
   } catch (e) {
-    if ((e as any)?.name === 'AbortError') throw new Error(`${label}: hết thời gian chờ phản hồi`);
-    throw new Error(`${label}: không kết nối được — kiểm tra mạng${corsProxy ? ' hoặc chạy proxy server (server/proxy.js)' : ''}`);
+    // Thông báo KHÔNG nhắc tên nhà cung cấp — user không cần biết backend nào
+    if ((e as any)?.name === 'AbortError') throw new Error('Dịch vụ AI phản hồi quá chậm, thử lại sau');
+    throw new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -251,7 +252,7 @@ async function sendLlmRequest(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
-    throw new Error(`Lỗi ${label}: ${msg}`);
+    throw new Error(`Dịch vụ AI tạm thời lỗi (${msg})`);
   }
 
   return res.json();
@@ -271,7 +272,7 @@ Giữ số liệu, tên riêng, địa điểm, thời gian. Không sao chép ng
 Chỉ trả về phần tóm tắt.`;
 
   const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   // Cắt input quá dài → model tập trung vào phần đầu (thường chứa ý chính),
   // giảm chi phí/latency và hạn chế bản tóm tắt lan man.
@@ -300,7 +301,7 @@ export async function testProviderConnection(
   customBaseUrl?: string,
 ): Promise<void> {
   const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error(`Provider không hỗ trợ: ${provider}`);
+  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   const { url, headers, body } = buildLlmRequest(
     provider, apiKey, model,
@@ -311,18 +312,18 @@ export async function testProviderConnection(
   );
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 15000);
   const text = provider === 'anthropic' ? data.content?.[0]?.text : data.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`Lỗi ${cfg.label}: phản hồi rỗng`);
+  if (!text) throw new Error('Dịch vụ AI trả về phản hồi rỗng');
 }
 
 // High-level: fetch key + model from storage, then summarize
 export async function summarizeArticle(articleText: string): Promise<string> {
   const provider = (await AsyncStorage.getItem(KEYS.provider)) as LLMProvider || 'nvidia';
   const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Provider không hợp lệ');
+  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   let apiKey = await AsyncStorage.getItem(cfg.keyStorageKey);
   if (!apiKey && provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY; // default sẵn, chạy ngay khi start
-  if (!apiKey && cfg.needsKey) throw new Error(`Thiếu API key cho ${cfg.label}`);
+  if (!apiKey && cfg.needsKey) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   const model = provider === 'custom'
     ? (await AsyncStorage.getItem(KEYS.customBaseUrl)) // custom uses model from storage too
@@ -373,8 +374,30 @@ function cleanMarkdownText(s: string): string {
     .trim();
 }
 
-// host/ad-network chèn player giả vào bài (bỏ qua để không hiện video quảng cáo)
-const AD_VIDEO_HOSTS = /(^|\.)(avplayer\.com|doubleclick\.net|googlesyndication\.com|taboola\.com|outbrain\.com|adservice\.google\.|gliastudios\.com)/i;
+// Host của mạng quảng cáo/tracking (VN + quốc tế) chèn banner/player giả vào bài.
+// Test theo SUBSTRING của hostname nên bắt được cả subdomain lạ của cùng mạng QC.
+const AD_HOST_TOKENS = [
+  // Quốc tế
+  'doubleclick', 'googlesyndication', 'googleadservices', 'adservice.google',
+  'taboola', 'outbrain', 'criteo', 'pubmatic', 'rubiconproject', 'openx',
+  'smartadserver', 'moatads', 'scorecardresearch', 'amazon-adsystem',
+  'revcontent', 'mgid', 'teads', 'sharethrough', 'casalemedia', 'bidswitch',
+  // VN
+  'admicro', 'vcmedia', 'zingads', 'eclick.', 'adasia', 'avplayer.com',
+  'gliastudios', 'adnetwork', 'adserver', 'adsys.',
+];
+
+function isAdHost(url: string): boolean {
+  const host = url.replace(/^(https?:)?\/\//i, '').split(/[/?#:]/)[0].toLowerCase();
+  return AD_HOST_TOKENS.some((t) => host.includes(t));
+}
+
+// Alt text của ảnh QC/banner mà trang báo chèn vào giữa bài
+const AD_ALT_RE = /(quảng cáo|banner|advert|sponsored|tài trợ|^logo$|^qc$)/i;
+
+// Đoạn văn bản QC/CTA đứng riêng giữa bài (liên hệ QC, tin tài trợ, tải app…).
+// Chỉ áp dụng cho block NGẮN để không giết nhầm nội dung thật nói về chủ đề đó.
+const AD_TEXT_RE = /(liên hệ\s*(quảng cáo|qc)|tin tài trợ|bài viết tài trợ|nhà tài trợ|đăng ký nhận (tin|bản tin)|tải (ngay |ứng dụng )?app\b|hotline[: ]?\d{2}[ .]?\d)/i;
 
 // General patterns for non-editorial media (applies to ALL news sites)
 // Thumbnail/CDN patterns: zoom/W_H, thumb, crop, resize
@@ -457,7 +480,7 @@ function isEditorialImage(url: string): boolean {
   }
 
 function classifyVideo(url: string): ArticleBlock | null {
-  if (AD_VIDEO_HOSTS.test(url)) return null;
+  if (isAdHost(url)) return null;
   // Fake videos: .gif.mp4, .webp.mp4 = animated images, not real video content (all sites)
   if (FAKE_VIDEO_PATTERN.test(url)) return null;
   const yt = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/))([\w-]{6,})/);
@@ -480,7 +503,8 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
   const imgRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
   let m;
   while ((m = imgRe.exec(s)) !== null) {
-    if (AD_VIDEO_HOSTS.test(m[2])) continue;
+    if (isAdHost(m[2])) continue;
+    if (m[1] && AD_ALT_RE.test(m[1].trim())) continue;
     if (!isEditorialImage(m[2])) continue;
     // Ảnh bị bọc trong link [![alt](img.jpg)](...): thumbnail "tin liên quan/
     // đọc nhiều" (link bài viết) hoặc banner QC (link trỏ ảnh khác, vd
@@ -500,7 +524,7 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
   const htmlImgRe = /<img\s[^>]*(?:(?:\bsrc=["']([^"']+)["'])|(?:\bdata-src=["']([^"']+)["']))/g;
   while ((m = htmlImgRe.exec(s)) !== null) {
     const url = m[1] || m[2];
-    if (!url || AD_VIDEO_HOSTS.test(url)) continue;
+    if (!url || isAdHost(url)) continue;
     if (!isEditorialImage(url)) continue;
     if (seenUrl.has(url)) continue;
     seenUrl.add(url);
@@ -517,16 +541,24 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
   }
   markers.sort((a, b) => a.index - b.index);
 
-  // Dựng dãy block: text giữa các marker, rồi đến media
+  // Dựng dãy block: text giữa các marker, rồi đến media.
+  // Dòng ngắn khớp mẫu QC/CTA bị TÁCH BỎ khỏi block (không bỏ nguyên block —
+  // đoạn QC thường dính liền đoạn thật trong cùng khối text Jina trả về).
+  const scrubAdLines = (t: string) => t
+    .split('\n')
+    .filter((line) => !(line.length < 300 && AD_TEXT_RE.test(line)))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   let last = 0;
   for (const mk of markers) {
     if (mk.index < last) continue;
-    const text = cleanMarkdownText(s.slice(last, mk.index));
+    const text = scrubAdLines(cleanMarkdownText(s.slice(last, mk.index)));
     if (text) blocks.push({ type: 'text', text });
     blocks.push(mk.block);
     last = mk.end;
   }
-  const rest = cleanMarkdownText(s.slice(last));
+  const rest = scrubAdLines(cleanMarkdownText(s.slice(last)));
   if (rest) blocks.push({ type: 'text', text: rest });
   return blocks;
 }
@@ -534,6 +566,29 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
 // Gộp các block text thành 1 chuỗi (nguồn cho AI tóm tắt + đếm thời gian đọc).
 export function blocksToText(blocks: ArticleBlock[]): string {
   return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
+}
+
+// Trang bài dạng VIDEO (video.vnexpress.net/..., /video/...): player là JS,
+// Jina markdown không chứa stream. Nhận diện thô để biết khi nào cần hỏi
+// proxy bóc m3u8 từ HTML (sai positive chỉ tốn 1 request nhẹ, vô hại).
+export function isVideoPageUrl(url: string): boolean {
+  return /(\/\/video\.|\/video[./-])/i.test(url);
+}
+
+// Hỏi proxy lấy stream HLS nhúng trong trang. Không có proxy / lỗi / không
+// thấy stream → null (im lặng, article vẫn đọc bình thường).
+async function fetchEmbeddedVideo(pageUrl: string): Promise<ArticleBlock | null> {
+  const proxyUrl = getProxyBase();
+  if (!proxyUrl) return null;
+  try {
+    const res = await fetch(`${proxyUrl}/api/article-stream?url=${encodeURIComponent(pageUrl)}`);
+    if (!res.ok) return null;
+    const { stream } = await res.json();
+    if (!stream || !/\.m3u8(\?|#|$)/i.test(stream)) return null;
+    return { type: 'video', url: stream, kind: 'file' };
+  } catch {
+    return null;
+  }
 }
 
 // Jina Reader: fetch nội dung bài, trả về block text/ảnh/video.
@@ -552,6 +607,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
   if (!res.ok) throw new Error(`Không thể đọc bài báo (HTTP ${res.status})`);
   const raw = await res.text();
   const blocks = parseArticleBlocks(raw);
+  // Trang video: player JS giấu stream khỏi Jina → bóc m3u8 từ HTML, chèn lên
+  // đầu (video chính là lead của trang dạng này). Chỉ gọi khi chưa thấy video.
+  if (!blocks.some((b) => b.type === 'video') && isVideoPageUrl(url)) {
+    const v = await fetchEmbeddedVideo(url);
+    if (v) blocks.unshift(v);
+  }
   if (blocksToText(blocks).length < LIMITS.articleMinLength) throw new Error('Bài báo quá ngắn hoặc không có nội dung');
   return blocks;
 }

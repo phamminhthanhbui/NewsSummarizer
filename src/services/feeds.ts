@@ -1,7 +1,6 @@
-// News feeds — RSS via CORS proxy (web) or direct (native)
-// ponytail: regex XML parser, no libs. CORS proxy for web only.
+// News feeds — RSS luôn đi qua proxy local (server nhanh hơn nhiều so với
+// điện thoại tự nối từng báo). ponytail: regex XML parser, no libs.
 
-import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
 import { KEYS, LIMITS } from '../services/storage';
@@ -152,11 +151,13 @@ function parseXml(xml: string): FeedItem[] {
 export async function fetchFeed(url: string): Promise<FeedItem[]> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    // Native: no CORS, web: go through proxy
-    const finalUrl = Platform.OS === 'web' ? PROXY + encodeURIComponent(url) : url;
+    const timer = setTimeout(() => controller.abort(), 15000);
+    // Luôn đi qua proxy kể cả native: server fetch song song 45 feed chỉ mất ~2s,
+    // trong khi điện thoại tự nối TLS tới từng báo qua mạng di động thì chậm hơn
+    // nhiều lần. App vốn đã phụ thuộc proxy (Jina/TTS/video) nên không thêm ràng buộc mới.
+    const finalUrl = PROXY + encodeURIComponent(url);
     const res = await fetch(finalUrl, { signal: controller.signal });
-    clearTimeout(timeout);
+    clearTimeout(timer);
     if (!res.ok) return [];
     const xml = await res.text();
     return parseXml(xml);

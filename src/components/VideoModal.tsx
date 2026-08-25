@@ -6,8 +6,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import type { VideoItem } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
-
-const PROXY_BASE = process.env.EXPO_PUBLIC_PROXY_URL || 'http://localhost:3001';
+import { getProxyBase } from '../utils/proxy';
 
 interface Props { video: VideoItem; onClose: () => void; }
 
@@ -21,7 +20,7 @@ function WebVideoPlayer({ stream, width, height }: { stream: string; width: numb
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const src = `${PROXY_BASE}/api/hls?url=${encodeURIComponent(stream)}`;
+    const src = `${getProxyBase()}/api/hls?url=${encodeURIComponent(stream)}`;
     if (isHls) {
       let hls: Hls | null = null;
       if (Hls.isSupported()) {
@@ -47,9 +46,13 @@ function WebVideoPlayer({ stream, width, height }: { stream: string; width: numb
   );
 }
 
-// Native: expo-video chơi HLS trực tiếp (không cần proxy)
+// Native: expo-video chơi cả HLS lẫn mp4, nhưng LUÔN đi qua proxy /api/hls —
+// một số CDN (vnecdn) chặn request không có Referer đúng (native player không
+// tự gửi được); proxy gắn hộ. Playlist rewrite URL segment về relative nên
+// player resolve theo base proxy, mọi nguồn phát đồng nhất.
 function NativeVideoPlayer({ stream, width, height }: { stream: string; width: number; height: number }) {
-  const player = useVideoPlayer(stream, (p) => { p.loop = false; p.play(); });
+  const src = `${getProxyBase()}/api/hls?url=${encodeURIComponent(stream)}`;
+  const player = useVideoPlayer(src, (p) => { p.loop = false; p.play(); });
   return (
     <VideoView
       player={player}

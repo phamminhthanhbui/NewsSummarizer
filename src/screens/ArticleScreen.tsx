@@ -10,9 +10,11 @@ import {
   Linking,
   Share,
   Modal,
+  Platform,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import Hls from 'hls.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,6 +28,7 @@ import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds'
 import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
+import { getProxyBase } from '../utils/proxy';
 
 // Web Speech API (word boundary events) — only on web
 const useWebSpeech = () => {
@@ -231,12 +234,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       const src = content || item.description;
       setSummary(await summarizeArticle(src));
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Lỗi';
-      setError(msg);
-      // Nếu lỗi key → dẫn sang Settings
-      if (msg.includes('Thiếu API key') || msg.includes('API key')) {
-        navigation.navigate('SettingsTab');
-      }
+      setError(e instanceof Error ? e.message : 'Lỗi');
     }
     setSummarizing(false);
   };
@@ -473,21 +471,28 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Bỏ same-host filter: nhiều site để ảnh ở subdomain CDN khác (vd vnecnd.net vs vnexpress.net);
   // isEditorialImage() ở summarize.ts đã chặn svg/gif/icon + thumb w<400, Jina strip aside/sidebar rồi.
   const renderSummaryNodes = () => {
-    // Summary là tóm tắt chữ thuần — không đan xen ảnh/video (card đã có ảnh chính
-    // ở đầu). Tránh hẳn ảnh/video không liên quan (widget video liên quan, thumbnail
-    // bài khác, placeholder) lọt vào tóm tắt.
-    const media: ArticleBlock[] = [];
+    // Đan xen TOÀN BỘ ảnh/video bài gốc vào giữa các đoạn tóm tắt (theo thứ tự bài).
+    // blocks đến từ fetchArticleContent — isEditorialImage() ở summarize.ts đã chặn
+    // svg/gif/icon + thumbnail nhỏ, Jina strip aside/sidebar nên ít khi lọt rác.
+    const media = blocks.filter((b) =>
+      (b.type === 'image' || b.type === 'video') && b.url !== item.image); // trừ ảnh đã lên hero
     const paras = summary.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     const nodes: any[] = [];
 
-    // Shared interpolation logic: distribute media evenly across paragraphs
+    // Điểm chèn media theo TỈ LỆ VỊ TRÍ THẬT trong bài gốc: media ở block thứ k/N
+    // → chèn sau đoạn tóm tắt cùng tỉ lệ (k/N * số đoạn). Ép thêm khoảng cách
+    // tối thiểu 1 đoạn giữa 2 media: nhiều bài dồn ảnh ở nửa đầu, không ép thì
+    // 2–3 ảnh xếp chồng ngay sau đoạn 1 trong khi phần sau toàn chữ.
     const getInsertPoints = () => {
-      const points: number[] = [];
-      media.forEach((_, mi) => {
-        const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
-        points.push(at);
+      const denom = Math.max(blocks.length - 1, 1);
+      let prev = 0;
+      return media.map((m) => {
+        const want = Math.round((blocks.indexOf(m) / denom) * paras.length);
+        // Tràn (media nhiều hơn đoạn): các media thừa xếp liên tiếp cuối bài kiểu gallery
+        const at = Math.min(paras.length, Math.max(want, prev + 1));
+        prev = at;
+        return at;
       });
-      return points;
     };
 
     // Phân loại đoạn: dòng gạch đầu dòng (- / • / *) = điểm nhấn, đoạn đầu tiên = lead
@@ -561,9 +566,10 @@ export default function ArticleScreen({ navigation, route }: any) {
       );
     };
     if (!media.length) return paras.map((_, i) => renderParaNative(i));
+    const insertPoints = getInsertPoints();
     let cur = 0;
     media.forEach((mb, mi) => {
-      const at = Math.min(paras.length, Math.round(((mi + 1) * paras.length) / (media.length + 1)));
+      const at = insertPoints[mi];
       while (cur < at) { nodes.push(renderParaNative(cur)); cur++; }
       nodes.push(renderMedia(mb, 'm' + mi));
     });
@@ -765,9 +771,48 @@ const BlockVideo = memo(function BlockVideo({ block }: { block: ArticleBlock }) 
   );
 });
 
+const HLS_RE = /\.m3u8(\?|#|$)/i;
+
+// HLS (m3u8, vd video.vnexpress.net): LUÔN đi qua proxy /api/hls mọi nền tảng —
+// CDN chặn theo Referer, chỉ proxy gắn được header đúng. Web Chrome còn không
+// chơi HLS native nên phải qua hls.js.
+// Tách component vì useVideoPlayer là hook — không được đứng sau early-return.
 function FileVideo({ url }: { url: string }) {
+  if (!HLS_RE.test(url)) return <ExpoFileVideo url={url} />;
+  if (Platform.OS === 'web') return <WebHlsVideo url={url} />;
+  return <ExpoFileVideo url={`${getProxyBase()}/api/hls?url=${encodeURIComponent(url)}`} />;
+}
+
+function ExpoFileVideo({ url }: { url: string }) {
   const player = useVideoPlayer(url, (p) => { p.loop = false; });
   return <VideoView style={styles.videoThumb} player={player} nativeControls contentFit="cover" />;
+}
+
+// Cùng cách phát như WebVideoPlayer trong VideoModal (hls.js + /api/hls)
+function WebHlsVideo({ url }: { url: string }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const src = `${getProxyBase()}/api/hls?url=${encodeURIComponent(url)}`;
+    let hls: Hls | null = null;
+    if (Hls.isSupported()) {
+      hls = new Hls();
+      hls.loadSource(src);
+      hls.attachMedia(video);
+    } else {
+      video.src = src; // Safari chơi HLS native qua proxy
+    }
+    return () => { if (hls) hls.destroy(); };
+  }, [url]);
+  return (
+    <video
+      ref={ref}
+      controls
+      playsInline
+      style={{ width: '100%', height: 200, backgroundColor: '#000' }}
+    />
+  );
 }
 
 // Ảnh mà không load được (url hỏng/đổi trang) → trả về null, không để lại ô trống rác.

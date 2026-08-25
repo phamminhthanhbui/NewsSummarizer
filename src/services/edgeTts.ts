@@ -25,7 +25,7 @@ export async function speakEdge(text: string): Promise<string> {
     return URL.createObjectURL(blob);
   }
   const errText = await res.text().catch(() => '');
-  throw new Error(`Edge TTS lỗi: ${res.status} ${errText}`);
+  throw new Error(`Không tạo được giọng đọc (HTTP ${res.status}) ${errText}`);
 }
 
 export function revokeAudioUrl(url: string) {

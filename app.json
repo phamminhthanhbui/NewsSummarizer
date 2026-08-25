@@ -23,6 +23,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/with-cleartext.js",
       "expo-video",
       "expo-font",
       ["expo-notifications", { "color": "#FB512A", "icon": "./assets/android-icon-monochrome.png", "defaultChannel": "daily-digest" }]

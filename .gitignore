@@ -45,3 +45,6 @@ test-results/
 
 # Edge TTS MP3 disk cache (server/proxy.js)
 server/.tts-cache/
+
+# local env
+.env

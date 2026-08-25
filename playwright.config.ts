@@ -11,9 +11,7 @@ export default defineConfig({
   fullyParallel: false, // 1 dev server + localStorage seed → chạy tuần tự cho ổn định
   workers: 1,
   retries: 0,
-  // list = in kết quả ra console; autofix-reporter = test fail thì tự mở
-  // fcc-server (nếu chưa chạy) + fcc-claude --dangerously-skip-permissions để sửa
-  reporter: [['list'], ['./e2e/autofix-reporter.ts']],
+  reporter: [['list']],
   use: {
     baseURL: 'http://localhost:8087',
     trace: 'retain-on-failure',

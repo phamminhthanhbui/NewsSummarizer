@@ -5,6 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 
+// Node 24 bug (undici): keep-alive socket bị đóng giữa chừng → assert(!this.paused)
+// ném uncaughtException ở tầng socket parser, ngoài tầm try/catch của từng route
+// → giết cả proxy. Nuốt ĐÚNG lỗi này thôi; mọi uncaught khác vẫn crash như thường.
+process.on('uncaughtException', (err) => {
+  if (err && err.code === 'ERR_ASSERTION' && /undici/.test(err.stack || '')) return;
+  throw err;
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -39,10 +47,20 @@ app.post('/api/llm', async (req, res) => {
 
 // Generic fetch proxy — RSS feeds etc. Fetch phía server nên không dính CORS
 // của trình duyệt, thay proxy Vercel (api-proxy-liart-ten) hay 502.
+// Cache in-memory TTL 3 phút: app mở lại/reload trong vòng 3 phút = 45 feed trả
+// tức thì từ RAM, khỏi fetch lại từng báo. TTL ngắn nên tin vẫn đủ mới.
+const FETCH_CACHE_TTL = 3 * 60 * 1000;
+const fetchCache = new Map(); // url -> { t, ct, body }
+
 app.get('/api/fetch', async (req, res) => {
   const url = req.query.url;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'Missing required query param: url' });
+  }
+  const hit = fetchCache.get(url);
+  if (hit && Date.now() - hit.t < FETCH_CACHE_TTL) {
+    res.setHeader('Content-Type', hit.ct);
+    return res.send(hit.body);
   }
   try {
     const response = await fetch(url, {
@@ -52,6 +70,9 @@ app.get('/api/fetch', async (req, res) => {
       return res.status(response.status).json({ error: `Upstream ${response.status}` });
     }
     const data = await response.text();
+    // Cap 200 entry — quá cũ thì tự rơi ra khi Map phình, không cần sweeper
+    if (fetchCache.size > 200) fetchCache.clear();
+    fetchCache.set(url, { t: Date.now(), ct: response.headers.get('content-type') || 'text/xml; charset=utf-8', body: data });
     res.setHeader('Content-Type', response.headers.get('content-type') || 'text/xml; charset=utf-8');
     return res.send(data);
   } catch (e) {
@@ -191,6 +212,18 @@ async function crawlVnExpressVideo() {
       stream: (block.match(/"m3u8":"([^"]+)"/) || [])[1]?.replace(/\\\//g, '/') || '',
     });
   }
+  // Video nào listing không cho sẵn m3u8 (data-extend thiếu) → fetch trang chi tiết
+  // của chính nó để bóc stream, tránh rơi vào fallback "xem tại nguồn".
+  const need = videos.filter((v) => !v.stream);
+  for (let i = 0; i < need.length; i += 5) {
+    const batch = await Promise.all(need.slice(i, i + 5).map(async (v) => {
+      try {
+        const r = await fetch(v.link, { headers: UA, signal: AbortSignal.timeout(8000) });
+        return extractM3u8(await r.text());
+      } catch { return ''; }
+    }));
+    need.forEach((v, j) => { v.stream = batch[j]; });
+  }
   return videos;
 }
 
@@ -231,6 +264,8 @@ async function crawlNld() {
   const seen = new Set();
   for (const block of html.split('<div class="box-category-item"').slice(1)) {
     const href = (block.match(/href="(\/nld\/video[^"]+\.htm)"/) || [])[1] || '';
+    // Bỏ link chuyên mục (/nld/video/thoi-su-*.htm) — bài thật luôn có id số cuối URL
+    if (!href || !/-\d+\.htm$/.test(href)) continue;
     const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
     const stream = (block.match(/data-src="(https:[^"]+\.mp4)"/) || [])[1] || '';
     const thumb = (block.match(/poster="([^"]+)"/) || [])[1] || '';
@@ -403,6 +438,34 @@ app.get('/api/jina', async (req, res) => {
     if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
   }
   res.status(502).json({ error: 'Jina failed after retries', status: lastStatus });
+});
+
+// Bóc stream video (.m3u8) từ HTML thô của trang bài viết. Trang dạng VIDEO
+// (video.vnexpress.net/...) nhúng player JS nên Jina markdown KHÔNG chứa link
+// stream — phải đọc HTML gốc. Trả {stream:''} khi không có.
+// Rút link m3u8 từ HTML trang VnExpress: ưu tiên JSON data-extend
+// ("m3u8":"...\/2025\/...\/master.m3u8", escape /), fallback URL .m3u8 đầu tiên.
+function extractM3u8(html) {
+  const m = html.match(/"m3u8":"([^"]+)"/);
+  if (m) return m[1].replace(/\\u002[fF]|\\\//g, '/');
+  const g = html.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i);
+  return g ? g[0] : '';
+}
+
+app.get('/api/article-stream', async (req, res) => {
+  const url = req.query.url;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required query param: url' });
+  }
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(10000),
+    });
+    res.json({ stream: extractM3u8(await response.text()) });
+  } catch (e) {
+    res.status(502).json({ error: 'article-stream failed', message: e.message });
+  }
 });
 
 // Edge TTS proxy — Microsoft Edge TTS websocket protocol.

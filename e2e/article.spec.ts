@@ -98,6 +98,11 @@ test.describe('Tóm tắt AI', () => {
 });
 
 test.describe('Lưu / bỏ lưu', () => {
+  // Tiêu đề bài hiện ở NHIỀU chỗ visible cùng lúc trên tab Đã lưu (card danh sách
+  // + các section khác) → strict mode bắt buộc .first(). Filter visible để không
+  // trúng bản copy ẩn trong tab screen RN-web vẫn giữ mounted.
+  const visibleTitle = (page: Page) => page.getByText(FIRST.title).filter({ visible: true }).first();
+
   test('bấm bookmark: lưu vào storage; tab Đã lưu hiện bài', async ({ page }) => {
     await openFirstArticle(page);
     await floatBarButtons(page).bookmark.click();
@@ -108,7 +113,7 @@ test.describe('Lưu / bỏ lưu', () => {
     }).toPass({ timeout: 10_000 });
 
     await gotoTab(page, 'Đã lưu');
-    await expect(page.getByText(FIRST.title).first()).toBeVisible();
+    await expect(visibleTitle(page)).toBeVisible();
   });
 
   test('bấm bookmark lần hai: bỏ lưu', async ({ page }) => {
@@ -129,7 +134,7 @@ test.describe('Lưu / bỏ lưu', () => {
     await page.reload();
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Đã lưu');
-    await expect(page.getByText(FIRST.title)).toBeVisible();
+    await expect(visibleTitle(page)).toBeVisible();
     await page.getByLabel('Bỏ lưu bài').click();
     await expect(page.getByText('Chưa có bài đã lưu')).toBeVisible();
   });

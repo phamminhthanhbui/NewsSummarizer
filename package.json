@@ -42,6 +42,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "proxy": "node server/proxy.js",
+    "build:android": "expo prebuild -p android && cd android && gradlew.bat assembleRelease",
+    "build:ios": "expo prebuild -p ios && cd ios && pod install && xcodebuild -workspace NewsSummarizer.xcworkspace -scheme NewsSummarizer -configuration Release",
     "test:e2e": "playwright test"
   },
   "private": true
