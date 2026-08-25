@@ -453,8 +453,9 @@ export default function HomeScreen({ navigation }: Props) {
       setItems(cached);
       setLoading(false); // có cache → hiện ngay (stale-while-revalidate), fetch mới chạy nền
     }
-    // Video tải nền riêng — không chặn nội dung chính (proxy chết phải chờ timeout 8s/candidates)
-    fetchVideos()
+    // Video tải nền riêng — không chặn nội dung chính. Có cache hiện ngay,
+    // crawl mới xong thì cập nhật qua onFresh.
+    fetchVideos(setVideos)
       .then(setVideos)
       .catch(() => {});
     // Feed xong đến đâu hiện đến đó, không chờ feed chậm nhất
@@ -597,11 +598,11 @@ export default function HomeScreen({ navigation }: Props) {
     if (heroes.length < 2 || reduceMotion || marqueeCopyW <= 0 || E2E) return;
     const t = setInterval(() => {
       if (!marqueeAutoRef.current) return;
-      let x = marqueeXRef.current + 2; // ~66px/s
+      let x = marqueeXRef.current + 3; // ~66px/s (3px mỗi 45ms) — đỡ gánh JS thread
       if (x >= marqueeCopyW) x = 0; // hết bản copy 1 → quay về đầu (nội dung giống hệt)
       marqueeXRef.current = x;
       marqueeScrollRef.current?.scrollTo({ x, animated: false });
-    }, 30);
+    }, 45);
     return () => clearInterval(t);
   }, [heroes.length, reduceMotion, marqueeCopyW]);
 

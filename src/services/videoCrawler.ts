@@ -1,0 +1,256 @@
+// Video crawl NGAY TRONG APP — không cần proxy PC.
+// Cập nhật: thêm detail-page fallback để lấy stream cho video thiếu,
+// lấy video nổi bật từ TẤT CẢ nguồn, cache TTL để video không cũ.
+
+import type { VideoItem } from '../types';
+
+const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+const FEATURED_PER_SOURCE = 4;
+const MAX_DETAIL_FETCHES = 10;
+
+const decodeHtml = (s: string) => s
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+
+async function getHtml(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, { headers: UA, signal: controller.signal });
+    if (!res.ok) return '';
+    return res.text();
+  } finally { clearTimeout(timer); }
+}
+
+async function fetchStreamFromDetail(link: string, source: string): Promise<string> {
+  try {
+    const html = await getHtml(link);
+    if (!html) return '';
+    // VNExpress / generic m3u8 in page
+    const m3u8 = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/);
+    if (m3u8) return m3u8[0].replace(/&amp;/g, '&');
+    // data-vid (Kenh14, Soha, ThanhNien style)
+    const vid = html.match(/data-vid="([^"]+)"/) || html.match(/data-trailer="([^"]+)"/);
+    if (vid) {
+      const v = vid[1].replace(/\\\//g, '/');
+      return v.startsWith('http') ? v : (v.startsWith('//') ? 'https:' + v : 'https://' + v);
+    }
+    // direct mp4 in src/data-src
+    const mp4 = html.match(/https?:\/\/[^"']+\.mp4[^"']*/);
+    if (mp4) return mp4[0].replace(/&amp;/g, '&');
+    // source/file keys in JS
+    const src = html.match(/"file"\s*:\s*"([^"]+)"/) || html.match(/"source"\s*:\s*"([^"]+)"/);
+    if (src) return src[1].replace(/\\\//g, '/');
+    return '';
+  } catch { return ''; }
+}
+
+/* ─── crawlers ─── */
+
+async function crawlKenh14(): Promise<VideoItem[]> {
+  const html = await getHtml('https://video.kenh14.vn/');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split('<li class="swiper-slide"').slice(1)) {
+    const attr = (name: string) => {
+      const m = block.match(new RegExp(name + '="([^"]*)"'));
+      return m ? decodeHtml(m[1]) : '';
+    };
+    const title = attr('data-title');
+    const link = attr('data-share');
+    if (!title || !link || seen.has(link)) continue;
+    seen.add(link);
+    const vid = attr('data-vid');
+    videos.push({
+      title, link,
+      thumb: attr('data-thumb') || (block.match(/background-image:\s*url\('([^']+)'\)/) || [])[1] || '',
+      duration: (block.match(/ava_duration">([^<]+)</) || [])[1] || '',
+      pubDate: attr('data-distribution-date'),
+      zone: '',
+      source: 'Kenh14',
+      stream: vid ? (vid.startsWith('http') ? vid : 'https://' + vid) : '',
+    });
+  }
+  return videos;
+}
+
+async function crawlSoha(): Promise<VideoItem[]> {
+  const html = await getHtml('https://soha.vn/video.htm');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split('<article class="box-category-item').slice(1)) {
+    const title = decodeHtml((block.match(/title="([^"]+)"/) || [])[1] || '');
+    const href = (block.match(/href="(\/video\/[^"]+)"/) || [])[1] || '';
+    if (!title || !href) continue;
+    const link = 'https://soha.vn' + href;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    videos.push({
+      title, link,
+      thumb: (block.match(/poster="([^"]+)"/) || block.match(/<img[^>]+src="([^"]+)"/) || [])[1] || '',
+      duration: '', pubDate: (block.match(/time-ago" title="([^"]+)"/) || [])[1] || '',
+      zone: '', source: 'Soha', stream: '',
+    });
+  }
+  const streamById = new Map<string, string>();
+  for (const block of html.split('<div class="VCSortableInPreviewMode').slice(1)) {
+    const id = (block.match(/data-share="[^"]*video-(\d+)\.htm"/) || [])[1] || '';
+    const vid = (block.match(/data-vid="([^"]+)"/) || [])[1] || '';
+    if (id && vid) streamById.set(id, vid.startsWith('http') ? vid : 'https://' + vid);
+  }
+  const idOf = (link: string) => (link.match(/-(\d+)\.htm$/) || [])[1] || '';
+  for (const v of videos) { const id = idOf(v.link); if (streamById.has(id)) v.stream = streamById.get(id); }
+  return videos;
+}
+
+// VNExpress: featured + regular article blocks, detail fallback cho thiếu stream
+async function crawlVnExpressVideo(): Promise<VideoItem[]> {
+  const html = await getHtml('https://video.vnexpress.net/');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of html.split('<article class="art_item').slice(1)) {
+    const cls = (raw.match(/^([^"]*)"/) || [])[1] || '';
+    if (!cls.startsWith(' ')) continue;
+    const href = (raw.match(/href="(https:\/\/video\.vnexpress\.net\/[^"]+\.html)"/) || [])[1] || '';
+    const title = decodeHtml((raw.match(/title="([^"]+)"/) || [])[1] || '');
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const dr = parseInt((raw.match(/"dr":(\d+)/) || [])[1] || '0', 10);
+    const thumb = decodeHtml((raw.match(/data-original="([^"]+)"/) || raw.match(/data-fornext="([^"]+)"/) || [])[1] || '');
+    const featured = cls.includes('art_featured');
+    videos.push({
+      title, link: href, thumb,
+      duration: dr ? `${Math.floor(dr / 60)}:${String(dr % 60).padStart(2, '0')}` : '',
+      pubDate: '',
+      zone: featured ? 'Video nổi bật' : '',
+      source: 'VNExpress',
+      stream: (raw.match(/"m3u8":"([^"]+)"/) || [])[1]?.replace(/\\\//g, '/') || '',
+    });
+  }
+  return videos;
+}
+
+async function crawlThanhNien(): Promise<VideoItem[]> {
+  const html = await getHtml('https://thanhnien.vn/video.htm');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split('<a class="box-category-link-with-avatar').slice(1)) {
+    const href = (block.match(/href="(\/[^"]+\.htm)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const vid = (block.match(/data-vid="([^"]+)"/) || [])[1] || '';
+    const thumb = (block.match(/<img[^>]+src="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || !href.startsWith('/') || seen.has(href)) continue;
+    seen.add(href);
+    videos.push({
+      title, link: 'https://thanhnien.vn' + href, thumb, duration: '', pubDate: '', zone: '', source: 'Thanh Niên',
+      stream: vid ? (vid.startsWith('http') ? vid : 'https://' + vid) : '',
+    });
+  }
+  return videos;
+}
+
+async function crawlNld(): Promise<VideoItem[]> {
+  const html = await getHtml('https://nld.com.vn/video.htm');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split('<div class="box-category-item"').slice(1)) {
+    const href = (block.match(/href="(\/[^"]+\.htm)"/) || [])[1] || '';
+    if (!href || !/-\d+\.htm$/.test(href)) continue;
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const stream = (block.match(/data-src="(https:[^"]+\.mp4)"/) || [])[1] || '';
+    const thumb = (block.match(/poster="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    videos.push({
+      title, link: 'https://nld.com.vn' + href, thumb, duration: '', pubDate: '', zone: '', source: 'Người Lao Động', stream,
+    });
+  }
+  return videos;
+}
+
+async function crawlTuoitre(): Promise<VideoItem[]> {
+  const html = await getHtml('https://tuoitre.vn/video/moi-nhat.htm');
+  if (!html) return [];
+  const videos: VideoItem[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split('<article class="box-category-item"').slice(1)) {
+    const href = (block.match(/href="(\/video\/[^"]+\.htm)"/) || [])[1] || '';
+    const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
+    const trailer = (block.match(/data-trailer="([^"]+)"/) || [])[1] || '';
+    const thumb = (block.match(/data-thumb="([^"]+)"/) || [])[1] || '';
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const rel = trailer.replace(/^tuoitre\//, '');
+    videos.push({
+      title, link: 'https://tuoitre.vn' + href, thumb, duration: '', pubDate: '', zone: '', source: 'Tuổi Trẻ',
+      stream: trailer ? 'https://cdn2.tuoitre.vn/' + rel : '',
+    });
+  }
+  return videos;
+}
+
+/* ─── pool ─── */
+
+async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  const workers = Array.from({ length: Math.min(size, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+/* ─── main ─── */
+
+export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
+  const featured = await crawlVnExpressVideo().catch(() => [] as VideoItem[]);
+  onPartial?.(featured);
+
+  const restJobs = [
+    crawlKenh14, crawlSoha, crawlThanhNien, crawlNld, crawlTuoitre,
+  ].map((fn) => () => fn().catch(() => [] as VideoItem[]));
+  const others = (await runPool(restJobs, 3)).flat();
+
+  // Gộp tất cả
+  const all = [...featured, ...others];
+
+  // Đánh dấu featured cho source không phải VNExpress (first N mỗi source)
+  const seenSources = new Map<string, number>();
+  for (const v of all) {
+    if (v.source === 'VNExpress') continue;
+    const count = (seenSources.get(v.source) || 0) + 1;
+    seenSources.set(v.source, count);
+    if (count <= FEATURED_PER_SOURCE) v.zone = 'Video nổi bật';
+  }
+
+  // Fill stream cho video thiếu (ưu tiên featured trước)
+  const missing = all.filter(v => !v.stream && v.zone === 'Video nổi bật')
+    .concat(all.filter(v => !v.stream && v.zone !== 'Video nổi bật'))
+    .slice(0, MAX_DETAIL_FETCHES);
+  for (const v of missing) {
+    const stream = await fetchStreamFromDetail(v.link, v.source).catch(() => '');
+    if (stream) v.stream = stream;
+  }
+
+  // Featured lên đầu
+  all.sort((a, b) => {
+    if (a.zone === 'Video nổi bật' && b.zone !== 'Video nổi bật') return -1;
+    if (a.zone !== 'Video nổi bật' && b.zone === 'Video nổi bật') return 1;
+    return 0;
+  });
+
+  return all;
+}

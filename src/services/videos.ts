@@ -1,14 +1,20 @@
-// Video crawl — RSS không có video/live, phải parse trang video của báo.
-// Server crawl (server/proxy.js /api/videos), client chỉ lấy JSON.
-// VNExpress/Kenh14/Soha có stream (m3u8/mp4) → phát trong popup qua /api/hls
-// proxy (CDN chặn browser gọi thẳng). Video crawl hụt stream → mở trang gốc.
+// Video crawl — app tự crawl thẳng từ trang video các báo, KHÔNG cần proxy PC.
+// Cache AsyncStorage có TTL: mở lại app hiện video ngay nếu cache còn hạn,
+// nếu quá hạn vẫn hiện cache cũ nhưng chờ crawl mới foreground (tối đa 10s).
+// Cache mới luôn ghi đè, kể cả crawl thiếu source.
 
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { VideoItem } from '../types';
+import { KEYS } from '../services/storage';
 import { getProxyBase } from '../utils/proxy';
+import { crawlAllVideos } from './videoCrawler';
 
-// localhost:3001 chỉ đúng trên PC/emulator. Điện thoại thật phải gọi proxy qua
-// IP LAN của máy chạy metro — hostUri (vd "192.168.1.19:8087") mang IP đó.
-// Thử lần lượt từng địa chỉ: cái nào sống thì dùng, chết thử cái tiếp.
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 phút
+const FOREGROUND_TIMEOUT_MS = 12000;
+
+interface CacheEntry { ts: number; videos: VideoItem[]; }
+
 function proxyCandidates(): string[] {
   const list = ['http://localhost:3001'];
   const base = getProxyBase();
@@ -16,23 +22,72 @@ function proxyCandidates(): string[] {
   return list;
 }
 
-export async function fetchVideos(): Promise<VideoItem[]> {
+async function readCache(): Promise<CacheEntry | null> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.videosCache);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Backward compat: cache cũ là array
+    return Array.isArray(parsed) ? { ts: 0, videos: parsed } : parsed;
+  } catch { return null; }
+}
+
+function writeCache(entry: CacheEntry) {
+  AsyncStorage.setItem(KEYS.videosCache, JSON.stringify(entry)).catch(() => {});
+}
+
+async function fetchViaProxy(): Promise<VideoItem[]> {
   const candidates = proxyCandidates();
-  console.log('[videos] thử:', candidates.join(', '));
   for (const base of candidates) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 4000);
       const res = await fetch(base + '/api/videos', { signal: controller.signal });
       clearTimeout(timeout);
-      if (!res.ok) { console.log('[videos]', base, '→ HTTP', res.status); continue; }
+      if (!res.ok) continue;
       const data = await res.json();
-      if (Array.isArray(data.videos)) { console.log('[videos]', base, '→ OK', data.videos.length, 'video'); return data.videos; }
-    } catch (e: any) {
-      console.log('[videos]', base, '→ LỖI:', e?.message || e);
-      // địa chỉ này chết — thử cái tiếp theo
-    }
+      if (Array.isArray(data.videos) && data.videos.length) return data.videos;
+    } catch {}
   }
-  console.log('[videos] TẤT CẢ URL ĐỀU FAIL → section video ẩn');
   return [];
+}
+
+async function refresh(onFresh?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
+  if (Platform.OS === 'web') return fetchViaProxy();
+  const direct = await crawlAllVideos(onFresh);
+  if (direct.length) return direct;
+  return fetchViaProxy();
+}
+
+export async function fetchVideos(onFresh?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
+  const entry = await readCache();
+  const now = Date.now();
+  const fresh = entry && (now - entry.ts) < CACHE_TTL_MS;
+
+  if (entry && fresh) {
+    // Cache còn hạn: trả ngay, crawl nền cập nhật
+    refresh(onFresh).then((videos) => {
+      if (videos.length) writeCache({ ts: Date.now(), videos });
+      if (videos.length) onFresh?.(videos);
+    }).catch(() => {});
+    return entry.videos;
+  }
+
+  if (entry && !fresh) {
+    // Cache hết hạn: trả cache cũ (UI không trống) nhưng chờ crawl mới
+    // foreground với timeout — nếu kịp thì trả mới, không thì trả cũ.
+    const timeout = new Promise<null>((_, reject) => setTimeout(() => reject(), FOREGROUND_TIMEOUT_MS));
+    const crawl = refresh().then((videos) => {
+      if (videos.length) { writeCache({ ts: Date.now(), videos }); onFresh?.(videos); }
+      return videos;
+    });
+    const freshVideos = await Promise.race([crawl, timeout]).catch(() => null);
+    if (freshVideos && freshVideos.length) return freshVideos;
+    return entry.videos;
+  }
+
+  // Không cache: crawl foreground
+  const videos = await refresh().catch(() => [] as VideoItem[]);
+  if (videos.length) writeCache({ ts: Date.now(), videos });
+  return videos;
 }

@@ -2,6 +2,7 @@
 // điện thoại tự nối từng báo); proxy tắt thì gọi thẳng nguồn RSS.
 // ponytail: regex XML parser, no libs.
 
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
 import { KEYS, LIMITS } from '../services/storage';
@@ -150,28 +151,21 @@ function parseXml(xml: string): FeedItem[] {
 }
 
 export async function fetchFeed(url: string): Promise<FeedItem[]> {
-  // Thử qua proxy trước với timeout NGẮN (6s): proxy chết/không tới được thì
-  // fallback gọi thẳng nguồn RSS ngay, khỏi chờ 15s. Native không bị CORS nên
-  // gọi thẳng đọc được ngay khi PC tắt proxy; web khi đó vẫn dính CORS và trả [].
-  const attempts: [string, number][] = [
-    [PROXY + encodeURIComponent(url), 6000],
-    [url, 12000],
-  ];
-  for (const [finalUrl, timeoutMs] of attempts) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(finalUrl, { signal: controller.signal });
-      if (!res.ok) continue;
-      const xml = await res.text();
-      return parseXml(xml);
-    } catch {
-      // proxy hỏng / CORS / timeout → thử nguồn tiếp theo
-    } finally {
-      clearTimeout(timer);
-    }
+  // Native gọi THẲNG nguồn RSS (không bị CORS, khỏi chờ proxy) — nhanh nhất.
+  // Web bắt buộc qua proxy local (trình duyệt dính CORS).
+  const finalUrl = Platform.OS === 'web' ? PROXY + encodeURIComponent(url) : url;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(finalUrl, { signal: controller.signal });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    return parseXml(xml);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
   }
-  return [];
 }
 
 // Cache RSS vào AsyncStorage — lần mở app sau hiện tin tức thì (stale-while-revalidate),
@@ -217,35 +211,72 @@ function finalize(results: FeedItem[], featured: FeedItem[]): FeedItem[] {
   return [...seen.values()];
 }
 
+// Fetch feed theo pool có giới hạn (tránh bắn ~50 request cùng lúc khiến JS thread
+// nghẽn: tap không phản hồi lúc mới mở app). Feed nổi bật chạy TRƯỚC để carousel
+// hiện sớm. onProgress được gộp (throttle) để màn hình không re-render liên tục.
+const FEED_POOL_SIZE = 8;
+const PROGRESS_MIN_MS = 150;
+
+async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  const workers = Array.from({ length: Math.min(size, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 export async function fetchAllFeeds(onProgress?: (items: FeedItem[]) => void): Promise<FeedItem[]> {
-  const regularTasks = FEEDS.map(async (d) => {
-    const items = await fetchFeed(d.url);
-    return items.map((i) => ({ ...i, source: d.name, category: d.category }));
-  });
-  const featuredTasks = FEATURED_FEEDS.map(async (d) => {
+  // Nổi bật ưu tiên trước trong pool → hero/top stories lên sớm nhất.
+  const featuredJobs = FEATURED_FEEDS.map((d) => async () => {
     const items = await fetchFeed(d.url);
     return items.map((i) => ({ ...i, source: d.name, category: d.category, featured: true }));
   });
-  const allTasks = [...regularTasks, ...featuredTasks];
+  const regularJobs = FEEDS.map((d) => async () => {
+    const items = await fetchFeed(d.url);
+    return items.map((i) => ({ ...i, source: d.name, category: d.category }));
+  });
 
-  // Snapshot từng phần: feed nào xong trước thì bài của nó lên màn hình trước,
-  // không phải chờ feed chậm nhất (timeout 15s).
   const accRegular: FeedItem[] = [];
   const accFeatured: FeedItem[] = [];
-  regularTasks.forEach((t) => t.then((items) => {
-    accRegular.push(...items);
-    onProgress?.(finalize(accRegular, accFeatured));
-  }).catch(() => {}));
-  featuredTasks.forEach((t) => t.then((items) => {
-    accFeatured.push(...items);
-    onProgress?.(finalize(accRegular, accFeatured));
-  }).catch(() => {}));
+  let lastEmit = 0;
+  let emitTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const settled = await Promise.allSettled(allTasks);
-  const results = settled.slice(0, FEEDS.length).flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-  const featuredResults = settled.slice(FEEDS.length).flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  const emit = () => {
+    lastEmit = Date.now();
+    emitTimer = null;
+    onProgress?.(finalize(accRegular, accFeatured));
+  };
+  const scheduleEmit = () => {
+    const now = Date.now();
+    if (now - lastEmit >= PROGRESS_MIN_MS) {
+      emit();
+    } else if (!emitTimer) {
+      emitTimer = setTimeout(emit, PROGRESS_MIN_MS - (now - lastEmit));
+    }
+  };
 
-  writeFeedsCache(finalize(results, featuredResults));
-  return finalize(results, featuredResults);
+  // Chạy pool: mỗi job xong → cập nhật accumulator + hẹn emit gộp, không chờ hết.
+  const runJob = async (job: () => Promise<FeedItem[]>, featured: boolean) => {
+    const items = await job().catch(() => [] as FeedItem[]);
+    if (featured) accFeatured.push(...items);
+    else accRegular.push(...items);
+    scheduleEmit();
+  };
+  const jobs = [
+    ...featuredJobs.map((j) => () => runJob(j, true)),
+    ...regularJobs.map((j) => () => runJob(j, false)),
+  ];
+  await runPool(jobs, FEED_POOL_SIZE);
+  if (emitTimer) clearTimeout(emitTimer);
+
+  const final = finalize(accRegular, accFeatured);
+  writeFeedsCache(final);
+  return final;
 }
 
