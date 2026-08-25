@@ -1,56 +1,9 @@
-// Edge TTS (Microsoft) — free, no key, high-quality Vietnamese voice
-// Chỉ dùng 1 giọng nam vi-VN-NamMinhNeural (giọng nữ đã bỏ: Web Speech local
-// không đảm bảo có giọng nữ vi, vd Chrome chỉ có giọng nam "Microsoft An").
-import { getProxyBase } from '../utils/proxy';
-
-export const EDGE_VOICE = 'vi-VN-NamMinhNeural';
-
-export async function speakEdge(text: string): Promise<string> {
-  const voice = EDGE_VOICE;
-
-  // Proxy local (server/proxy.js) — tự nhận IP LAN khi chạy trên điện thoại,
-  // localhost khi web local; override bằng EXPO_PUBLIC_PROXY_URL khi deploy.
-  const proxyUrl = getProxyBase();
-  const endpoint = `${proxyUrl}/api/edge-tts`;
-
-  // KHÔNG retry phía client: proxy (server/proxy.js) đã retry 3 lần với backoff.
-  // Client retry thêm = 3×3 = tối đa 9 lần tổng hợp, mỗi lần cold 7-15s → chờ 15-20s+.
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  });
-  if (res.ok) {
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
-  }
-  const errText = await res.text().catch(() => '');
-  throw new Error(`Không tạo được giọng đọc (HTTP ${res.status}) ${errText}`);
-}
-
-export function revokeAudioUrl(url: string) {
-  try { URL.revokeObjectURL(url); } catch {}
-}
-
-// Warm cache TTS ngầm: summary vừa hiện là gọi /api/edge-tts ngay (fire-and-forget),
-// proxy tổng hợp + ghi disk cache. User click Nghe sau đó = cache hit = tức thì,
-// khỏi chờ 5-30s tổng hợp. Cùng text+voice với speakEdge nên key cache khớp.
-// Lỗi thì im lặng — click Nghe vẫn fallback tổng hợp bình thường.
-export function warmEdgeTts(text: string): void {
-  const voice = EDGE_VOICE;
-  const proxyUrl = getProxyBase();
-  const endpoint = `${proxyUrl}/api/edge-tts`;
-  fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  }).catch(() => {});
-}
+// Giọng đọc: ưu tiên expo-speech (thư viện RN, offline, không cần proxy/mạng);
+// web dùng Web Speech API. KHÔNG còn Edge TTS (đã bỏ — app không phụ thuộc proxy).
 
 // Web Speech API: tên giọng vi khác nhau theo trình duyệt (Edge: "Microsoft NamMinh
 // Neural"; Chrome thường chỉ có giọng nam "Microsoft An") và getVoices() trả [] ở lần
-// gọi đầu (load async). Trả về giọng vi bất kỳ, hoặc null nếu trình duyệt KHÔNG CÓ
-// giọng vi → caller tự fallback sang Edge TTS.
+// gọi đầu (load async). Trả về giọng vi bất kỳ, hoặc null nếu trình duyệt KHÔNG CÓ giọng vi.
 export async function resolveWebVoice(): Promise<SpeechSynthesisVoice | null> {
   if (typeof speechSynthesis === 'undefined') return null;
   const voices = await new Promise<SpeechSynthesisVoice[]>((resolve) => {
@@ -66,16 +19,15 @@ export async function resolveWebVoice(): Promise<SpeechSynthesisVoice | null> {
 }
 
 // Web Speech có thể bị TREO ở một số browser (không kích hoạt onstart/onend/onerror).
-// Ghi nhận để lần sau bỏ qua Web Speech, đi thẳng Edge TTS
-// → không phải chờ resolveWebVoice + start-guard nữa (đọc nhanh hơn hẳn).
+// Ghi nhận để lần sau bỏ qua Web Speech → không phải chờ start-guard nữa (đọc nhanh hơn).
 let webVoiceHung = false;
 export function markWebVoiceHung() { webVoiceHung = true; }
 export function isWebVoiceHung() { return webVoiceHung; }
 // Reset mỗi lần BẮT ĐẦU bấm Nghe: mark cũ có thể oan (engine kẹt tạm thời)
-// — reset để Web Speech được thử lại, khỏi rớt thẳng xuống Edge TTS chậm vĩnh viễn.
+// — reset để Web Speech được thử lại.
 export function clearWebVoiceHung() { webVoiceHung = false; }
 
-// Fallback: use expo-speech (system TTS, no network needed)
+// expo-speech (system TTS, no network needed)
 import * as Speech from 'expo-speech';
 
 export type TTSOptions = {

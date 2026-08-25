@@ -46,13 +46,10 @@ function WebVideoPlayer({ stream, width, height }: { stream: string; width: numb
   );
 }
 
-// Native: expo-video chơi cả HLS lẫn mp4, nhưng LUÔN đi qua proxy /api/hls —
-// một số CDN (vnecdn) chặn request không có Referer đúng (native player không
-// tự gửi được); proxy gắn hộ. Playlist rewrite URL segment về relative nên
-// player resolve theo base proxy, mọi nguồn phát đồng nhất.
+// Native: expo-video chơi trực tiếp stream HLS/mp4, không cần proxy.
+// Web thì dùng proxy để hls.js + CDN vượt Referer.
 function NativeVideoPlayer({ stream, width, height }: { stream: string; width: number; height: number }) {
-  const src = `${getProxyBase()}/api/hls?url=${encodeURIComponent(stream)}`;
-  const player = useVideoPlayer(src, (p) => { p.loop = false; p.play(); });
+  const player = useVideoPlayer(stream, (p) => { p.loop = false; p.play(); });
   return (
     <VideoView
       player={player}
@@ -64,7 +61,7 @@ function NativeVideoPlayer({ stream, width, height }: { stream: string; width: n
 }
 
 // Popup phát video nổi bật ngay trong app. Video có stream (VNExpress HLS m3u8,
-// Kenh14/Soha mp4) phát trực tiếp qua proxy; video KHÔNG có stream (CDN chặn,
+// Kenh14/Soha mp4) phát trực tiếp; video KHÔNG có stream (CDN chặn,
 // crawl lấy hụt) hiện thumb + nút mở tại nguồn thay vì nhảy thẳng ra browser.
 // Chỉ mount khi có video → hooks ổn định.
 export default function VideoModal({ video, onClose }: Props) {

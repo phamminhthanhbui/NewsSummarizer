@@ -13,11 +13,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useVideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
+import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
 import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
 import { useAlert } from '../components/AppAlert';
 import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
@@ -69,16 +68,6 @@ export default function SettingsScreen() {
   const [notifTimes, setNotifTimes] = useState<string[]>([]);
   const [notifCustom, setNotifCustom] = useState('');
   const [notifSending, setNotifSending] = useState(false);
-  // Preview giọng đọc (blob Edge TTS) phát qua expo-video — expo-av đã bỏ
-  // (không tương thích expo-modules-core SDK 57). Không cần VideoView.
-  const previewUrlRef = useRef<string | null>(null);
-  const previewPlayer = useVideoPlayer(null, (p) => {
-    p.audioMixingMode = 'doNotMix';
-    p.addListener('playToEnd', () => {
-      setPreviewing(false);
-      if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
-    });
-  });
   const webUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const cfg = PROVIDERS.find((p) => p.id === provider);
@@ -140,13 +129,11 @@ export default function SettingsScreen() {
   };
 
   const stopAudio = () => {
-    // Dừng cả 2 đường: Web Speech (web) + Edge TTS player + expo-speech (native)
+    // Dừng cả 2 đường: Web Speech (web) + expo-speech (native)
     if (isWeb) {
       speechSynthesis.cancel();
       webUtteranceRef.current = null;
     }
-    try { const r: any = previewPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
-    if (previewUrlRef.current) { revokeAudioUrl(previewUrlRef.current); previewUrlRef.current = null; }
     stopSystem();
   };
   const previewVoice = async () => {
@@ -159,81 +146,50 @@ export default function SettingsScreen() {
     try {
       const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
       if (!isWeb) {
-        // Native: ưu tiên expo-speech (thư viện RN, offline, không cần proxy/mạng)
-        try {
-          await speakSystem(text, { pitch, rate });
-          setPreviewing(false);
-          return;
-        } catch {
-          // Máy thiếu giọng vi → fallback Edge TTS bên dưới
-        }
+        // Native: expo-speech (thư viện RN, offline, không cần proxy/mạng)
+        await speakSystem(text, { pitch, rate });
+        setPreviewing(false);
+        return;
       }
-      if (isWeb) {
-        // Browser có giọng vi và chưa từng bị treo → Web Speech (offline, tức thì)
-        const matched = isWebVoiceHung() ? null : await resolveWebVoice();
-        if (matched) {
-          // Start-guard: một số giọng bị treo (không onstart/onend/onerror) →
-          // nếu không bắt đầu phát trong 1.2s thì hủy và fall through xuống Edge TTS.
-          const started = await new Promise<boolean>((resolve) => {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'vi-VN';
-            utterance.rate = rate;
-            utterance.pitch = pitch;
-            utterance.voice = matched;
-            let decided = false; // guard đã quyết định chưa (started | timeout)
-            const guard = setTimeout(() => {
-              if (!decided) { decided = true; try { speechSynthesis.cancel(); } catch {} resolve(false); }
-            }, 1200);
-            const cleanup = () => { setPreviewing(false); webUtteranceRef.current = null; };
-            utterance.onstart = () => { if (!decided) { decided = true; clearTimeout(guard); resolve(true); } };
-            utterance.onend = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
-            // Lỗi hay 'interrupted'/'canceled' (bị cancel đè) → resolve(false):
-            // fall through Edge TTS thay vì im lặng hoặc alert oan.
-            utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(false); } };
-            webUtteranceRef.current = utterance;
-            // Cancel + chờ engine xả queue trước khi speak: cancel() xong speak()
-            // liền tay trên Chrome/Edge dính race — utterance mới bị hủy nhầm hoặc
-            // engine kẹt, onstart không kích hoạt → guard 1.2s → Edge TTS chậm.
-            speechSynthesis.cancel();
-            setTimeout(() => {
-              if (decided) return;
-              try { speechSynthesis.speak(utterance); }
-              catch { if (!decided) { decided = true; clearTimeout(guard); resolve(false); } }
-            }, 120);
-          });
-          if (started) {
-            // Utterance tự kết thúc qua onend (cleanup). Timeout chỉ chặn treo giữa
-            // chừng; kiểm tra ref thay vì state `previewing` (closure giữ giá trị cũ
-            // = true → dừng nhầm UI đang đọc bình thường).
-            setTimeout(() => {
-              if (webUtteranceRef.current) {
-                stopAudio();
-                setPreviewing(false);
-              }
-            }, 15000);
-            return;
+      // Web: browser có giọng vi và chưa từng bị treo → Web Speech (offline, tức thì)
+      const matched = isWebVoiceHung() ? null : await resolveWebVoice();
+      if (!matched) {
+        markWebVoiceHung();
+        throw new Error('Trình duyệt không có giọng đọc tiếng Việt');
+      }
+      const started = await new Promise<boolean>((resolve) => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'vi-VN';
+        utterance.rate = rate;
+        utterance.pitch = pitch;
+        utterance.voice = matched;
+        let decided = false; // guard đã quyết định chưa (started | timeout)
+        const guard = setTimeout(() => {
+          if (!decided) { decided = true; try { speechSynthesis.cancel(); } catch {} resolve(false); }
+        }, 1200);
+        const cleanup = () => { setPreviewing(false); webUtteranceRef.current = null; };
+        utterance.onstart = () => { if (!decided) { decided = true; clearTimeout(guard); resolve(true); } };
+        utterance.onend = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
+        utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(false); } };
+        webUtteranceRef.current = utterance;
+        speechSynthesis.cancel();
+        setTimeout(() => {
+          if (decided) return;
+          try { speechSynthesis.speak(utterance); }
+          catch { if (!decided) { decided = true; clearTimeout(guard); resolve(false); } }
+        }, 120);
+      });
+      if (started) {
+        setTimeout(() => {
+          if (webUtteranceRef.current) {
+            stopAudio();
+            setPreviewing(false);
           }
-          // Giọng bị treo → ghi nhận để lần sau đi thẳng Edge TTS, khỏi chờ guard
-          markWebVoiceHung();
-        }
-        // Browser KHÔNG có giọng vi → fall through xuống Edge TTS
+        }, 15000);
+        return;
       }
-
-      // Edge TTS (native + web fallback khi browser thiếu giọng)
-      setPreviewing(true); // có thể bị cleanup() của utterance bị cancel reset trước đó
-      const url = await speakEdge(text);
-      previewUrlRef.current = url;
-      previewPlayer.replace(url);
-      previewPlayer.playbackRate = rate;
-      previewPlayer.play();
-      // 60s: câu preview ngắn nhưng Edge TTS upstream có thể chậm; kết thúc thật
-      // do playToEnd xử lý. Kiểm tra ref thay vì state `previewing` (closure cũ).
-      setTimeout(() => {
-        if (previewUrlRef.current) {
-          stopAudio();
-          setPreviewing(false);
-        }
-      }, 60000);
+      markWebVoiceHung();
+      throw new Error('Không nghe được giọng Việt trên web');
     } catch (e) {
       showAlert({ type: 'error', message: 'Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown') });
       setPreviewing(false);

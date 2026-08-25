@@ -25,7 +25,7 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
-import { speakEdge, revokeAudioUrl, speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
+import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
 import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 import { getProxyBase } from '../utils/proxy';
@@ -133,23 +133,9 @@ export default function ArticleScreen({ navigation, route }: any) {
   const [isSaved, setIsSaved] = useState(false);
   const [related, setRelated] = useState<FeedItem[]>([]);
   const [speaking, setSpeaking] = useState(false);
-  // Guard async continuation: thoát/dừng khi speakEdge đang fetch dở
-  // thì không cho continuation phát audio bài cũ sau khi fetch xong
+  // Guard async continuation: thoát/dừng khi speakSystem đang phát dở
+  // thì không cho continuation bật lại trạng thái bài cũ
   const cancelledRef = useRef(false);
-  // TTS audio (blob Edge TTS) phát qua expo-video player — expo-av đã bỏ
-  // (không tương thích expo-modules-core SDK 57). Không cần VideoView:
-  // player không gắn surface vẫn buffer + phát audio bình thường.
-  const ttsPlayer = useVideoPlayer(null, (p) => {
-    p.audioMixingMode = 'doNotMix';
-    p.addListener('playToEnd', () => {
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-      setSpeaking(false);
-      setHighlightWordIndex(-1);
-      setHighlightParaIndex(-1);
-      if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
-    });
-  });
-  const ttsUrlRef = useRef<string | null>(null);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
 
   // useCallback: giữ identity ổn định để SafeImg(memo) không re-render theo highlight tick
@@ -265,10 +251,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     return { wordOffsets: offsets, paraWords: paras };
   }, [summary]);
 
-  // Pre-warm cache TTS: summary vừa hiện là tổng hợp NGẦM ngay (fire-and-forget),
-  // user click Nghe sau đó = cache hit tức thì, khỏi chờ 5-30s tổng hợp.
-  // Text phải giống hệt toggleSpeak (replace \n) để key cache khớp.
-  // [Edge TTS đã chuyển thành fallback nên không warm nữa]
+  // Không warm cache Edge TTS nữa — đã bỏ Edge TTS
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tự hiệu chỉnh tốc độ đọc thực RIÊNG CHO TỪNG rate (ms/ký tự đo được). Không quy đổi
@@ -286,11 +269,10 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Giọng đọc: Word-level highlight on web, paragraph fallback on native
   const toggleSpeak = async () => {
     if (speaking) {
-      cancelledRef.current = true; // chặn continuation của speakEdge đang fetch dở
-      try { const r: any = ttsPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
-      if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
+      cancelledRef.current = true; // chặn continuation của speakSystem đang phát dở
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       stopSystem();
+      webSpeech.stop();
       setSpeaking(false);
       setHighlightWordIndex(-1);
       setHighlightParaIndex(-1);
@@ -325,10 +307,10 @@ export default function ArticleScreen({ navigation, route }: any) {
         // WEB: true word-level sync via Web Speech API.
         // Đọc `summary` nguyên bản (KHÔNG replace \n) để charIndex của onboundary
         // khớp 1:1 với wordOffsets build từ chính `summary`.
-        // Browser không có giọng vi hoặc giọng đã biết bị treo (markWebVoiceHung)
-        // → bỏ qua Web Speech, fall through xuống Edge TTS bên dưới.
+        // Không có giọng vi hoặc giọng bị treo (markWebVoiceHung) → không đọc được.
         const webVoice = isWebVoiceHung() ? null : await resolveWebVoice();
-        if (webVoice) try {
+        if (!webVoice) throw new Error('Trình duyệt không có giọng đọc tiếng Việt');
+        try {
           // onboundary KHÔNG đáng tin với giọng vi (nhiều browser không bắn
           // word event) → fallback nội suy theo thời gian. Có boundary thì
           // charIndex chính xác hơn: quy đổi sang progress rồi dùng applyProgress.
@@ -353,73 +335,47 @@ export default function ArticleScreen({ navigation, route }: any) {
           await webSpeech.speak(summary, { lang: 'vi-VN', rate, pitch, voice: webVoice });
           return;
         } catch (e) {
-          // Web Speech failed → fall through to Edge TTS.
           // Chỉ ghi nhận TREO khi đúng lỗi start-guard (không onstart trong 1.2s).
           // Lỗi engine khác (engine kẹt sau khi đổi giọng ở Settings...) là tạm thời —
           // đánh dấu oan thì giọng đó MÃI MÃI mất word-highlight Web Speech.
           if (e instanceof Error && e.message === 'Web Speech did not start') markWebVoiceHung();
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          throw new Error('Không đọc được giọng Việt trên web');
         }
       }
 
-      // NATIVE: ưu tiên expo-speech (thư viện RN, offline, không cần proxy/mạng).
+      // NATIVE: expo-speech (thư viện RN, offline, không cần proxy/mạng).
       // Không có word timing → highlight nội suy theo thời gian ước tính, hiệu chỉnh
-      // ms/ký tự riêng cho từng rate (sysCalibRef). Nếu fail (thiếu giọng vi) →
-      // fallback Edge TTS.
-      // Web: sau Web Speech fail → đi thẳng Edge TTS (expo-speech trên web kém ổn định).
+      // ms/ký tự riêng cho từng rate (sysCalibRef).
+      if (cancelledRef.current) return;
       const text = summary.replace(/\n+/g, '， ');
-      if (!isWeb) {
-        try {
-          if (cancelledRef.current) return;
-          const rateKey = rate.toFixed(1);
-          let sysMsPerChar = sysCalibRef.current[rateKey];
-          if (!sysMsPerChar) {
-            const keys = Object.keys(sysCalibRef.current).map(Number);
-            if (keys.length) {
-              const near = keys.reduce((a, b) => Math.abs(a - rate) < Math.abs(b - rate) ? a : b);
-              sysMsPerChar = sysCalibRef.current[near.toFixed(1)] * Math.pow(near / rate, 1.15);
-            } else {
-              sysMsPerChar = 90 / Math.max(rate, 0.01);
-            }
-          }
-          const sysEstMs = Math.max(text.length * sysMsPerChar, 3000);
-          const sysT0 = Date.now();
-          intervalRef.current = setInterval(() => {
-            if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
-            applyProgress(Math.min((Date.now() - sysT0) / sysEstMs, 0.98));
-          }, 400);
-
-          await speakSystem(text, { pitch, rate });
-          const measuredMs = Date.now() - sysT0;
-          if (text.length > 20 && measuredMs > 500) sysCalibRef.current[rateKey] = measuredMs / text.length;
-          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-          setSpeaking(false);
-          setHighlightWordIndex(-1);
-          setHighlightParaIndex(-1);
-          return;
-        } catch {
-          // expo-speech fail (thiếu giọng vi) → fallback Edge TTS bên dưới
+      const rateKey = rate.toFixed(1);
+      let sysMsPerChar = sysCalibRef.current[rateKey];
+      if (!sysMsPerChar) {
+        const keys = Object.keys(sysCalibRef.current).map(Number);
+        if (keys.length) {
+          const near = keys.reduce((a, b) => Math.abs(a - rate) < Math.abs(b - rate) ? a : b);
+          sysMsPerChar = sysCalibRef.current[near.toFixed(1)] * Math.pow(near / rate, 1.15);
+        } else {
+          sysMsPerChar = 90 / Math.max(rate, 0.01);
         }
       }
+      const sysEstMs = Math.max(text.length * sysMsPerChar, 3000);
+      const sysT0 = Date.now();
+      intervalRef.current = setInterval(() => {
+        if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
+        applyProgress(Math.min((Date.now() - sysT0) / sysEstMs, 0.98));
+      }, 400);
 
-      // Edge TTS (web fallback sau Web Speech; native fallback sau expo-speech).
-      try {
-        const url = await speakEdge(text);
-        if (cancelledRef.current) { revokeAudioUrl(url); return; }
-        ttsUrlRef.current = url;
-        ttsPlayer.replace(url);
-        ttsPlayer.playbackRate = rate;
-        intervalRef.current = setInterval(() => {
-          if (cancelledRef.current) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return; }
-          const dur = ttsPlayer.duration;
-          if (dur > 0) applyProgress(Math.min(ttsPlayer.currentTime / dur, 1));
-        }, 500);
-        ttsPlayer.play();
-        return;
-      } catch {
-        // Edge TTS cũng fail → outer catch cleanup
-      }
-    } catch {
+      await speakSystem(text, { pitch, rate });
+      const measuredMs = Date.now() - sysT0;
+      if (text.length > 20 && measuredMs > 500) sysCalibRef.current[rateKey] = measuredMs / text.length;
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      setSpeaking(false);
+      setHighlightWordIndex(-1);
+      setHighlightParaIndex(-1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Không đọc được');
       setSpeaking(false);
       setHighlightWordIndex(-1);
       setHighlightParaIndex(-1);
@@ -430,9 +386,7 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Dừng đọc khi rời màn hình. Bottom-tabs KHÔNG unmount khi chuyển tab
   // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
   const stopSpeaking = () => {
-    cancelledRef.current = true; // chặn continuation của speakEdge/speakSystem đang chờ
-    try { const r: any = ttsPlayer.pause(); r?.catch?.(() => {}); } catch {} // player có thể đã release khi unmount
-    if (ttsUrlRef.current) { revokeAudioUrl(ttsUrlRef.current); ttsUrlRef.current = null; }
+    cancelledRef.current = true; // chặn continuation của speakSystem đang chờ
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
     webSpeech.stop();
@@ -452,8 +406,6 @@ export default function ArticleScreen({ navigation, route }: any) {
   // Read time estimate (chars → minutes); degrades to stub until content loads
   const READ_WPM = 250;
   const readTime = Math.max(1, Math.ceil((content || item.description).length / READ_WPM));
-
-  const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   // Render 1 media block: ảnh/video
   const renderMedia = (b: ArticleBlock, key: string) => {
@@ -773,14 +725,13 @@ const BlockVideo = memo(function BlockVideo({ block }: { block: ArticleBlock }) 
 
 const HLS_RE = /\.m3u8(\?|#|$)/i;
 
-// HLS (m3u8, vd video.vnexpress.net): LUÔN đi qua proxy /api/hls mọi nền tảng —
-// CDN chặn theo Referer, chỉ proxy gắn được header đúng. Web Chrome còn không
-// chơi HLS native nên phải qua hls.js.
+// HLS (m3u8, vd video.vnexpress.net): web qua proxy /api/hls + hls.js;
+// native expo-video chơi HLS trực tiếp (không cần proxy).
 // Tách component vì useVideoPlayer là hook — không được đứng sau early-return.
 function FileVideo({ url }: { url: string }) {
   if (!HLS_RE.test(url)) return <ExpoFileVideo url={url} />;
   if (Platform.OS === 'web') return <WebHlsVideo url={url} />;
-  return <ExpoFileVideo url={`${getProxyBase()}/api/hls?url=${encodeURIComponent(url)}`} />;
+  return <ExpoFileVideo url={url} />;
 }
 
 function ExpoFileVideo({ url }: { url: string }) {

@@ -1,5 +1,6 @@
-// News feeds — RSS luôn đi qua proxy local (server nhanh hơn nhiều so với
-// điện thoại tự nối từng báo). ponytail: regex XML parser, no libs.
+// News feeds — RSS ưu tiên proxy local (server nhanh hơn nhiều so với
+// điện thoại tự nối từng báo); proxy tắt thì gọi thẳng nguồn RSS.
+// ponytail: regex XML parser, no libs.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
@@ -149,21 +150,25 @@ function parseXml(xml: string): FeedItem[] {
 }
 
 export async function fetchFeed(url: string): Promise<FeedItem[]> {
-  try {
+  // Thử qua proxy trước; proxy tắt/không tới được → thử gọi thẳng nguồn RSS.
+  // Native không bị CORS nên gọi thẳng đọc được ngay khi PC tắt proxy;
+  // web khi đó vẫn dính CORS và trả [] (vốn dĩ web cần proxy cùng máy).
+  const attempts = [PROXY + encodeURIComponent(url), url];
+  for (const finalUrl of attempts) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
-    // Luôn đi qua proxy kể cả native: server fetch song song 45 feed chỉ mất ~2s,
-    // trong khi điện thoại tự nối TLS tới từng báo qua mạng di động thì chậm hơn
-    // nhiều lần. App vốn đã phụ thuộc proxy (Jina/TTS/video) nên không thêm ràng buộc mới.
-    const finalUrl = PROXY + encodeURIComponent(url);
-    const res = await fetch(finalUrl, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return [];
-    const xml = await res.text();
-    return parseXml(xml);
-  } catch {
-    return [];
+    try {
+      const res = await fetch(finalUrl, { signal: controller.signal });
+      if (!res.ok) continue;
+      const xml = await res.text();
+      return parseXml(xml);
+    } catch {
+      // proxy hỏng / CORS / timeout → thử nguồn tiếp theo
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return [];
 }
 
 // Cache RSS vào AsyncStorage — lần mở app sau hiện tin tức thì (stale-while-revalidate),

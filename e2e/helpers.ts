@@ -1,6 +1,6 @@
 // Helpers + mock network cho E2E.
 //
-// App web gọi mạng qua proxy localhost:3001 (feeds, videos, jina, llm, edge-tts)
+// App web gọi mạng qua proxy localhost:3001 (feeds, videos, jina, llm)
 // và provider AI (openrouter/google đi thẳng). Route TẤT CẢ về mock để test
 // không phụ thuộc mạng thật — muốn test mạng thật thì bỏ comment các dòng
 // route() tương ứng.
@@ -213,11 +213,6 @@ export async function mockNetwork(page: Page) {
       contentType: 'application/json',
       body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
     }),
-  );
-
-  // Edge TTS: trả blob audio giả (không cần phát được, chỉ cần fetch 200)
-  await page.route('**/api/edge-tts', (route) =>
-    route.fulfill({ status: 200, contentType: 'audio/mpeg', body: new Uint8Array(64) }),
   );
 
   // HLS segment (nếu video stream được phát) — chặn nhẹ, tránh treo
