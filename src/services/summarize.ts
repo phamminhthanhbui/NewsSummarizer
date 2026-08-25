@@ -673,6 +673,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
     'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',
   };
 
+  // Chạy SONG SONG Jina + HTML media fallback để media xuất hiện cùng lúc với
+  // text tóm tắt, không đợi xong Jina mới fetch HTML.
+  const mediaHtmlPromise = fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+
   let raw = '';
   if (proxyUrl) {
     const res = await fetch(`${proxyUrl}/api/jina?url=${encodeURIComponent(url)}`).catch(() => null);
@@ -691,14 +695,26 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
     if (v) blocks.unshift(v);
   }
 
-  // Bổ sung media bài gốc từ HTML trực tiếp — Jina hay bọc ảnh trong link bài
-  // liên quan (bị lọc) hoặc bỏ sót video. Media mới gộp theo thứ tự gặp trong
-  // HTML; đã có URL nào rồi thì không thêm trùng.
-  const mediaHtml = await fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+  // Gộp media từ HTML fallback (đã fetch song song), rải đều vào giữa các đoạn
+  // text — không dồn hết xuống cuối.
+  const mediaHtml = await mediaHtmlPromise;
   const existingUrls = new Set(blocks.filter((b) => b.url).map((b) => b.url));
   const toAdd = mediaHtml.filter((b) => b.url && !existingUrls.has(b.url));
-  const insertAt = blocks.length - 1 >= 0 ? blocks.length - 1 : 0;
-  blocks.splice(insertAt, 0, ...toAdd);
+  if (toAdd.length) {
+    const textPos: number[] = [];
+    blocks.forEach((b, i) => { if (b.type === 'text') textPos.push(i); });
+    const step = textPos.length > 1
+      ? Math.max(1, (textPos.length - 1) / (toAdd.length + 1))
+      : 1;
+    toAdd.forEach((mb, mi) => {
+      const pi = textPos.length > 1
+        ? Math.min(Math.round((mi + 1) * step), textPos.length - 1)
+        : 0;
+      const insertAt = textPos[pi] + 1;
+      blocks.splice(insertAt, 0, mb);
+      for (let j = pi; j < textPos.length; j++) textPos[j]++;
+    });
+  }
 
   if (blocksToText(blocks).length < LIMITS.articleMinLength && !blocks.some((b) => b.type === 'image' || b.type === 'video')) {
     throw new Error('Bài báo quá ngắn hoặc không có nội dung');
