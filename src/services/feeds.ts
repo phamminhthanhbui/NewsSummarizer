@@ -150,13 +150,16 @@ function parseXml(xml: string): FeedItem[] {
 }
 
 export async function fetchFeed(url: string): Promise<FeedItem[]> {
-  // Thử qua proxy trước; proxy tắt/không tới được → thử gọi thẳng nguồn RSS.
-  // Native không bị CORS nên gọi thẳng đọc được ngay khi PC tắt proxy;
-  // web khi đó vẫn dính CORS và trả [] (vốn dĩ web cần proxy cùng máy).
-  const attempts = [PROXY + encodeURIComponent(url), url];
-  for (const finalUrl of attempts) {
+  // Thử qua proxy trước với timeout NGẮN (6s): proxy chết/không tới được thì
+  // fallback gọi thẳng nguồn RSS ngay, khỏi chờ 15s. Native không bị CORS nên
+  // gọi thẳng đọc được ngay khi PC tắt proxy; web khi đó vẫn dính CORS và trả [].
+  const attempts: [string, number][] = [
+    [PROXY + encodeURIComponent(url), 6000],
+    [url, 12000],
+  ];
+  for (const [finalUrl, timeoutMs] of attempts) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(finalUrl, { signal: controller.signal });
       if (!res.ok) continue;

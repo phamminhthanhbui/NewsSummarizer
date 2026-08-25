@@ -1,9 +1,9 @@
-﻿const express = require('express');
+const express = require('express');
 const cors = require('cors');
 
-// Node 24 bug (undici): keep-alive socket bá»‹ Ä‘Ã³ng giá»¯a chá»«ng â†’ assert(!this.paused)
-// nÃ©m uncaughtException á»Ÿ táº§ng socket parser, ngoÃ i táº§m try/catch cá»§a tá»«ng route
-// â†’ giáº¿t cáº£ proxy. Nuá»‘t ÄÃšNG lá»—i nÃ y thÃ´i; má»i uncaught khÃ¡c váº«n crash nhÆ° thÆ°á»ng.
+// Node 24 bug (undici): keep-alive socket bị đóng giữa chừng → assert(!this.paused)
+// ném uncaughtException ở tầng socket parser, ngoài tầm try/catch của từng route
+// → giết cả proxy. Nuốt ĐÚNG lỗi này thôi; mọi uncaught khác vẫn crash như thường.
 process.on('uncaughtException', (err) => {
   if (err && err.code === 'ERR_ASSERTION' && /undici/.test(err.stack || '')) return;
   throw err;
@@ -41,10 +41,10 @@ app.post('/api/llm', async (req, res) => {
   }
 });
 
-// Generic fetch proxy â€” RSS feeds etc. Fetch phÃ­a server nÃªn khÃ´ng dÃ­nh CORS
-// cá»§a trÃ¬nh duyá»‡t, thay proxy Vercel (api-proxy-liart-ten) hay 502.
-// Cache in-memory TTL 3 phÃºt: app má»Ÿ láº¡i/reload trong vÃ²ng 3 phÃºt = 45 feed tráº£
-// tá»©c thÃ¬ tá»« RAM, khá»i fetch láº¡i tá»«ng bÃ¡o. TTL ngáº¯n nÃªn tin váº«n Ä‘á»§ má»›i.
+// Generic fetch proxy — RSS feeds etc. Fetch phía server nên không dính CORS
+// của trình duyệt, thay proxy Vercel (api-proxy-liart-ten) hay 502.
+// Cache in-memory TTL 3 phút: app mở lại/reload trong vòng 3 phút = 45 feed trả
+// tức thì từ RAM, khỏi fetch lại từng báo. TTL ngắn nên tin vẫn đủ mới.
 const FETCH_CACHE_TTL = 3 * 60 * 1000;
 const fetchCache = new Map(); // url -> { t, ct, body }
 
@@ -59,14 +59,17 @@ app.get('/api/fetch', async (req, res) => {
     return res.send(hit.body);
   }
   try {
+    // Upstream timeout 8s: RSS host treo/crawl chậm không được giữ request client
+    // lâu — client đã tự fallback sang gọi thẳng nếu proxy không kịp trả.
     const response = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsSummarizer RSS reader)' },
+      signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) {
       return res.status(response.status).json({ error: `Upstream ${response.status}` });
     }
     const data = await response.text();
-    // Cap 200 entry â€” quÃ¡ cÅ© thÃ¬ tá»± rÆ¡i ra khi Map phÃ¬nh, khÃ´ng cáº§n sweeper
+    // Cap 200 entry — quá cũ thì tự rơi ra khi Map phình, không cần sweeper
     if (fetchCache.size > 200) fetchCache.clear();
     fetchCache.set(url, { t: Date.now(), ct: response.headers.get('content-type') || 'text/xml; charset=utf-8', body: data });
     res.setHeader('Content-Type', response.headers.get('content-type') || 'text/xml; charset=utf-8');
@@ -76,11 +79,11 @@ app.get('/api/fetch', async (req, res) => {
   }
 });
 
-// Crawl danh sÃ¡ch video tá»« trang video cá»§a cÃ¡c bÃ¡o â€” RSS khÃ´ng cÃ³ video/live.
+// Crawl danh sách video từ trang video của các báo — RSS không có video/live.
 // Kenh14: <li class="swiper-slide"> mang data-title, data-share, data-thumb, duration.
-//   KHÃ”NG dÃ¹ng data-htmlcode: má»i item trá» vá» cÃ¹ng video Ä‘áº§u tiÃªn (bug phÃ­a site).
-// Soha: <article class="box-category-item"> â€” href relative, thumb á»Ÿ poster/img,
-//   ngÃ y giá» trong comment time-ago.
+//   KHÔNG dùng data-htmlcode: mọi item trỏ về cùng video đầu tiên (bug phía site).
+// Soha: <article class="box-category-item"> — href relative, thumb ở poster/img,
+//   ngày giờ trong comment time-ago.
 const decodeHtml = (s) => s
   .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
   .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
@@ -104,12 +107,12 @@ async function crawlKenh14() {
     const link = attr('data-share');
     if (!title || !link || seen.has(link)) continue;
     seen.add(link);
-    // data-vid lÃ  Ä‘Æ°á»ng dáº«n mp4 tÆ°Æ¡ng Ä‘á»‘i (kenh14cdn.com/...) â€” dÃ¹ng lÃ m stream
+    // data-vid là đường dẫn mp4 tương đối (kenh14cdn.com/...) — dùng làm stream
     const vid = attr('data-vid');
     videos.push({
       title,
       link,
-      // data-thumb lÃ  báº£n to (zoom 980x551); background-image chá»‰ lÃ  thumb 80px
+      // data-thumb là bản to (zoom 980x551); background-image chỉ là thumb 80px
       thumb: attr('data-thumb') || (block.match(/background-image:\s*url\('([^']+)'\)/) || [])[1] || '',
       duration: (block.match(/ava_duration">([^<]+)</) || [])[1] || '',
       pubDate: attr('data-distribution-date'),
@@ -121,18 +124,18 @@ async function crawlKenh14() {
   return videos;
 }
 
-// Soha: bÃ i khÃ´ng kÃ¨m data-vid trong listing â†’ fetch trang chi tiáº¿t Ä‘á»ƒ láº¥y mp4.
-// Giá»›i háº¡n song song 5, má»—i request 8s; bÃ i nÃ o fail thÃ¬ giá»¯ stream rá»—ng
-// (popup fallback má»Ÿ trang gá»‘c).
+// Soha: bài không kèm data-vid trong listing → fetch trang chi tiết để lấy mp4.
+// Giới hạn song song 10, mỗi request 6s; bài nào fail thì giữ stream rỗng
+// (popup fallback mở trang gốc).
 async function fetchSohaStream(link) {
   try {
-    const r = await fetch(link, { headers: UA, signal: AbortSignal.timeout(8000) });
+    const r = await fetch(link, { headers: UA, signal: AbortSignal.timeout(6000) });
     const h = await r.text();
     const vid = (h.match(/data-vid="([^"]+)"/) || [])[1] || '';
     if (!vid) return '';
     return vid.startsWith('http') ? vid : 'https://' + vid;
   } catch (e) {
-    console.log('[soha] stream fail', link, 'â†’', e?.message || e);
+    console.log('[soha] stream fail', link, '→', e?.message || e);
     return '';
   }
 }
@@ -161,8 +164,8 @@ async function crawlSoha() {
       stream: '',
     });
   }
-  // Stream cÃ³ sáºµn trong cÃ¡c player div áº©n trÃªn listing: data-share="...video-123.htm"
-  // â†’ data-vid. GhÃ©p theo id cuá»‘i URL.
+  // Stream có sẵn trong các player div ẩn trên listing: data-share="...video-123.htm"
+  // → data-vid. Ghép theo id cuối URL.
   const streamById = new Map();
   for (const block of html.split('<div class="VCSortableInPreviewMode').slice(1)) {
     const id = (block.match(/data-share="[^"]*video-(\d+)\.htm"/) || [])[1] || '';
@@ -170,10 +173,10 @@ async function crawlSoha() {
     if (id && vid) streamById.set(id, vid.startsWith('http') ? vid : 'https://' + vid);
   }
   const idOf = (link) => (link.match(/-(\d+)\.htm$/) || [])[1] || '';
-  const need = videos.filter((v) => !streamById.has(idOf(v.link)));
-  for (let i = 0; i < need.length; i += 5) {
-    const batch = await Promise.all(need.slice(i, i + 5).map((v) => fetchSohaStream(v.link)));
-    need.slice(i, i + 5).forEach((v, j) => { v.stream = batch[j]; });
+  const need = videos.filter((v) => !streamById.has(idOf(v.link))).slice(0, 12);
+  for (let i = 0; i < need.length; i += 10) {
+    const batch = await Promise.all(need.slice(i, i + 10).map((v) => fetchSohaStream(v.link)));
+    need.slice(i, i + 10).forEach((v, j) => { v.stream = batch[j]; });
   }
   for (const v of videos) {
     const id = idOf(v.link);
@@ -182,8 +185,8 @@ async function crawlSoha() {
   return videos;
 }
 
-// VNExpress video ná»•i báº­t: <article class="art_item art_featured pel"> â€” data-extend
-// JSON chá»©a dr (duration giÃ¢y), thumb á»Ÿ data-original (lazy load), title á»Ÿ attr title.
+// VNExpress video nổi bật: <article class="art_item art_featured pel"> — data-extend
+// JSON chứa dr (duration giây), thumb ở data-original (lazy load), title ở attr title.
 async function crawlVnExpressVideo() {
   const response = await fetch('https://video.vnexpress.net/', { headers: UA });
   if (!response.ok) return [];
@@ -202,19 +205,20 @@ async function crawlVnExpressVideo() {
       thumb: decodeHtml((block.match(/data-original="([^"]+)"/) || block.match(/data-fornext="([^"]+)"/) || [])[1] || ''),
       duration: dr ? `${Math.floor(dr / 60)}:${String(dr % 60).padStart(2, '0')}` : '',
       pubDate: '',
-      zone: 'Video ná»•i báº­t',
+      zone: 'Video nổi bật',
       source: 'VNExpress',
-      // data-extend JSON chá»©a m3u8 (HLS master) â€” phÃ¡t trong popup qua /api/hls
+      // data-extend JSON chứa m3u8 (HLS master) — phát trong popup qua /api/hls
       stream: (block.match(/"m3u8":"([^"]+)"/) || [])[1]?.replace(/\\\//g, '/') || '',
     });
   }
-  // Video nÃ o listing khÃ´ng cho sáºµn m3u8 (data-extend thiáº¿u) â†’ fetch trang chi tiáº¿t
-  // cá»§a chÃ­nh nÃ³ Ä‘á»ƒ bÃ³c stream, trÃ¡nh rÆ¡i vÃ o fallback "xem táº¡i nguá»“n".
-  const need = videos.filter((v) => !v.stream);
-  for (let i = 0; i < need.length; i += 5) {
-    const batch = await Promise.all(need.slice(i, i + 5).map(async (v) => {
+  // Video nào listing không cho sẵn m3u8 (data-extend thiếu) → fetch trang chi tiết
+  // của chính nó để bóc stream, tránh rơi vào fallback "xem tại nguồn".
+  // Giới hạn 12 video đầu + batch 10 để crawl không kéo dài.
+  const need = videos.filter((v) => !v.stream).slice(0, 12);
+  for (let i = 0; i < need.length; i += 10) {
+    const batch = await Promise.all(need.slice(i, i + 10).map(async (v) => {
       try {
-        const r = await fetch(v.link, { headers: UA, signal: AbortSignal.timeout(8000) });
+        const r = await fetch(v.link, { headers: UA, signal: AbortSignal.timeout(6000) });
         return extractM3u8(await r.text());
       } catch { return ''; }
     }));
@@ -223,7 +227,7 @@ async function crawlVnExpressVideo() {
   return videos;
 }
 
-// Thanh NiÃªn: <a class="box-category-link-with-avatar" href title data-vid> + img src
+// Thanh Niên: <a class="box-category-link-with-avatar" href title data-vid> + img src
 async function crawlThanhNien() {
   const response = await fetch('https://thanhnien.vn/video.htm', { headers: UA });
   if (!response.ok) return [];
@@ -244,7 +248,7 @@ async function crawlThanhNien() {
       duration: '',
       pubDate: '',
       zone: '',
-      source: 'Thanh NiÃªn',
+      source: 'Thanh Niên',
       stream: vid ? (vid.startsWith('http') ? vid : 'https://' + vid) : '',
     });
   }
@@ -260,7 +264,7 @@ async function crawlNld() {
   const seen = new Set();
   for (const block of html.split('<div class="box-category-item"').slice(1)) {
     const href = (block.match(/href="(\/nld\/video[^"]+\.htm)"/) || [])[1] || '';
-    // Bá» link chuyÃªn má»¥c (/nld/video/thoi-su-*.htm) â€” bÃ i tháº­t luÃ´n cÃ³ id sá»‘ cuá»‘i URL
+    // Bỏ link chuyên mục (/nld/video/thoi-su-*.htm) — bài thật luôn có id số cuối URL
     if (!href || !/-\d+\.htm$/.test(href)) continue;
     const title = decodeHtml((block.match(/title="([^"]*)"/) || [])[1] || '');
     const stream = (block.match(/data-src="(https:[^"]+\.mp4)"/) || [])[1] || '';
@@ -274,15 +278,15 @@ async function crawlNld() {
       duration: '',
       pubDate: '',
       zone: '',
-      source: 'NgÆ°á»i Lao Äá»™ng',
+      source: 'Người Lao Động',
       stream,
     });
   }
   return videos;
 }
 
-// Tuá»•i Tráº»: <article class="box-category-item" data-newsid> > <a href title data-trailer data-thumb>
-// data-trailer = "tuoitre/.../video.mp4" â†’ stream = https://cdn2.tuoitre.vn/ + path (bá» tiá»n tá»‘ tuoitre/)
+// Tuổi Trẻ: <article class="box-category-item" data-newsid> > <a href title data-trailer data-thumb>
+// data-trailer = "tuoitre/.../video.mp4" → stream = https://cdn2.tuoitre.vn/ + path (bỏ tiền tố tuoitre/)
 async function crawlTuoitre() {
   const response = await fetch('https://tuoitre.vn/video/moi-nhat.htm', { headers: UA });
   if (!response.ok) return [];
@@ -304,16 +308,24 @@ async function crawlTuoitre() {
       duration: '',
       pubDate: '',
       zone: '',
-      source: 'Tuá»•i Tráº»',
+      source: 'Tuổi Trẻ',
       stream: trailer ? 'https://cdn2.tuoitre.vn/' + rel : '',
     });
   }
   return videos;
 }
 
+// Cache crawl video: crawl 6 báo + bóc stream trang chi tiết tốn 10-20s — app mở
+// lại trong vài phút thì trả thẳng từ RAM, không crawl lại. TTL 3 phút giữ tin mới.
+const VIDEO_CACHE_TTL = 3 * 60 * 1000;
+let videoCache = null; // { t, videos }
+
 app.get('/api/videos', async (req, res) => {
+  if (videoCache && Date.now() - videoCache.t < VIDEO_CACHE_TTL) {
+    return res.json({ videos: videoCache.videos, cached: true });
+  }
   try {
-    // Nguá»“n nÃ o cháº¿t thÃ¬ tráº£ list rá»—ng, khÃ´ng kÃ©o sáº­p cáº£ endpoint
+    // Nguồn nào chết thì trả list rỗng, không kéo sập cả endpoint
     const [kenh14, soha, vnexpress, thanhnien, nld, tuoitre] = await Promise.all([
       crawlKenh14().catch(() => []),
       crawlSoha().catch(() => []),
@@ -322,16 +334,18 @@ app.get('/api/videos', async (req, res) => {
       crawlNld().catch(() => []),
       crawlTuoitre().catch(() => []),
     ]);
-    res.json({ videos: [...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre] });
+    const videos = [...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre];
+    videoCache = { t: Date.now(), videos };
+    res.json({ videos });
   } catch (e) {
     res.status(502).json({ error: 'Video crawl failed', message: e.message });
   }
 });
 
-// Proxy media (HLS + mp4): CDN cháº·n browser phÃ¡t trá»±c tiáº¿p (segment tráº£ 407/406
-// theo Referer) nÃªn server fetch há»™ vá»›i Referer Ä‘Ãºng theo nguá»“n. Playlist .m3u8
-// Ä‘Æ°á»£c rewrite má»i URL tuyá»‡t Ä‘á»‘i vá» láº¡i /api/hls?url=... Ä‘á»ƒ hls.js chá»‰ nÃ³i
-// chuyá»‡n vá»›i proxy. File mp4 Ä‘i qua tháº³ng, há»— trá»£ Range Ä‘á»ƒ seek.
+// Proxy media (HLS + mp4): CDN chặn browser phát trực tiếp (segment trả 407/406
+// theo Referer) nên server fetch hộ với Referer đúng theo nguồn. Playlist .m3u8
+// được rewrite mọi URL tuyệt đối về lại /api/hls?url=... để hls.js chỉ nói
+// chuyện với proxy. File mp4 đi qua thẳng, hỗ trợ Range để seek.
 const MEDIA_REFERERS = {
   'vnecdn.net': 'https://video.vnexpress.net/',
   'kenh14cdn.com': 'https://video.kenh14.vn/',
@@ -364,7 +378,7 @@ app.get('/api/hls', async (req, res) => {
         .map((line) => {
           const t = line.trim();
           if (!t) return line;
-          // #EXT-X-KEY:...URI="https://..." â€” key cÅ©ng pháº£i Ä‘i qua proxy (CDN cháº·n)
+          // #EXT-X-KEY:...URI="https://..." — key cũng phải đi qua proxy (CDN chặn)
           if (t.startsWith('#')) {
             return line.replace(/URI="([^"]+)"/, (_, u) => 'URI="' + proxied(new URL(u, base).href) + '"');
           }
@@ -375,7 +389,7 @@ app.get('/api/hls', async (req, res) => {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       return res.send(rewritten);
     }
-    // .ts / .key / .mp4: stream nguyÃªn báº£n (mp4 há»— trá»£ Range â†’ seek Ä‘Æ°á»£c)
+    // .ts / .key / .mp4: stream nguyên bản (mp4 hỗ trợ Range → seek được)
     res.status(upstream.status);
     res.setHeader('Content-Type', ct || 'application/octet-stream');
     if (upstream.headers.get('content-range')) res.setHeader('Content-Range', upstream.headers.get('content-range'));
@@ -402,8 +416,8 @@ app.get('/api/hls', async (req, res) => {
   }
 });
 
-// Jina Reader proxy â€” fetch phÃ­a server nÃªn khÃ´ng dÃ­nh CORS cá»§a trÃ¬nh duyá»‡t,
-// kÃ¨m retry khi Jina cháº­p chá»n (503).
+// Jina Reader proxy — fetch phía server nên không dính CORS của trình duyệt,
+// kèm retry khi Jina chập chờn (503).
 const JINA_REMOVE_SELECTOR = 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]';
 
 app.get('/api/jina', async (req, res) => {
@@ -424,7 +438,7 @@ app.get('/api/jina', async (req, res) => {
         return res.send(data);
       }
       lastStatus = response.status;
-      // 4xx (trá»« 408/429) lÃ  lá»—i request, retry vÃ´ Ã­ch
+      // 4xx (trừ 408/429) là lỗi request, retry vô ích
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
         return res.status(response.status).json({ error: `Jina error ${response.status}` });
       }
@@ -436,11 +450,11 @@ app.get('/api/jina', async (req, res) => {
   res.status(502).json({ error: 'Jina failed after retries', status: lastStatus });
 });
 
-// BÃ³c stream video (.m3u8) tá»« HTML thÃ´ cá»§a trang bÃ i viáº¿t. Trang dáº¡ng VIDEO
-// (video.vnexpress.net/...) nhÃºng player JS nÃªn Jina markdown KHÃ”NG chá»©a link
-// stream â€” pháº£i Ä‘á»c HTML gá»‘c. Tráº£ {stream:''} khi khÃ´ng cÃ³.
-// RÃºt link m3u8 tá»« HTML trang VnExpress: Æ°u tiÃªn JSON data-extend
-// ("m3u8":"...\/2025\/...\/master.m3u8", escape /), fallback URL .m3u8 Ä‘áº§u tiÃªn.
+// Bóc stream video (.m3u8) từ HTML thô của trang bài viết. Trang dạng VIDEO
+// (video.vnexpress.net/...) nhúng player JS nên Jina markdown KHÔNG chứa link
+// stream — phải đọc HTML gốc. Trả {stream:''} khi không có.
+// Rút link m3u8 từ HTML trang VnExpress: ưu tiên JSON data-extend
+// ("m3u8":"...\/2025\/...\/master.m3u8", escape /), fallback URL .m3u8 đầu tiên.
 function extractM3u8(html) {
   const m = html.match(/"m3u8":"([^"]+)"/);
   if (m) return m[1].replace(/\\u002[fF]|\\\//g, '/');
