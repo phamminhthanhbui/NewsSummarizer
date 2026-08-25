@@ -42,7 +42,7 @@ import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
 import ArticleCardCompact from "../components/ArticleCardCompact";
 import FeaturedCard from "../components/FeaturedCard";
 import SkeletonCard from "../components/SkeletonCard";
-import VideoCard from "../components/VideoCard";
+import VideoRow from "../components/VideoRow";
 import VideoModal from "../components/VideoModal";
 
 type Props = { navigation: NativeStackNavigationProp<any> };
@@ -488,6 +488,14 @@ export default function HomeScreen({ navigation }: Props) {
     ]).start();
   }, [load]);
 
+  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 5 phút khi ở Home
+  useEffect(() => {
+    const t = setInterval(() => {
+      fetchVideos(setVideos).catch(() => {});
+    }, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await load();
@@ -797,33 +805,26 @@ export default function HomeScreen({ navigation }: Props) {
           </>
         )}
 
-        {/* SECTION: VIDEO */}
+        {/* SECTION: VIDEO NỔI BẬT — dọc, không cuộn ngang */}
         {sortedVideos.length > 0 && (
-          <>
+          <View style={styles.videoSection}>
             <View style={styles.sectionRow}>
               <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
               <View style={styles.sectionVideoIcon}>
                 <Ionicons name="videocam" size={12} color="#FFF" />
               </View>
-              <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO</Text>
+              <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO NỔI BẬT</Text>
               <View style={styles.sectionLine} />
             </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.videoScroll}
-            >
-              {sortedVideos.map((v) => (
-                <View key={v.link} style={styles.videoCardWrap}>
-                  <VideoCard
-                    item={v}
-                    onPress={goVideo}
-                    featured={v.zone === "Video nổi bật"}
-                  />
-                </View>
-              ))}
-            </ScrollView>
-          </>
+            {sortedVideos.slice(0, 10).map((v) => (
+              <VideoRow
+                key={v.link}
+                item={v}
+                onPress={goVideo}
+                featured={v.zone === "Video nổi bật"}
+              />
+            ))}
+          </View>
         )}
 
         {/* SECTION: LATEST */}
@@ -1341,9 +1342,11 @@ const makeStyles = (
       textShadowRadius: 3,
     },
 
-    /* ── Video strip — cùng width 200 để height khớp strip trên ── */
-    videoScroll: { paddingHorizontal: 12, paddingBottom: 4, gap: 10 },
-    videoCardWrap: { width: 200, flexShrink: 0 },
+    /* ── Video nổi bật — list dọc ── */
+    videoSection: {
+      backgroundColor: Color.card,
+      marginTop: 2,
+    },
 
     /* ── Source dropdown ── */
     // zIndex/elevation trên wrapper (không phải panel) → dropdown nổi trên breaking strip + carousel

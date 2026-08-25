@@ -10,7 +10,7 @@ import { KEYS } from '../services/storage';
 import { getProxyBase } from '../utils/proxy';
 import { crawlAllVideos } from './videoCrawler';
 
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 phút
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 phút — video nổi bật theo xu hướng mới nhất
 const FOREGROUND_TIMEOUT_MS = 12000;
 
 interface CacheEntry { ts: number; videos: VideoItem[]; }
