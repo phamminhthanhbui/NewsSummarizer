@@ -148,7 +148,14 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     fontSize: Font.headline,
     fontWeight: '800', color: '#FFF',
     lineHeight: 22,
-    textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
+    ...Platform.select({
+      web: { textShadow: '0 1px 3px rgba(0,0,0,0.5)' },
+      default: {
+        textShadowColor: 'rgba(0,0,0,0.5)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 3,
+      },
+    }),
   },
 
   /* ── 2-column grid ── */

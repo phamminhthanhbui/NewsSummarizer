@@ -6,7 +6,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import type { VideoItem } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
-import { getProxyBase } from '../utils/proxy';
+import { getGoodProxyBase, getProxyBase } from '../utils/proxy';
 
 interface Props { video: VideoItem; onClose: () => void; }
 
@@ -20,7 +20,7 @@ function WebVideoPlayer({ stream, width, height }: { stream: string; width: numb
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const src = `${getProxyBase()}/api/hls?url=${encodeURIComponent(stream)}`;
+    const src = `${getGoodProxyBase() || getProxyBase()}/api/hls?url=${encodeURIComponent(stream)}`;
     if (isHls) {
       let hls: Hls | null = null;
       if (Hls.isSupported()) {

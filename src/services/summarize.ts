@@ -4,7 +4,7 @@
 import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getProxyBase } from '../utils/proxy';
+import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxiedFetchText } from '../utils/proxy';
 
 export type LLMProvider = 'nvidia' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'custom';
 
@@ -199,7 +199,9 @@ function buildLlmRequest(
 }
 
 // Gửi request — web đi qua proxy local (server/proxy.js) khi provider không có CORS.
-// timeoutMs chỉ dùng cho test kết nối; summarize không đặt timeout (bài dài có thể chậm).
+// Failover qua các candidate base (cùng origin → IP Metro → loopback), mỗi base một
+// attempt với header-timeout riêng: base chết (IP cũ/firewall) không chặn base sau.
+// timeoutMs chỉ dùng cho test kết nối; summarize không đặt (bài dài có thể chậm).
 async function sendLlmRequest(
   url: string,
   headers: Record<string, string>,
@@ -208,68 +210,106 @@ async function sendLlmRequest(
   label: string,
   timeoutMs?: number,
 ): Promise<any> {
-  // Use proxy on web to bypass CORS
   const isWeb = Platform.OS === 'web';
 
   // Providers that support CORS natively on web
   const supportsCorsNatively = ['openrouter', 'google'];
   const useNativeCors = isWeb && supportsCorsNatively.includes(provider);
 
-  // Local proxy server (server/proxy.js) — tự nhận IP LAN/localhost/EXPO_PUBLIC_PROXY_URL
-  const localProxyUrl = isWeb ? getProxyBase() : '';
-
-  // Use CORS Anywhere proxy for providers that don't support CORS
-  const corsProxy = isWeb && !useNativeCors && localProxyUrl
-    ? `${localProxyUrl}/api/llm`
-    : undefined;
-
-  const finalUrl = corsProxy || url;
-  const finalHeaders = corsProxy
-    ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-    : headers;
-  const finalBody = corsProxy
-    ? JSON.stringify({ url, method: 'POST', body, headers })
-    : JSON.stringify(body);
-
-  const controller = timeoutMs ? new AbortController() : null;
-  const timer = controller && timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
-  let res: Response;
-  try {
-    res = await fetch(finalUrl, {
-      method: 'POST',
-      headers: finalHeaders,
-      body: finalBody,
-      signal: controller?.signal,
-    });
-  } catch (e) {
-    // Thông báo KHÔNG nhắc tên nhà cung cấp — user không cần biết backend nào
-    if ((e as any)?.name === 'AbortError') throw new Error('Dịch vụ AI phản hồi quá chậm, thử lại sau');
+  // Web + provider không có CORS → bắt buộc qua proxy. Danh sách base đã sắp
+  // sẵn theo sức khỏe (base sống đầu tiên); mảng rỗng = gọi thẳng.
+  const proxyBases = isWeb && !useNativeCors ? orderedProxyBases() : [''];
+  if (!proxyBases.length) {
     throw new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
-    throw new Error(`Dịch vụ AI tạm thời lỗi (${msg})`);
-  }
+  let lastError: Error = new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
+  for (const base of proxyBases) {
+    const corsProxy = base ? `${base}/api/llm` : undefined;
+    const finalUrl = corsProxy || url;
+    const finalHeaders = corsProxy
+      ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      : headers;
+    const finalBody = corsProxy
+      ? JSON.stringify({ url, method: 'POST', body, headers })
+      : JSON.stringify(body);
 
-  return res.json();
+    // Attempt timer CHỈ tồn tại khi caller truyền timeoutMs (test kết nối).
+    // Summarize thật KHÔNG có timer: proxy /api/llm chỉ trả response SAU KHI
+    // LLM chạy xong (thường 15-40s) — timer ngắn sẽ giết nhầm request khỏe
+    // rồi đánh dấu OAN base đang sống là chết (lỗi đã gặp).
+    const controller = new AbortController();
+    const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(finalUrl, {
+        method: 'POST',
+        headers: finalHeaders,
+        body: finalBody,
+        signal: controller.signal,
+      });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) {
+        // Proxy chết/treo ở tầng server → thử base kế; lỗi từ LLM upstream là
+        // nghiệp vụ → báo ngay, không retry base khác.
+        if (corsProxy && (res.status === 404 || res.status >= 500)) {
+          markProxyDead(base);
+          lastError = new Error(`Dịch vụ AI tạm thời lỗi (HTTP ${res.status})`);
+          continue;
+        }
+        const err = await res.json().catch(() => ({}));
+        const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
+        throw new Error(`Dịch vụ AI tạm thời lỗi (${msg})`);
+      }
+      if (corsProxy) markProxyAlive(base);
+      return await res.json();
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      const msg = e instanceof Error ? e.message : '';
+      if (/^Dịch vụ AI/.test(msg)) throw e;
+      if ((e as any)?.name === 'AbortError') {
+        // Chỉ xảy ra ở nhánh test kết nối (summarize không còn timer)
+        lastError = new Error('Dịch vụ AI phản hồi quá chậm, thử lại sau');
+      } else {
+        lastError = e instanceof Error ? e : lastError;
+      }
+      if (corsProxy) markProxyDead(base);
+      continue;
+    }
+  }
+  throw lastError;
 }
 
-// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint
+// Gợi ý riêng theo chuyên mục — FeedItem đã mang category từ RSS
+const CATEGORY_PROMPT_HINTS: Record<string, string> = {
+  'Thể thao': 'Ưu tiên tỉ số, lượt đi/lượt về, tên cầu thủ và HLV liên quan.',
+  'Kinh doanh': 'Ưu tiên số liệu tài chính, doanh thu, dự báo và kết luận thị trường.',
+  'Công nghệ': 'Ưu tiên tên sản phẩm/thiết bị, thông số nổi bật và giá bán nếu có.',
+  'Sức khỏe': 'Ưu tiên triệu chứng và khuyến cáo từ chuyên môn; KHÔNG đưa chẩn đoán hay cách chữa cụ thể.',
+  'Giải trí': 'Ưu tiên tên nghệ sĩ, tác phẩm và sự kiện chính.',
+};
+
+// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint.
+// Trả về summary CÓ CẤU TRÚC dạng văn bản thuần:
+//   dòng 1        = TL;DR (1 câu)
+//   các dòng giữa = ý chính (mỗi dòng 1 đoạn)
+//   dòng "• ..."  = dữ kiện cụ thể (số liệu/tên/thời gian)
+// ArticleScreen nhận diện qua bullet để style TL;DR + chip dữ kiện riêng.
 export async function summarizeWithProvider(
   articleText: string,
   provider: LLMProvider,
   apiKey: string,
   model: string,
   customBaseUrl?: string,
+  category?: string,
 ): Promise<string> {
-  const prompt = `Bạn là biên tập viên tin tức. Viết TÓM TẮT bằng tiếng Việt vừa phải: khoảng 5-6 câu (100-140 từ), chi tiết nhưng đầy đủ, không quá dài cũng không quá ngắn.
-Cấu trúc: 1-2 câu đầu nêu sự kiện chính và bối cảnh; các câu giữa nêu diễn biến, nguyên nhân và điểm quan trọng; câu cuối nêu kết quả hoặc ý nghĩa.
-Giữ số liệu, tên riêng, địa điểm, thời gian. Không sao chép nguyên văn, không thêm thông tin không có trong bài, không lan man chi tiết vụn vặt.
-Chỉ trả về phần tóm tắt.`;
+  const hint = (category && CATEGORY_PROMPT_HINTS[category]) || '';
+  const prompt = `Bạn là biên tập viên tin tức. Tóm tắt bài báo dưới đây bằng tiếng Việt, trả về ĐÚNG cấu trúc sau — không tiêu đề, không giải thích, không markdown:
+
+Dòng 1: TL;DR — đúng MỘT câu nêu sự kiện chính (dưới 25 từ).
+Tiếp theo: 4-6 dòng, mỗi dòng một ý chính theo trình tự bài (diễn biến → nguyên nhân → ý nghĩa), mỗi ý 1-2 câu viết dạng văn xuôi.
+Cuối cùng: 2-4 dòng bắt đầu bằng "• " liệt kê DỮ KIỆN cụ thể (số liệu, tên riêng, thời gian, địa điểm). Chỉ lấy thông tin CÓ TRONG bài.
+
+${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin không có trong bài; các dòng cách nhau bằng dòng trống.`;
 
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
@@ -281,15 +321,74 @@ Chỉ trả về phần tóm tắt.`;
     ? articleText.slice(0, MAX_INPUT_CHARS) + '\n…(phần sau đã cắt)'
     : articleText;
 
-  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 350, customBaseUrl);
+  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 480, customBaseUrl);
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
 
   // Parse response based on provider
-  if (provider === 'anthropic') {
-    return data.content?.[0]?.text || '';
+  const raw = provider === 'anthropic'
+    ? data.content?.[0]?.text || ''
+    : data.choices?.[0]?.message?.content || '';
+  return normalizeStructuredSummary(raw);
+}
+
+// Làm sạch output model về đúng format chuẩn:
+// bỏ label ("TL;DR:", "Tóm tắt:"...), markdown residue, dòng trùng;
+// thống nhất bullet về "• "; giới hạn ≤7 dòng chính + ≤4 dữ kiện.
+export function normalizeStructuredSummary(raw: string): string {
+  let lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  lines = lines
+    .map((l) => l
+      .replace(/^#{1,4}\s*/, '')
+      .replace(/^\*\*(.+?)\*\*\s*:?\s*$/, '$1')
+      .replace(/^(?:TL;?DR|Tóm\s*tắt|Ý\s*chính|Dữ\s*kiện(?:\s*chính)?|Nội\s*dung(?:\s*chính)?|Chính)\s*:\s*/i, '')
+      .trim())
+    .filter(Boolean)
+    .map((l) => l.replace(/^[-*–—]\s+/, '• ').replace(/^•\s*/, '• '))
+    .filter((l) => !/^(?:bài\s*báo|bài\s*viết)\s*(?:này|trên)/i.test(l) || l.length > 40); // bỏ dòng mở đầu kiểu "Bài báo này nói về..."
+  if (!lines.length) return '';
+  const seen = new Set<string>();
+  lines = lines.filter((l) => { const k = l.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  const facts = lines.filter((l) => l.startsWith('•')).slice(0, 4);
+  const mains = lines.filter((l) => !l.startsWith('•')).slice(0, 7);
+  return [...mains, ...facts].join('\n\n');
+}
+
+// Fallback KHÔNG cần AI: chọn-câu extractive khi mọi provider chết/mất mạng.
+// Điểm câu = chồng lấn từ khóa với title + ưu tiên câu mở đoạn + câu có số liệu.
+// Output cùng cấu trúc với AI (TL;DR / ý chính / • dữ kiện) nên UI hiển thị như thường.
+export function buildExtractiveSummary(title: string, blocks: ArticleBlock[]): string {
+  const text = blocksToText(blocks);
+  if (!text) return '';
+  const kw = new Set(
+    title.toLowerCase().split(/\s+/).map((w) => w.replace(/[.,!?…:;"'()]/g, '')).filter((w) => w.length >= 4),
+  );
+  type Cand = { s: string; score: number; order: number };
+  const cands: Cand[] = [];
+  let order = 0;
+  for (const b of blocks) {
+    if (b.type !== 'text' || !b.text) continue;
+    const sentences = b.text.split(/(?<=[.!?…])\s+/).map((x) => x.trim());
+    sentences.forEach((sen, si) => {
+      if (sen.length < 40 || sen.length > 260) return;
+      const words = sen.toLowerCase().split(/\s+/);
+      let kwHits = 0;
+      for (const w of words) { const clean = w.replace(/[.,!?…:;"'()]/g, ''); if (kw.has(clean)) kwHits++; }
+      const score = kwHits * 2 + (si === 0 ? 1.5 : 0) + (/\d/.test(sen) ? 0.5 : 0);
+      cands.push({ s: sen, score, order: order++ });
+    });
   }
-  // OpenAI-compatible
-  return data.choices?.[0]?.message?.content || '';
+  if (!cands.length) return '';
+  const ranked = [...cands].sort((a, b) => b.score - a.score);
+  const tldrCand = ranked[0];
+  const picked = ranked.slice(0, 6).sort((a, b) => a.order - b.order);
+  const mainLines = picked.filter((c) => c !== tldrCand).slice(0, 5).map((c) => c.s);
+  // Dữ kiện KHÔNG lặp câu đã chọn làm ý chính
+  const pickedOrders = new Set(picked.map((c) => c.order));
+  const facts = ranked
+    .filter((c) => /\d/.test(c.s) && !pickedOrders.has(c.order))
+    .slice(0, 3)
+    .map((c) => '• ' + (c.s.length > 180 ? c.s.slice(0, 177) + '…' : c.s));
+  return [tldrCand.s, ...mainLines, ...facts].join('\n\n');
 }
 
 // Kiểm tra kết nối: gửi request nhỏ nhất (max_tokens 8, timeout 15s), throw nếu lỗi.
@@ -316,7 +415,7 @@ export async function testProviderConnection(
 }
 
 // High-level: fetch key + model from storage, then summarize
-export async function summarizeArticle(articleText: string): Promise<string> {
+export async function summarizeArticle(articleText: string, category?: string): Promise<string> {
   const provider = (await AsyncStorage.getItem(KEYS.provider)) as LLMProvider || 'nvidia';
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
@@ -331,7 +430,7 @@ export async function summarizeArticle(articleText: string): Promise<string> {
 
   const customBaseUrl = provider === 'custom' ? await AsyncStorage.getItem(KEYS.customBaseUrl) : undefined;
 
-  return summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, customBaseUrl || undefined);
+  return summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, customBaseUrl || undefined, category);
 }
 
 // ----- Article parsing (Jina markdown → text/ảnh/video blocks) -----
@@ -342,6 +441,37 @@ export interface ArticleBlock {
   url?: string;
   kind?: 'youtube' | 'vimeo' | 'file';
   videoId?: string;
+  // Vị trí tương đối trong bài gốc (0..1): tỉ lệ ký tự nội dung đứng TRƯỚC media.
+  // Dùng để xếp media vào tóm tắt đúng bố cục bài báo (xem ArticleScreen).
+  pos?: number;
+  // Chú thích ảnh từ alt-text của trang gốc (nếu có và không phải rác)
+  caption?: string;
+}
+
+// Alt text dùng làm caption chỉ khi "người thật việc thật": đủ dài, không phải
+// quảng cáo, không phải placeholder kiểu "Image 1"/"Hình 2", không phải URL.
+function altToCaption(alt: string | undefined): string | undefined {
+  if (!alt) return undefined;
+  const c = decodeHtml(alt).replace(/\s+/g, ' ').trim();
+  if (c.length < 4 || c.length > 140) return undefined;
+  if (AD_ALT_RE.test(c)) return undefined;
+  if (/^(?:image|hình|ảnh|photo)\s*\d+$/i.test(c)) return undefined;
+  if (/https?:\/\//i.test(c)) return undefined;
+  return c;
+}
+
+// Khóa so sánh ảnh trùng: cùng file khác query (?w=&h= zoom) vẫn là MỘT ảnh.
+export function baseUrlKey(url: string): string {
+  return url.split(/[?#]/)[0].replace(/^\/\//, 'https://');
+}
+
+// Hai URL trùng FILE ảnh (cùng tên file cuối) dù khác thư mục resize:
+// vd SGGP hero /w800/.../abc.png.webp và ảnh trong bài /w680/.../abc.png.webp
+// là CÙNG một tấm — dùng để không render trùng ảnh hero trong khối tóm tắt.
+export function sameImageFile(a: string, b: string): boolean {
+  const last = (u: string) => (u.split(/[?#]/)[0].split('/').pop() || '').toLowerCase();
+  const la = last(a);
+  return !!la && la.length > 8 && la === last(b); // >8 ký tự tránh trùng ngẫu nhiên kiểu "a.png"
 }
 
 // Jina Reader trả markdown + header metadata (Title:/URL Source:/Published Time:/"Markdown Content:").
@@ -467,6 +597,12 @@ function isEditorialImage(url: string): boolean {
     if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
     // Filter social/share icons
     if (/(facebook|twitter|zalo|tiktok|instagram|youtube|share|send|comment|like|view|print|email|sms|copy|link|download)[_-]?(icon|btn|button)?/i.test(url)) return false;
+    // Badge "Theo dõi trên Google News / Apple News" + asset UI của theme site
+    // (vd SGGP: static-cms.../v4/web/styles/img/gg-news.png)
+    const imgHost = url.replace(/^(https?:)?\/\//i, '').split(/[/?#:]/)[0].toLowerCase();
+    if (imgHost.includes('static-cms')) return false;
+    if (/\/(?:web\/)?styles?\/(?:img|images?|icons?)\//i.test(url)) return false;
+    if (/(?:google|apple|gg)[-_.]?news/i.test(url)) return false;
     // General non-editorial patterns (all sites): thumbnail paths, sponsored/ad content, logos, avatars
     for (const pattern of THUMBNAIL_PATH_PATTERNS) {
       if (pattern.test(url)) return false;
@@ -497,7 +633,7 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
 
   // Đánh dấu vị trí ảnh và video trong text
   const markers: { index: number; end: number; block: ArticleBlock }[] = [];
-  const seenUrl = new Set<string>(); // bỏ media bị lặp lại (VnExpress trả image ~2 lần)
+  const seenBase = new Set<string>(); // dedupe theo base URL — VnExpress trả ảnh ~2 lần với ?w= khác nhau
   const imgRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
   let m;
   while ((m = imgRe.exec(s)) !== null) {
@@ -514,28 +650,36 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
       const wrapHref = wrapUrl.split(/\s/)[0]; // markdown: URL có thể kèm "title"
       if (wrapHref.split('?')[0] !== m[2].split('?')[0]) continue;
     }
-    if (seenUrl.has(m[2])) continue;
-    seenUrl.add(m[2]);
-    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url: m[2] } });
+    const baseKey = baseUrlKey(m[2]);
+    if (seenBase.has(baseKey)) continue;
+    seenBase.add(baseKey);
+    const cap = altToCaption(m[1]);
+    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url: m[2], pos: m.index / Math.max(s.length, 1), ...(cap ? { caption: cap } : {}) } });
   }
   // Site lazy-load / tối ưu SEO → Jina giữ <img src="..."> raw thay vì ![alt](url). Bắt cả 2 định dạng.
-  const htmlImgRe = /<img\s[^>]*(?:(?:\bsrc=["']([^"']+)["'])|(?:\bdata-src=["']([^"']+)["']))/g;
+  const htmlImgRe = /<img\s[^>]*>/gi;
   while ((m = htmlImgRe.exec(s)) !== null) {
-    const url = m[1] || m[2];
+    const tag = m[0];
+    const um = tag.match(/(?:\bsrc|data-src)=["']([^"']+)["']/i);
+    const url = um?.[1];
     if (!url || isAdHost(url)) continue;
     if (!isEditorialImage(url)) continue;
-    if (seenUrl.has(url)) continue;
-    seenUrl.add(url);
-    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url } });
+    const baseKey = baseUrlKey(url);
+    if (seenBase.has(baseKey)) continue;
+    seenBase.add(baseKey);
+    const cap = altToCaption((tag.match(/\balt=["']([^"']*)["']/i) || [])[1]);
+    markers.push({ index: m.index, end: m.index + tag.length, block: { type: 'image', url, pos: m.index / Math.max(s.length, 1), ...(cap ? { caption: cap } : {}) } });
   }
   // Chỉ bắt link/video có pattern YouTube, Vimeo, hoặc đuôi file video - bỏ qua link bài báo khác
   const vidRe = /\[[^\]]*\]\((https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^)]+\.(?:mp4|webm|mov|ogv))[^)]*)\)|(https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^\s)\]]+\.(?:mp4|webm|mov|ogv)))/gi;
   while ((m = vidRe.exec(s)) !== null) {
     const url = m[1] || m[2];
-    if (!url || seenUrl.has(url)) continue;
-    seenUrl.add(url);
+    if (!url) continue;
+    const baseKey = baseUrlKey(url);
+    if (seenBase.has(baseKey)) continue;
+    seenBase.add(baseKey);
     const v = classifyVideo(url);
-    if (v) markers.push({ index: m.index, end: m.index + m[0].length, block: v });
+    if (v) markers.push({ index: m.index, end: m.index + m[0].length, block: { ...v, pos: m.index / Math.max(s.length, 1) } });
   }
   markers.sort((a, b) => a.index - b.index);
 
@@ -585,6 +729,10 @@ const decodeHtml = (s: string) => s
   .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
 
 async function fetchRawHtml(pageUrl: string): Promise<string> {
+  // Web: trình duyệt dính CORS khi fetch HTML báo trực tiếp → đi qua proxy /api/fetch.
+  if (Platform.OS === 'web') {
+    return (await proxiedFetchText(pageUrl, 8000)) || '';
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -598,53 +746,94 @@ async function fetchRawHtml(pageUrl: string): Promise<string> {
   }
 }
 
-// Bóc media từ HTML bài gốc: og:image (hero), <meta og:video>, <video>/<source>,
-// data-vid/data-src mp4 (Kenh14/Soha), m3u8. Trả list block media đã lọc rác.
+// Vùng nội dung chính của trang: cắt phần trước container bài viết và cắt đuôi
+// (comment/tin-liên-quan/footer) để lượt quét <img> khỏi nhặt ảnh sidebar,
+// banner QC và thumbnail của bài KHÁC — nguyên nhân chính khiến tóm tắt dính
+// ảnh không liên quan.
+function extractContentRegion(html: string): string {
+  // Tìm container bài viết + mốc kết thúc TRÊN HTML GỐC (không phải chuỗi đã
+  // cắt) — nếu tính trên chuỗi đã cắt, trang ngắn làm mốc "related" rơi dưới
+  // ngưỡng và ảnh sidebar/tin-liên-quan lọt vào vùng quét.
+  const openM = html.match(/<div[^>]+class=["'][^"']*(?:main-content|maincontent|detail-content|content-detail|article-body|article__body|article-content|entry-content|post-content|fck_detail|contentdetail|abody|detail-page|news-content)[^"']*["']/i);
+  const start = openM && openM.index !== undefined ? openM.index : 0;
+  let end = html.length;
+  for (const re of [
+    /<div[^>]+class=["'][^"']*(?:comment|binh[-_]luan|related|tin[-_]lien[-_]quan|box[-_]category|list[-_]news|footer|wrap[-_]ad|tag[-_]list|author)/i,
+    /<footer[\s>]/i,
+  ]) {
+    const m = html.match(re);
+    if (m && m.index !== undefined && m.index > start + 500) end = Math.min(end, m.index);
+  }
+  return html.slice(start, end);
+}
+
+// Giới hạn số media bóc từ HTML — phòng hờ khi filter lọt rác
+const MAX_HTML_MEDIA = 8;
+
 async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
   const html = await fetchRawHtml(pageUrl);
   if (!html) return [];
+  const region = extractContentRegion(html);
+
   const out: ArticleBlock[] = [];
-  const seen = new Set<string>();
+  const seenBase = new Set<string>();
+  type Mark = { idx: number; block: ArticleBlock };
+  const marks: Mark[] = [];
+  const push = (idx: number, b: ArticleBlock | null) => {
+    if (!b?.url) return;
+    const key = baseUrlKey(b.url);
+    if (seenBase.has(key)) return;
+    seenBase.add(key);
+    // pos = tỉ lệ vùng nội dung đứng TRƯỚC media → ArticleScreen xếp đúng chỗ
+    marks.push({ idx, block: { ...b, pos: Math.max(idx, 0) / Math.max(region.length, 1) } });
+  };
 
-  // og:image — ảnh hero chuẩn nhất của bài
+  // Hero: og:image/og:video nằm ở <head> ngoài region — luôn đầu bài như bố cục gốc
   const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-  if (ogImage && isEditorialImage(ogImage[1])) {
-    seen.add(ogImage[1]);
-    out.push({ type: 'image', url: ogImage[1] });
-  }
-
-  // og:video / video stream (m3u8, mp4)
+  if (ogImage && isEditorialImage(decodeHtml(ogImage[1]))) push(-1, { type: 'image', url: decodeHtml(ogImage[1]), pos: 0 });
   const ogVideo = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i);
-  if (ogVideo) {
-    const v = classifyVideo(ogVideo[1]);
-    if (v && !seen.has(ogVideo[1])) { seen.add(ogVideo[1]); out.push(v); }
-  }
-  const m3u8 = html.match(/https?:\/\/[^"'\s>]+\.m3u8[^"'\s>]*/i);
-  if (m3u8 && !seen.has(m3u8[0])) {
-    seen.add(m3u8[0]);
-    out.push({ type: 'video', url: m3u8[0], kind: 'file' });
-  }
-  // data-vid/data-src chứa mp4 (Kenh14, Soha, Thanh Niên, NLD)
-  const vidAttrs = [...html.matchAll(/data-vid=["']([^"']+)["']/g)].map((m) => m[1]);
-  for (const raw of vidAttrs) {
-    const u = raw.startsWith('//') ? 'https:' + raw : raw;
-    if (!seen.has(u) && classifyVideo(u)) { seen.add(u); out.push({ type: 'video', url: u, kind: 'file' }); }
-  }
-  const dataSrc = [...html.matchAll(/data-src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/g)].map((m) => m[1]);
-  for (const u of dataSrc) {
-    if (!seen.has(u) && classifyVideo(u)) { seen.add(u); out.push({ type: 'video', url: u, kind: 'file' }); }
+  if (ogVideo) push(-1, classifyVideo(decodeHtml(ogVideo[1])));
+
+  // MỘT lượt quét cả ảnh lẫn video TRONG region, sort theo vị trí xuất hiện →
+  // thứ tự khớp bố cục bài gốc (ảnh sau đoạn 1, rồi đoạn 2 có video…).
+  // Mỗi nhánh bắt đúng 1 group = URL (group 1..5 theo thứ tự khai báo);
+  // nhánh img lấy cả tag đầy đủ để bóc alt-text làm caption.
+  const mediaRe = new RegExp([
+    /<img\s[^>]*?(?:\bsrc|data-src)=["']([^"']+)["'][^>]*>/,
+    /data-vid=["']([^"']+)["']/,
+    /data-src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/,
+    /(https?:\/\/[^"'\s>\\]+\.m3u8[^"'\s>]*)/,
+    /<video[^>]*>\s*<source[^>]+src=["']([^"']+)["']/,
+  ].map((r) => `(?:${r.source})`).join('|'), 'gi');
+
+  let m: RegExpExecArray | null;
+  while ((m = mediaRe.exec(region)) !== null) {
+    const raw = [m[1], m[2], m[3], m[4], m[5]].find(Boolean);
+    if (!raw) continue;
+    let u = decodeHtml(raw);
+    if (u.startsWith('//')) u = 'https:' + u;
+    const isImg = m[1] !== undefined;
+    if (!isImg) {
+      push(m.index, classifyVideo(u));
+    } else {
+      if (!isEditorialImage(u)) continue;
+      const cap = altToCaption((m[0].match(/\balt=["']([^"']*)["']/i) || [])[1]);
+      push(m.index, { type: 'image', url: u, ...(cap ? { caption: cap } : {}) });
+    }
   }
 
-  // <img> trong nội dung — ưu tiên vùng có class bài viết; lọc qua isEditorialImage
-  const imgs = [...html.matchAll(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/g)].map((m) => m[1]);
-  for (const raw of imgs) {
-    const u = decodeHtml(raw);
-    if (!isEditorialImage(u) || seen.has(u)) continue;
-    seen.add(u);
-    out.push({ type: 'image', url: u });
+  marks.sort((a, b) => a.idx - b.idx);
+  for (const mk of marks) {
+    out.push(mk.block);
+    if (out.length >= MAX_HTML_MEDIA) break;
   }
-
   return out;
+}
+
+// Chỉ lấy media (ảnh/video) từ HTML bài gốc — NHANH, không chờ Jina. Dùng để
+// hiện ảnh cùng lúc với tóm tắt; Jina text về sau sẽ thay thế blocks đầy đủ.
+export async function fetchArticleMedia(url: string): Promise<ArticleBlock[]> {
+  return fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
 }
 
 // Hỏi proxy lấy stream HLS nhúng trong trang. Không có proxy / lỗi / không
@@ -666,8 +855,31 @@ async function fetchEmbeddedVideo(pageUrl: string): Promise<ArticleBlock | null>
 // Jina Reader: fetch nội dung bài, trả về block text/ảnh/video.
 // Ưu tiên qua proxy local (không dính CORS + có retry khi Jina 503);
 // proxy tắt/không tới được → gọi thẳng r.jina.ai (native không bị CORS).
+// ----- Content cache + prefetch -----
+// Cache in-memory kết quả fetch bài theo URL: mở lại bài = tức thì, và
+// prefetchArticleContent() cho phép HomeScreen tải sẵn bài đang hiện trên màn hình.
+const contentCache = new Map<string, Promise<ArticleBlock[]>>();
+const CONTENT_CACHE_MAX = 24;
+
+export function prefetchArticleContent(url: string): void {
+  if (!url || contentCache.has(url)) return;
+  if (contentCache.size >= CONTENT_CACHE_MAX) {
+    const oldest = contentCache.keys().next().value as string | undefined;
+    if (oldest) contentCache.delete(oldest);
+  }
+  // Fail → tự xóa khỏi cache để lần sau retry, không kẹt [] vĩnh viễn
+  const p = loadArticleContent(url).catch((e) => { contentCache.delete(url); throw e; });
+  contentCache.set(url, p);
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {
-  const proxyUrl = getProxyBase();
+  const hit = contentCache.get(url);
+  if (hit) return hit;
+  prefetchArticleContent(url);
+  return contentCache.get(url)!;
+}
+
+async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
   const jinaHeaders = {
     'Accept': 'text/markdown',
     'X-Remove-Selector': 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]',
@@ -677,10 +889,22 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
   // text tóm tắt, không đợi xong Jina mới fetch HTML.
   const mediaHtmlPromise = fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
 
+  // Jina qua proxy local — failover qua các candidate base (cùng origin → IP
+  // Metro → loopback). Base chết (IP cũ sau khi đổi Wi-Fi) bị skip sau lần đầu.
   let raw = '';
-  if (proxyUrl) {
-    const res = await fetch(`${proxyUrl}/api/jina?url=${encodeURIComponent(url)}`).catch(() => null);
-    if (res && res.ok) raw = await res.text();
+  for (const base of orderedProxyBases()) {
+    try {
+      const res = await fetch(`${base}/api/jina?url=${encodeURIComponent(url)}`, {
+        signal: AbortSignal.timeout(25000),
+      });
+      if (!res.ok) { markProxyDead(base); continue; }
+      markProxyAlive(base);
+      raw = await res.text();
+      break;
+    } catch {
+      markProxyDead(base);
+      continue;
+    }
   }
   if (!raw) {
     const res = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, { headers: jinaHeaders });
@@ -695,25 +919,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
     if (v) blocks.unshift(v);
   }
 
-  // Gộp media từ HTML fallback (đã fetch song song), rải đều vào giữa các đoạn
-  // text — không dồn hết xuống cuối.
+  // Gộp media từ HTML fallback CHỈ KHI Jina gần như không bắt được media nào
+  // (trang chặn Jina / lazy-load). Mỗi media giữ pos riêng (vị trí trong HTML)
+  // → ArticleScreen tự xếp theo bố cục bài gốc; KHÔNG rải đều vì rải làm mất
+  // thứ tự thật của ảnh/video.
   const mediaHtml = await mediaHtmlPromise;
-  const existingUrls = new Set(blocks.filter((b) => b.url).map((b) => b.url));
-  const toAdd = mediaHtml.filter((b) => b.url && !existingUrls.has(b.url));
-  if (toAdd.length) {
-    const textPos: number[] = [];
-    blocks.forEach((b, i) => { if (b.type === 'text') textPos.push(i); });
-    const step = textPos.length > 1
-      ? Math.max(1, (textPos.length - 1) / (toAdd.length + 1))
-      : 1;
-    toAdd.forEach((mb, mi) => {
-      const pi = textPos.length > 1
-        ? Math.min(Math.round((mi + 1) * step), textPos.length - 1)
-        : 0;
-      const insertAt = textPos[pi] + 1;
-      blocks.splice(insertAt, 0, mb);
-      for (let j = pi; j < textPos.length; j++) textPos[j]++;
-    });
+  const jinaMediaCount = blocks.filter((b) => b.type === 'image' || b.type === 'video').length;
+  if (jinaMediaCount < 2) {
+    const existingBase = new Set(blocks.filter((b) => b.url).map((b) => baseUrlKey(b.url!)));
+    for (const mb of mediaHtml) {
+      if (!mb.url || existingBase.has(baseUrlKey(mb.url))) continue;
+      existingBase.add(baseUrlKey(mb.url));
+      blocks.push(mb);
+    }
   }
 
   if (blocksToText(blocks).length < LIMITS.articleMinLength && !blocks.some((b) => b.type === 'image' || b.type === 'video')) {

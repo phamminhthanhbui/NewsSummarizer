@@ -36,6 +36,7 @@ import {
 } from "../services/feeds";
 import { useAlert } from "../components/AppAlert";
 import { fetchVideos } from "../services/videos";
+import { prefetchArticleContent } from "../services/summarize";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KEYS } from "../services/storage";
 import type { FeedItem, VideoItem } from "../types";
@@ -738,6 +739,16 @@ export default function HomeScreen({ navigation }: Props) {
     [goArticle],
   );
 
+  // Prefetch content bài đang hiện rõ trên màn hình (>60%, tối thiểu 1.2s):
+  // bấm vào là article đã tải sẵn trong cache — tóm tắt chạy ngay, không chờ network.
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: any }) => {
+    for (const v of viewableItems) {
+      const link = v?.item?.link;
+      if (link) prefetchArticleContent(link);
+    }
+  }).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60, minimumViewTime: 1200 }).current;
+
   const listHeader = useMemo(
     () => (
       <View style={styles.listHeader}>
@@ -754,6 +765,8 @@ export default function HomeScreen({ navigation }: Props) {
               renderItem={heroRenderItem}
               scrollEventThrottle={100}
               onScroll={handleHeroScroll}
+              onViewableItemsChanged={onViewableItemsChanged}
+              viewabilityConfig={viewabilityConfig}
             />
             {heroes.length > 1 && (
               <>
@@ -1036,6 +1049,8 @@ export default function HomeScreen({ navigation }: Props) {
           keyExtractor={(item) => item.link}
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
               <View style={styles.emptyIcon}>
@@ -1341,9 +1356,14 @@ const makeStyles = (
       fontWeight: "800",
       color: "#FFF",
       lineHeight: 17,
-      textShadowColor: "rgba(0,0,0,0.5)",
-      textShadowOffset: { width: 0, height: 1 },
-      textShadowRadius: 3,
+      ...Platform.select({
+        web: { textShadow: "0 1px 3px rgba(0,0,0,0.5)" },
+        default: {
+          textShadowColor: "rgba(0,0,0,0.5)",
+          textShadowOffset: { width: 0, height: 1 },
+          textShadowRadius: 3,
+        },
+      }),
     },
 
     /* ── Video nổi bật — list dọc ── */

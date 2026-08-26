@@ -142,26 +142,14 @@ export const THEME_COLORS = [
 export const Shadow = {
   card: {
     boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
     elevation: 2,
   },
   button: {
     boxShadow: '0 4px 12px rgba(251, 81, 42, 0.15)',
-    shadowColor: '#FB512A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
     elevation: 3,
   },
   level4: {
     boxShadow: '0 16px 32px rgba(15, 23, 42, 0.1)',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.1,
-    shadowRadius: 32,
     elevation: 8,
   },
 } as const;

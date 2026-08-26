@@ -34,6 +34,9 @@ export type TTSOptions = {
   pitch?: number;
   rate?: number;
   voice?: string;
+  // Word-boundary event (Android/iOS tuân thủ) — charIndex vị trí giọng đang đọc,
+  // dùng để neo highlight đúng giọng thay vì nội suy thời gian.
+  onBoundary?: (event: { charIndex: number }) => void;
 };
 
 export function speakSystem(text: string, options: TTSOptions = {}): Promise<void> {
@@ -43,6 +46,7 @@ export function speakSystem(text: string, options: TTSOptions = {}): Promise<voi
       pitch: options.pitch ?? 1.0,
       rate: options.rate ?? 1.0,
       voice: options.voice,
+      onBoundary: options.onBoundary as any,
       onDone: () => resolve(),
       onError: (e) => reject(e),
       onStopped: () => resolve(),

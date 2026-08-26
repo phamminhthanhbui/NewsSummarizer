@@ -6,11 +6,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
 import { KEYS, LIMITS } from '../services/storage';
-import { getProxyBase } from '../utils/proxy';
-
-// RSS đi qua proxy local (server/proxy.js, port 3001) — tự nhận IP LAN trên
-// điện thoại, localhost trên web local; override bằng EXPO_PUBLIC_PROXY_URL.
-const PROXY = getProxyBase() + '/api/fetch?url=';
+import { proxiedFetchText } from '../utils/proxy';
 
 // Màu thương hiệu của từng tờ báo — badge nguồn trên card dùng màu này
 export const SOURCE_COLORS: Record<string, string> = {
@@ -151,13 +147,18 @@ function parseXml(xml: string): FeedItem[] {
 }
 
 export async function fetchFeed(url: string): Promise<FeedItem[]> {
-  // Native gọi THẲNG nguồn RSS (không bị CORS, khỏi chờ proxy) — nhanh nhất.
-  // Web bắt buộc qua proxy local (trình duyệt dính CORS).
-  const finalUrl = Platform.OS === 'web' ? PROXY + encodeURIComponent(url) : url;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch(finalUrl, { signal: controller.signal });
+    if (Platform.OS === 'web') {
+      // Web: RSS nguồn không có CORS header → bắt buộc qua proxy local.
+      // proxiedFetchText failover qua các base (cùng origin → IP Metro → loopback),
+      // nhớ base sống để lần sau khỏi thử lại. Không proxy nào tới được → [] (cache cũ vẫn hiện).
+      const xml = await proxiedFetchText(url, 8000);
+      return xml ? parseXml(xml) : [];
+    }
+    // Native: gọi thẳng nguồn RSS (không CORS)
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) return [];
     const xml = await res.text();
     return parseXml(xml);

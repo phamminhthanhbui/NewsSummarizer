@@ -7,20 +7,13 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { VideoItem } from '../types';
 import { KEYS } from '../services/storage';
-import { getProxyBase } from '../utils/proxy';
+import { orderedProxyBases, markProxyAlive, markProxyDead } from '../utils/proxy';
 import { crawlAllVideos } from './videoCrawler';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 phút — video nổi bật theo xu hướng mới nhất
 const FOREGROUND_TIMEOUT_MS = 12000;
 
 interface CacheEntry { ts: number; videos: VideoItem[]; }
-
-function proxyCandidates(): string[] {
-  const list = ['http://localhost:3001'];
-  const base = getProxyBase();
-  if (base !== 'http://localhost:3001') list.unshift(base);
-  return list;
-}
 
 async function readCache(): Promise<CacheEntry | null> {
   try {
@@ -36,6 +29,12 @@ function writeCache(entry: CacheEntry) {
   AsyncStorage.setItem(KEYS.videosCache, JSON.stringify(entry)).catch(() => {});
 }
 
+function proxyCandidates(): string[] {
+  // orderedProxyBases: base sống đã biết đứng đầu, base chết bị backoff 3 phút
+  const list = orderedProxyBases();
+  return list.length ? list : ['http://localhost:3001'];
+}
+
 async function fetchViaProxy(): Promise<VideoItem[]> {
   const candidates = proxyCandidates();
   for (const base of candidates) {
@@ -44,10 +43,13 @@ async function fetchViaProxy(): Promise<VideoItem[]> {
       const timeout = setTimeout(() => controller.abort(), 4000);
       const res = await fetch(base + '/api/videos', { signal: controller.signal });
       clearTimeout(timeout);
-      if (!res.ok) continue;
+      if (!res.ok) { markProxyDead(base); continue; }
+      markProxyAlive(base);
       const data = await res.json();
       if (Array.isArray(data.videos) && data.videos.length) return data.videos;
-    } catch {}
+    } catch {
+      markProxyDead(base);
+    }
   }
   return [];
 }
