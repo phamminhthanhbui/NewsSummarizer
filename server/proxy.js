@@ -318,6 +318,42 @@ async function crawlTuoitre() {
 // Cache crawl video: crawl 6 báo + bóc stream trang chi tiết tốn 10-20s — app mở
 // lại trong vài phút thì trả thẳng từ RAM, không crawl lại. TTL 3 phút giữ tin mới.
 const VIDEO_CACHE_TTL = 3 * 60 * 1000;
+
+// Video nổi bật: chỉ lấy trong các video MỚI NHẤT (tránh video cũ báo ghim sẵn),
+// xoay theo seed — mỗi lần refresh cache ra bộ featured khác nhau.
+const FEATURED_COUNT = 6;
+const NEWEST_WINDOW = 12;
+
+// Trích ngày đăng từ URL thumb/stream/link (mỗi báo nhúng ngày trong CDN path)
+// hoặc pubDate ISO. Ép về post-midnight UTC để so sánh recency.
+function videoDate(v) {
+  const pool = [v && v.thumb, v && v.stream, v && v.link].filter(Boolean).join(' ');
+  const m = pool.match(/(20\d{2})([/-])(\d{1,2})\2(\d{1,2})/);
+  if (m) return Date.UTC(+m[1], +m[3] - 1, +m[4]);
+  const iso = String((v && v.pubDate) || '').match(/(20\d{2})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return Date.UTC(+iso[1], +iso[2] - 1, +iso[3]);
+  return 0;
+}
+
+function pickNewestFeatured(videos) {
+  const sorted = videos
+    .map((v) => ({ v, d: videoDate(v) }))
+    .sort((a, b) => b.d - a.d || String(a.v.source).localeCompare(String(b.v.source)))
+    .map((x) => x.v);
+  const window = Math.min(NEWEST_WINDOW, sorted.length);
+  const seed = Math.floor(Math.random() * 0xffffffff);
+  const start = window ? seed % window : 0;
+  const featSet = new Set();
+  const featured = [];
+  for (let i = 0; i < Math.min(FEATURED_COUNT, window); i++) {
+    const v = sorted[(start + i) % window];
+    featSet.add(v);
+    featured.push(v);
+  }
+  for (const v of sorted) v.zone = featSet.has(v) ? 'Video nổi bật' : '';
+  return [...featured, ...sorted.filter((v) => !featSet.has(v))];
+}
+
 let videoCache = null; // { t, videos }
 
 app.get('/api/videos', async (req, res) => {
@@ -334,7 +370,9 @@ app.get('/api/videos', async (req, res) => {
       crawlNld().catch(() => []),
       crawlTuoitre().catch(() => []),
     ]);
-    const videos = [...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre];
+    const videos = pickNewestFeatured([
+      ...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre,
+    ]);
     videoCache = { t: Date.now(), videos };
     res.json({ videos });
   } catch (e) {

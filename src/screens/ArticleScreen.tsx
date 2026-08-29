@@ -22,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
-import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary } from '../services/summarize';
+import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
@@ -122,6 +122,29 @@ const useWebSpeech = () => {
 // mỗi cụm + hiệu chỉnh ms/ký tự chạy liên tục → bám giọng ở MỌI tốc độ.
 type TtsWord = { text: string; flat: number };
 type TtsChunk = { text: string; first: number; last: number };
+
+// Summary cũ từ trước khi fix (metadata lọt, fragment, dấu vết markdown) vẫn nằm
+// trong history cache → mở lại bài vẫn thấy bản "lạ". Phát hiện + purge để tóm lại.
+function isStaleSummary(s: string): boolean {
+  if (!s) return false;
+  const lines = s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  // Quá dài (>12 dòng) = summary cũ chứa cả bài/related của báo → tóm lại
+  if (lines.length > 12) return true;
+  // Dòng còn dấu vết markdown ảnh/link, hoặc kết thúc "…" (caption cụt)
+  if (lines.some((l) => /\]\(/i.test(l) || /…$|\.\.\.$/.test(l))) return true;
+  const first = lines[0];
+  // Dòng đầu còn label "TL;DR" / "Tóm tắt:" → summary cũ chưa được làm sạch
+  // (chỉ khớp "Tóm tắt" khi có separator : — để không nhầm "Tóm tắt AI giả lập...")
+  if (/^TL;?DR\s*[:：—-]?/i.test(first)) return true;
+  if (/^Tóm\s*tắt\s*[:：—-]/i.test(first)) return true;
+  // Dòng đầu là chuyên mục / ngày giờ / ghi chú ảnh / fragment chữ thường
+  if (/^(?:ảnh|hình|photo)\s*[:：]/i.test(first)) return true;
+  if (/^nhóm\s+phóng\s+viên/i.test(first)) return true;
+  if (/^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]/i.test(first)) return true;
+  const c = first.charAt(0);
+  return !!c && c.toLowerCase() === c && c !== c.toUpperCase();
+}
 
 function buildTtsChunks(paras: TtsWord[][]): TtsChunk[] {
   const all = paras.flat();
@@ -224,9 +247,11 @@ export default function ArticleScreen({ navigation, route }: any) {
       const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
       // Media bài gốc từ HTML — NHANH (~1-2s), không chờ Jina chậm. Set blocks sớm
       // để ảnh/video hiện cùng lúc với tóm tắt; Jina về sau sẽ thay bằng blocks đầy đủ.
+      // Dùng setState functional để KHÔNG đè blocks Jina đã có (Jina trả caption
+      // thật, HTML fast-path có thể trả caption tự sinh "Ảnh 1.").
       fetchArticleMedia(item.link)
         .then((media) => {
-          if (media.length) setBlocks(media);
+          if (media.length) setBlocks((prev) => (prev.length ? prev : media));
         })
         .catch(() => {});
       // Bài liên quan: đọc từ cache RSS (Home đã fetch + ghi cache) — KHÔNG gọi lại
@@ -239,16 +264,21 @@ export default function ArticleScreen({ navigation, route }: any) {
         setRelated([...same, ...others].slice(0, LIMITS.relatedMax));
       })().catch(() => {});
 
-      // CACHE: đã tóm tắt bài này rồi → hiện lại ngay, 0 lời gọi API
+      // CACHE: đã tóm tắt bài này rồi → hiện lại ngay, 0 lời gọi API.
+      // Summary cũ bị lỗi (metadata/fragment/](url)) → purge record hỏng + tóm lại.
       const raw = await AsyncStorage.getItem(KEYS.history);
       const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
       const cached = history.find((h) => h.url === item.link);
-      if (cached) {
+      if (cached && !isStaleSummary(cached.summary)) {
         setSummary(cached.summary);
         const blocks = await blocksTask;
         setBlocks(blocks);
         setContent(blocksToText(blocks));
         return;
+      }
+      if (cached) {
+        const cleaned = history.filter((h) => !(h.url === item.link && isStaleSummary(h.summary)));
+        await AsyncStorage.setItem(KEYS.history, JSON.stringify(cleaned));
       }
 
       // TÓM NHANH trước từ mô tả (không chờ Jina) — summary hiện trong ~1-2s.
@@ -286,6 +316,21 @@ export default function ArticleScreen({ navigation, route }: any) {
       }
     })();
   }, [item.link]);
+
+  // Caption DÀI → AI rút gọn nền (1 request batch, cache theo URL — xem
+  // aiCondenseCaptions). captionRev bump để re-render khi bản ngắn về.
+  const [captionRev, setCaptionRev] = useState(0);
+  useEffect(() => {
+    const items = blocks
+      .filter((b) => b.type === 'image' && b.url && b.caption && b.caption.length > CAPTION_AI_MAX)
+      .map((b) => ({ url: b.url!, caption: b.caption! }));
+    if (!items.length) return;
+    let alive = true;
+    aiCondenseCaptions(items)
+      .then((n) => { if (alive && n > 0) setCaptionRev((r) => r + 1); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [blocks]);
 
   const summarize = async () => {
     setError('');
@@ -490,11 +535,13 @@ export default function ArticleScreen({ navigation, route }: any) {
   const READ_WPM = 250;
   const readTime = Math.max(1, Math.ceil((content || item.description).length / READ_WPM));
 
-  // Render 1 media block: ảnh/video
+  // Render 1 media block: ảnh/video — caption ưu tiên bản AI rút gọn (cache
+  // trong summarize.ts; captionRev bump khi bản mới về để re-render).
   const renderMedia = (b: ArticleBlock, key: string) => {
     if (!b.url) return null;
     if (b.type === 'image') {
-      return <SafeImg key={key} url={b.url} caption={b.caption} onPress={() => openImageModal(b.url!)} />;
+      void captionRev;
+      return <SafeImg key={key} url={b.url} caption={getCachedCaption(b.url) ?? b.caption} onPress={() => openImageModal(b.url!)} />;
     }
     if (b.type === 'video') {
       return <BlockVideo key={key} block={b} />;
@@ -531,10 +578,9 @@ export default function ArticleScreen({ navigation, route }: any) {
       seenBase.add(k);
       media.push(b);
     }
-    media.sort((a, b) => (a.pos ?? 1) - (b.pos ?? 1));
-
     // frac của từng media: ưu tiên pos do parser ghi; thiếu thì tính theo lượng
-    // chữ đứng trước media trong blocks (fallback cho block cũ trong cache)
+    // chữ đứng trước media trong blocks (fallback cho block cũ trong cache).
+    // Tính TRƯỚC khi sort để media thiếu pos (vd video lead bài) xếp đúng chỗ.
     const totalArtChars = blocks.reduce((s, b) => s + (b.type === 'text' && b.text ? b.text.length : 0), 0);
     let artAcc = 0;
     const fracFallback = new Map<ArticleBlock, number>();
@@ -544,15 +590,29 @@ export default function ArticleScreen({ navigation, route }: any) {
         fracFallback.set(b, totalArtChars ? Math.min(artAcc / totalArtChars, 0.999) : 0);
       }
     }
-    const fracs = media.map((mb) => mb.pos ?? fracFallback.get(mb) ?? 0);
+    const fracOf = (mb: ArticleBlock) => mb.pos ?? fracFallback.get(mb) ?? 0;
+    media.sort((a, b) => fracOf(a) - fracOf(b));
+    const fracs = media.map(fracOf);
 
     // Tỉ lệ tích lũy của các đoạn tóm tắt (theo số ký tự)
     const totalSumChars = paras.reduce((s, p) => s + p.length + 1, 0) || 1;
     let sumAcc = 0;
     const cumPara = paras.map((p) => { sumAcc += p.length + 1; return sumAcc / totalSumChars; });
 
-    // Điểm chèn: media chèn TRƯỚC đoạn đầu tiên có tỉ lệ tích lũy >= frac
-    const atIdx = fracs.map((f) => cumPara.reduce((c, v) => c + (v < f - 1e-9 ? 1 : 0), 0));
+    // Điểm chèn: media chèn TRƯỚC đoạn đầu tiên có tỉ lệ tích lũy >= frac.
+    // Chống dồn cụm: 1 media mỗi đoạn tối đa — media trùng điểm chèn (summary
+    // ngắn, pos gần nhau) dời xuống đoạn kế tiếp còn trống, GIỮ nguyên thứ tự
+    // pos của bài gốc; media thừa không còn chỗ → bỏ (tóm tắt không cần full
+    // gallery). atIdx ngắn hơn media → các media đuôi không được render.
+    const lastPara = Math.max(paras.length - 1, 0);
+    const atIdx: number[] = [];
+    for (const f of fracs) {
+      const base = cumPara.reduce((c, v) => c + (v < f - 1e-9 ? 1 : 0), 0);
+      let t = Math.min(base, lastPara);
+      while (atIdx.includes(t)) t++;
+      if (t > lastPara) break;
+      atIdx.push(t);
+    }
 
     // Phân loại đoạn: dòng gạch đầu dòng (- / • / *) = điểm nhấn, đoạn đầu tiên = lead
     const isBullet = (s: string) => /^[-•*]\s/.test(s);
@@ -594,7 +654,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       if (!media.length) return paraWords.map((_, pi) => renderPara(pi));
       // With media: interleave theo bố cục bài gốc, mỗi đoạn vẫn word-highlight
       let cur = 0;
-      for (let mi = 0; mi < media.length; mi++) {
+      for (let mi = 0; mi < atIdx.length; mi++) {
         while (cur < atIdx[mi]) { nodes.push(renderPara(cur)); cur++; }
         nodes.push(renderMedia(media[mi], 'm' + mi));
       }
@@ -627,7 +687,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     };
     if (!media.length) return paras.map((_, i) => renderParaNative(i));
     let cur = 0;
-    for (let mi = 0; mi < media.length; mi++) {
+    for (let mi = 0; mi < atIdx.length; mi++) {
       while (cur < atIdx[mi]) { nodes.push(renderParaNative(cur)); cur++; }
       nodes.push(renderMedia(media[mi], 'm' + mi));
     }
@@ -903,7 +963,7 @@ const SafeImg = memo(function SafeImg({ url, caption, onPress }: { url: string; 
       <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
         <Image style={styles.blockImg} source={{ uri: url }} resizeMode="cover" onError={() => setFailed(true)} />
       </TouchableOpacity>
-      {caption ? <Text style={styles.blockCaption} numberOfLines={2}>{caption}</Text> : null}
+      {caption ? <Text style={styles.blockCaption}>{caption}</Text> : null}
     </View>
   );
 });

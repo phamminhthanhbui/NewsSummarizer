@@ -6,10 +6,11 @@ import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxiedFetchText } from '../utils/proxy';
 
-export type LLMProvider = 'nvidia' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'custom';
+export type LLMProvider = 'bai' | 'nvidia';
 
-// Mặc định NVIDIA NIM — app chạy được ngay khi start, không cần vào Settings nhập key.
+// Mặc định b.AI — app chạy được ngay khi start, không cần vào Settings nhập key.
 // User nhập key khác trong Settings sẽ ghi đè (AsyncStorage ưu tiên hơn).
+export const DEFAULT_BAI_KEY = 'sk-7abfs6706vwm9zjxrso343uheyrrt4sk';
 export const DEFAULT_NVIDIA_KEY = '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';
 
 export interface ProviderConfig {
@@ -25,89 +26,34 @@ export interface ProviderConfig {
 
 export const PROVIDERS: ProviderConfig[] = [
   {
+    id: 'bai',
+    label: 'b.AI (mặc định)',
+    baseUrl: 'https://api.b.ai/v1',
+    models: [
+      { id: 'deepseek-v4-flash-vision-exp', label: 'DeepSeek V4 Flash Vision (nhanh, mặc định)' },
+      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+      { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (mạnh)' },
+    ],
+    needsKey: true,
+    keyStorageKey: 'baiKey',
+  },
+  {
     id: 'nvidia',
     label: 'NVIDIA NIM',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     models: [
-      { id: 'meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (nhanh, miễn phí)' },
       { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)' },
-      { id: 'mistralai/mistral-7b-instruct-v0.3', label: 'Mistral 7B (nhanh)' },
-      { id: 'google/gemma-3-12b-it', label: 'Gemma 3 12B' },
+      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)' },
       { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron Super 49B (miễn phí)' },
       { id: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (mạnh)' },
-      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)' },
+      { id: 'google/gemma-3-12b-it', label: 'Gemma 3 12B' },
       { id: 'mistralai/mistral-large-2-instruct', label: 'Mistral Large 2 (mạnh nhất)' },
+      // Model cũ — NIM đã retire (410 Gone); giữ làm fallback cuối
+      { id: 'meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (nhanh, miễn phí)' },
+      { id: 'mistralai/mistral-7b-instruct-v0.3', label: 'Mistral 7B (nhanh)' },
     ],
     needsKey: true,
     keyStorageKey: 'apiKey',
-  },
-  {
-    id: 'openai',
-    label: 'OpenAI',
-    baseUrl: 'https://api.openai.com/v1',
-    models: [
-      { id: 'gpt-4o-mini', label: 'GPT-4o Mini (rẻ, nhanh)' },
-      { id: 'gpt-4o', label: 'GPT-4o (mạnh)' },
-      { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
-      { id: 'gpt-4.1', label: 'GPT-4.1' },
-    ],
-    needsKey: true,
-    keyStorageKey: 'openaiKey',
-  },
-  {
-    id: 'anthropic',
-    label: 'Anthropic',
-    baseUrl: 'https://api.anthropic.com/v1',
-    models: [
-      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (nhanh, rẻ)' },
-      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5 (cân bằng)' },
-      { id: 'claude-opus-5', label: 'Claude Opus 5 (mạnh nhất)' },
-    ],
-    needsKey: true,
-    keyStorageKey: 'anthropicKey',
-  },
-  {
-    id: 'google',
-    label: 'Google (Gemini)',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    models: [
-      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (nhanh, free tier)' },
-      { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (nhanh nhất, free tier)' },
-      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash (mới, free tier)' },
-      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (mạnh)' },
-    ],
-    needsKey: true,
-    keyStorageKey: 'googleKey',
-  },
-  {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    models: [
-      { id: 'nvidia/nemotron-3.5-lightning:free', label: 'Nemotron 3.5 Lightning (free)' },
-      { id: 'nvidia/nemotron-3-nano-30b-a3b:free', label: 'Nemotron 3 Nano 30B (free)' },
-      { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B (free)' },
-      { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B (free, mạnh)' },
-      { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (free)' },
-      { id: 'z-ai/glm-5.2:free', label: 'GLM 5.2 (free)' },
-      { id: 'openai/gpt-oss-20b:free', label: 'gpt-oss-20b (free)' },
-      { id: 'liquid/lfm-2.5-2.6b:free', label: 'LFM 2.5 2.6B (free, rất nhanh)' },
-      { id: 'meta-llama/llama-3.1-70b-instruct', label: 'Llama 3.1 70B' },
-      { id: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5' },
-      { id: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
-      { id: 'openai/gpt-4o', label: 'GPT-4o' },
-    ],
-    needsKey: true,
-    keyStorageKey: 'openrouterKey',
-  },
-  {
-    id: 'custom',
-    label: 'Custom (OpenAI-compatible)',
-    baseUrl: '',
-    models: [{ id: 'auto', label: 'Tự động (model server)' }],
-    needsKey: true,
-    keyStorageKey: 'customKey',
-    supportsCustomUrl: true,
   },
 ];
 
@@ -135,66 +81,28 @@ function buildLlmRequest(
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
-  const baseUrl = provider === 'custom' ? (customBaseUrl || '') : cfg.baseUrl;
+  const baseUrl = cfg.baseUrl;
   if (!baseUrl) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
-  // Build request based on provider type
-  const isAnthropic = provider === 'anthropic';
-  const isGoogle = provider === 'google';
-
-  let url: string;
-  let headers: Record<string, string>;
-  let body: any;
-
-  if (isAnthropic) {
-    // Anthropic Messages API (not OpenAI-compatible)
-    url = `${baseUrl}/messages`;
-    headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    };
-    body = {
-      model,
-      max_tokens: maxTokens,
-      temperature: 0.3,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
-    };
-  } else if (isGoogle) {
-    // Google Gemini via OpenAI-compatible endpoint
-    url = `${baseUrl}/chat/completions?key=${apiKey}`;
-    headers = { 'Content-Type': 'application/json' };
-    body = {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.3,
-    };
-  } else {
-    // OpenAI-compatible (NVIDIA, OpenAI, OpenRouter, Custom)
-    url = `${baseUrl}/chat/completions`;
-    headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    };
-    if (provider === 'openrouter') {
-      headers['HTTP-Referer'] = 'https://newssummarizer.app';
-      headers['X-Title'] = 'NewsSummarizer';
-    }
-    body = {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.3,
-    };
-  }
+  // Cả 2 provider (b.AI, NVIDIA) đều là OpenAI-compatible /chat/completions
+  const url = `${baseUrl}/chat/completions`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
+  const body: any = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+    max_tokens: maxTokens,
+    temperature: 0.3,
+  };
+  // Cả 2 provider đều có model reasoning — tắt thinking để trả summary trực tiếp
+  // (không tiêu token/độ trễ vào chuỗi suy luận, content luôn có nội dung).
+  // b.AI yêu cầu đúng kiểu {type:'disabled'}; NVIDIA chấp nhận và bỏ qua nếu không hỗ trợ.
+  body.thinking = { type: 'disabled' };
   return { url, headers, body };
 }
 
@@ -212,8 +120,8 @@ async function sendLlmRequest(
 ): Promise<any> {
   const isWeb = Platform.OS === 'web';
 
-  // Providers that support CORS natively on web
-  const supportsCorsNatively = ['openrouter', 'google'];
+  // Providers that support CORS natively on web (hiện cả 2 đều qua proxy để chắc chắn)
+  const supportsCorsNatively: string[] = [];
   const useNativeCors = isWeb && supportsCorsNatively.includes(provider);
 
   // Web + provider không có CORS → bắt buộc qua proxy. Danh sách base đã sắp
@@ -305,11 +213,11 @@ export async function summarizeWithProvider(
   const hint = (category && CATEGORY_PROMPT_HINTS[category]) || '';
   const prompt = `Bạn là biên tập viên tin tức. Tóm tắt bài báo dưới đây bằng tiếng Việt, trả về ĐÚNG cấu trúc sau — không tiêu đề, không giải thích, không markdown:
 
-Dòng 1: TL;DR — đúng MỘT câu nêu sự kiện chính (dưới 25 từ).
-Tiếp theo: 4-6 dòng, mỗi dòng một ý chính theo trình tự bài (diễn biến → nguyên nhân → ý nghĩa), mỗi ý 1-2 câu viết dạng văn xuôi.
-Cuối cùng: 2-4 dòng bắt đầu bằng "• " liệt kê DỮ KIỆN cụ thể (số liệu, tên riêng, thời gian, địa điểm). Chỉ lấy thông tin CÓ TRONG bài.
+Dòng 1: TL;DR — MỘT câu do BẠN TỰ VIẾT nêu trọng tâm bài (dưới 20 từ). KHÔNG được là chuyên mục, ngày giờ, tên báo, hay copy nguyên câu từ bài.
+Tiếp theo: 3-4 dòng, mỗi dòng MỘT ý chính do BẠN TỔNG HỢP, bám trọng tâm (tiêu đề + đoạn đầu). Mỗi ý 1 câu văn xuôi. KHÔNG liệt kê từng chi tiết phụ, KHÔNG copy nguyên văn câu dài từ bài.
+Cuối cùng: 2-3 dòng bắt đầu bằng "• " liệt kê DỮ KIỆN cụ thể (số liệu, tên riêng, thời gian, địa điểm). Chỉ lấy thông tin CÓ TRONG bài.
 
-${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin không có trong bài; các dòng cách nhau bằng dòng trống.`;
+${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin; KHÔNG đưa metadata (chuyên mục, ngày giờ đăng, tên tòa soạn, ghi chú ảnh "Ảnh: ..."); các dòng cách nhau bằng dòng trống.`;
 
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
@@ -324,10 +232,8 @@ ${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ ng
   const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 480, customBaseUrl);
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
 
-  // Parse response based on provider
-  const raw = provider === 'anthropic'
-    ? data.content?.[0]?.text || ''
-    : data.choices?.[0]?.message?.content || '';
+  // Cả 2 provider đều OpenAI-compatible → content trong choices[0].message.content
+  const raw = data.choices?.[0]?.message?.content || '';
   return normalizeStructuredSummary(raw);
 }
 
@@ -340,16 +246,23 @@ export function normalizeStructuredSummary(raw: string): string {
     .map((l) => l
       .replace(/^#{1,4}\s*/, '')
       .replace(/^\*\*(.+?)\*\*\s*:?\s*$/, '$1')
-      .replace(/^(?:TL;?DR|Tóm\s*tắt|Ý\s*chính|Dữ\s*kiện(?:\s*chính)?|Nội\s*dung(?:\s*chính)?|Chính)\s*:\s*/i, '')
+      .replace(/^(?:TL;?DR|Tóm\s*tắt|Ý\s*chính|Dữ\s*kiện(?:\s*chính)?|Nội\s*dung(?:\s*chính)?|Chính)\s*[:：—-]\s*/i, '')
       .trim())
     .filter(Boolean)
     .map((l) => l.replace(/^[-*–—]\s+/, '• ').replace(/^•\s*/, '• '))
-    .filter((l) => !/^(?:bài\s*báo|bài\s*viết)\s*(?:này|trên)/i.test(l) || l.length > 40); // bỏ dòng mở đầu kiểu "Bài báo này nói về..."
+    .filter((l) => !/^(?:bài\s*báo|bài\s*viết)\s*(?:này|trên)/i.test(l) || l.length > 40) // bỏ dòng mở đầu kiểu "Bài báo này nói về..."
+    // Bỏ metadata lọt từ bài (chuyên mục/ngày giờ/ghi chú ảnh — dòng NGẮN không bullet).
+    // QUAN TRỌNG: bullet "• " là dữ kiện → LUÔN giữ, không bị filter này nuốt.
+    .filter((l) => {
+      if (/^•/.test(l)) return true;
+      if (l.length > 40) return true;
+      return !/(?:^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]|^(?:Ảnh|Hình|Photo)\s*[:：]|^GMT)/i.test(l);
+    });
   if (!lines.length) return '';
   const seen = new Set<string>();
   lines = lines.filter((l) => { const k = l.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const facts = lines.filter((l) => l.startsWith('•')).slice(0, 4);
-  const mains = lines.filter((l) => !l.startsWith('•')).slice(0, 7);
+  const facts = lines.filter((l) => l.startsWith('•')).slice(0, 3);
+  const mains = lines.filter((l) => !l.startsWith('•')).slice(0, 5);
   return [...mains, ...facts].join('\n\n');
 }
 
@@ -410,27 +323,36 @@ export async function testProviderConnection(
     customBaseUrl,
   );
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 15000);
-  const text = provider === 'anthropic' ? data.content?.[0]?.text : data.choices?.[0]?.message?.content;
+  const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error('Dịch vụ AI trả về phản hồi rỗng');
 }
 
 // High-level: fetch key + model from storage, then summarize
 export async function summarizeArticle(articleText: string, category?: string): Promise<string> {
-  const provider = (await AsyncStorage.getItem(KEYS.provider)) as LLMProvider || 'nvidia';
+  const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || 'bai';
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
-  let apiKey = await AsyncStorage.getItem(cfg.keyStorageKey);
-  if (!apiKey && provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY; // default sẵn, chạy ngay khi start
+  let apiKey = await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]);
+  if (!apiKey && provider === 'bai') apiKey = DEFAULT_BAI_KEY; // default sẵn, chạy ngay khi start
+  if (!apiKey && provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY;
   if (!apiKey && cfg.needsKey) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
-  const model = provider === 'custom'
-    ? (await AsyncStorage.getItem(KEYS.customBaseUrl)) // custom uses model from storage too
-    : (await AsyncStorage.getItem(KEYS.model)) || cfg.models[0]?.id;
+  // Chỉ dùng model đã lưu nếu thuộc danh sách provider hiện tại — tránh model cũ
+  // (vd nvidia) bị gửi nhầm sang b.AI rồi lỗi.
+  const storedModel = await AsyncStorage.getItem(KEYS.model);
+  const model = storedModel && cfg.models.some((m) => m.id === storedModel) ? storedModel : cfg.models[0]?.id;
 
-  const customBaseUrl = provider === 'custom' ? await AsyncStorage.getItem(KEYS.customBaseUrl) : undefined;
-
-  return summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, customBaseUrl || undefined, category);
+  try {
+    return await summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, undefined, category);
+  } catch (e) {
+    // Provider lưu cũ (vd nvidia) có thể fail (410/model retire/mạng) →
+    // fallback về b.AI mặc định để luôn có tóm tắt.
+    if (provider !== 'bai') {
+      return summarizeWithProvider(articleText, 'bai', DEFAULT_BAI_KEY, 'deepseek-v4-flash-vision-exp', undefined, category);
+    }
+    throw e;
+  }
 }
 
 // ----- Article parsing (Jina markdown → text/ảnh/video blocks) -----
@@ -452,13 +374,31 @@ export interface ArticleBlock {
 // quảng cáo, không phải placeholder kiểu "Image 1"/"Hình 2", không phải URL.
 function altToCaption(alt: string | undefined): string | undefined {
   if (!alt) return undefined;
-  const c = decodeHtml(alt).replace(/\s+/g, ' ').trim();
-  if (c.length < 4 || c.length > 140) return undefined;
+  let c = decodeHtml(alt).replace(/\s+/g, ' ').trim();
+  // Alt CMS kiểu "Image 4: tieu-thu-sai-..." (Tiền Phong/Tuổi Trẻ) — "Image N:"
+  // CHỈ là prefix tự động; phần sau còn đánh giá như caption thường.
+  c = c.replace(/^(?:image|hình|ảnh|photo)\s*\d+\s*[:.\-–—]\s*/i, '').trim();
+  if (c.length < 4 || c.length > 200) return undefined;
   if (AD_ALT_RE.test(c)) return undefined;
+  // Alt còn mỗi số thứ tự ("Image 5") → undefined.
   if (/^(?:image|hình|ảnh|photo)\s*\d+$/i.test(c)) return undefined;
+  // Gallery caption tự sinh kiểu "Tên bài - Ảnh 1." / "Ảnh 1." — không phải
+  // caption thật (caption thật nằm trong <figcaption> hoặc dòng text sau ảnh).
+  if (/(?:^|[\-–—])\s*(?:Ảnh|Hình|ảnh|hình|Photo|photo|Image|image)\s*\d+\s*\.?\s*$/i.test(c)) return undefined;
+  // Alt là FILENAME ("hlts-1-1785914384-21280297.jpg", "679978052-...-n.jpg")
+  // hoặc slug kebab chữ thường toàn bộ → placeholder CMS, không phải caption.
+  if (/\.(jpe?g|png|webp|avif|gif|bmp|svg)(?:\s|$|[?,";:])/i.test(c)) return undefined;
+  if (/^[a-z0-9áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ\.\-_\d ]+$/.test(c) && !/[A-ZÀ-Ỹ]/.test(c)) return undefined;
   if (/https?:\/\//i.test(c)) return undefined;
   return c;
 }
+
+// Caption dài quá ngưỡng → AI rút gọn ở cuối file (aiCondenseCaptions) —
+// user muốn tóm tắt thật sự, không phải cắt "…" theo công thức.
+
+// Alt placeholder kiểu CMS: "Image 5: filename.jpg" → Ảnh là thumbnail carousel/
+// UI chứ không phải ảnh nội dung → bỏ luôn BLOCK ảnh (không chỉ bỏ caption).
+const AUTO_ALT_RE = /^(?:image|hình|ảnh|photo|Ảnh)\s*\d+/i;
 
 // Khóa so sánh ảnh trùng: cùng file khác query (?w=&h= zoom) vẫn là MỘT ảnh.
 export function baseUrlKey(url: string): string {
@@ -492,7 +432,18 @@ function cleanMarkdownText(s: string): string {
     .replace(/!?\[[^\]]*\]\(javascript:[^)\n]*/g, '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/!?\[\]\([^)]*\)/g, ' ')
+    // Heading-link tới bài KHÁC (related card lồng trong bài: "### [Headline](url-article)")
+    // → bỏ hẳn, không để headline bài khác lọt thành text.
+    .replace(/^#{1,4}\s*\[[^\]]+\]\(https?:\/\/[^)\s]*\.(?:tpo|html|chn|vn|com\.vn)[^)]*\)/gim, '')
+    // Dòng chỉ gồm 1 link tới BÀI KHÁC — carousel "tin liên quan" của site nhúng
+    // NGAY TRONG thân bài, không có heading (khác RELATED_RE ở cuối bài):
+    // [Tiêu đề bài khác](https://...html) → bỏ hẳn, không để tiêu đề bài khác
+    // lọt thành text trong tóm tắt.
+    .replace(/^\s*\[[^\]]{4,160}\]\(\s*https?:\/\/[^\s)\]]+\.[a-zA-Z]{2,}(?:\/[^\s)\]]*)?(?:\s+"[^"]*")?\)\s*$/gim, '')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Phần đuôi "](full-url)" của ảnh bọc [![...](thumb)](full) lọt xuống đầu
+    // text block kế tiếp → bỏ dòng rác này, không để nó nuốt dòng caption thật.
+    .replace(/^\s*\]\([^)\s]*\)\s*$/gm, '')
     .replace(/^#{1,6}[ \t]+/gm, '')
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
     .replace(/(\*|_)([^*_\n]+)\1/g, '$2')
@@ -502,6 +453,8 @@ function cleanMarkdownText(s: string): string {
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  // decodeHtml gọi sau cùng — chỉ giữ khi module đã load xong (runtime).
+  return decodeHtml(s);
 }
 
 // Host của mạng quảng cáo/tracking (VN + quốc tế) chèn banner/player giả vào bài.
@@ -577,8 +530,10 @@ function isEditorialImage(url: string): boolean {
     if (/(^|\/)(crop|resize|small|medium|avatar|avatar-|icon-|logo-|sprite|tracking|pixel|beacon)(\/|_|-|\.)/i.test(url)) return false;
     // Filter related articles/sidebar thumbnails: /related/, /sidebar/, /widget/, /recommend/, /more-news/, /box-/, /list-/
     if (/(related|sidebar|widget|recommend|more.?news|box.|list.|also.?read|xem.?them|tin.?lien.?quan|doc.?nhieu|khac.?bai)(\/|_|-|\.)/i.test(url)) return false;
-    // Filter thumbnail suffixes: -thumb, _thumb, -small, _small, -preview, _preview
-    if (/(-|_)(thumb|small|preview|teaser|crop)\d*(\/|_|-|\.|$)/i.test(url)) return false;
+    // Suffix thumb: -thumb, _thumb, -small… KHÔNG gạch "crop" giữa tên file —
+    // Báo Chính phủ/Tuổi Trẻ đặt tên ảnh nội dung "ten-1000-crop-<ts>.jpg";
+    // crop thật đã có rule (^|/)crop/ ở trên chặn.
+    if (/(-|_)(thumb|small|preview|teaser)\d*(\/|_|-|\.|$)/i.test(url)) return false;
     // Chỉ chặn avatar vuông nhỏ (w=h<=100). Không chặn ảnh nội dung tỷ lệ ngang/dọc
     // vì Jina giữ nguyên tham số w/h của site gốc (VD VnExpress dùng ?w=300&h=180).
     const wParam = url.match(/[?&](?:w|width)=(\d+)/i);
@@ -587,6 +542,10 @@ function isEditorialImage(url: string): boolean {
       const w = +wParam[1], h = +hParam[1];
       if (w > 0 && h > 0 && w <= 100 && h <= 100) return false;
     }
+    // Thumbnail nhỏ: w < 400 và h=0 (hoặc không h) → ảnh thumb gallery/tin liên
+    // quan (VnExpress ảnh nội dung thật = w=1020+&h=0; w=220&h=0&q=80 là thumb).
+    // GIỮ w nhỏ kèm h cắt (VD w=300&h=180) — ảnh card nội dung.
+    if (wParam && +wParam[1] > 0 && +wParam[1] < 400 && (!hParam || +hParam[1] === 0)) return false;
     // Filter 1x1, 2x2 tracking pixels
     if (/[?&](w|width)=[12]&?(h|height)=[12]/i.test(url)) return false;
     // Ad/tracking pixel đội lốt ảnh (vd cl.vlitag.com/tf-v1.jpeg?e=...): query
@@ -626,10 +585,37 @@ function classifyVideo(url: string): ArticleBlock | null {
   return null;
 }
 
+// Một số báo (Tiền Phong...) nhúng widget "AI TÓM TẮT" NGAY TRONG thân bài:
+// widget chứa bản tóm tắt sẵn của tờ báo + CAROUSEL "tin liên quan" (ảnh +
+// tiêu đề của BÀI KHÁC — Campuchia, Nepal, Na Uy...). Chính cái carousel này
+// khiến tóm tắt của app dính ảnh/text không liên quan bài gốc. Cắt cả khối
+// (marker đầu → marker cuối) trên chuỗi THÔ trước khi tách block; 2 chuỗi đặc
+// trưng này không xuất hiện trong nội dung bài thật nên không cắt nhầm.
+function stripSiteWidgets(s: string): string {
+  const withEnd = s.replace(/AI\s*TÓM\s*TẮT[\s\S]*?Copy\s*tóm\s*tắt/gi, '');
+  if (withEnd !== s) return withEnd;
+  // Jina đôi khi bỏ nút "Copy tóm tắt" → mốc cuối mất. Fallback AN TOÀN: chỉ cắt
+  // nếu phía sau widget có heading bài thật (# ...) — không có heading thì để
+  // nguyên (không cắt nhầm thân bài; lúc đó các lớp khác như AUTO_ALT_RE lo).
+  const m = s.match(/AI\s*TÓM\s*TẮT[\s\S]*?(?=#{1,3}\s)/i);
+  return m && m.index !== undefined ? s.slice(0, m.index) + s.slice(m.index + m[0].length) : s;
+}
+
 // Parse markdown → mảng block giữ nguyên vị trí text/ảnh/video (để render xen kẽ "dưới mỗi text").
-export function parseArticleBlocks(raw: string): ArticleBlock[] {
-  const s = stripJinaHeader(raw);
+// pageUrl (nếu có) giúp phân biệt ảnh nội dung bọc link về CHÍNH bài (gallery
+// self-link của Báo CP/CAND…) với thumbnail related bọc link bài khác.
+export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
+  const s = stripSiteWidgets(stripJinaHeader(raw));
   const blocks: ArticleBlock[] = [];
+
+  // Mốc cắt: bắt đầu mục "Bài viết liên quan" / "Tin cùng chuyên mục" / "Đọc thêm"
+  // / "Có thể bạn quan tâm" / "Related"… Jina hay để nguyên mục này cuối markdown,
+  // kéo theo text + ảnh/video của BÀI KHÁC lẫn vào blocks.
+  const RELATED_RE = /^[\s#>]*\[?(?:Bài\s*viết\s*liên\s*quan|Tin\s*liên\s*quan|Tin\s*cùng\s*chuyên\s*mục|Tin\s*nổi\s*bật|Đọc\s*thêm|Xem\s*thêm|Có\s*thể\s*bạn\s*quan\s*tâm|Related\s*(?:articles|news|stories)|Read\s*more|More\s*from|Tin\s*khác|Bài\s*viết\s*cùng\s*chủ\s*đề|Tin\s*tức|Tin\s*mới|Mới\s*nhất)(?:\]?\s*\([^)]*\))?[\s:：\-–—]*$/im;
+  const findRelatedStart = (text: string): number => {
+    const m = text.match(RELATED_RE);
+    return m ? (m.index ?? -1) : -1;
+  };
 
   // Đánh dấu vị trí ảnh và video trong text
   const markers: { index: number; end: number; block: ArticleBlock }[] = [];
@@ -640,21 +626,33 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
     if (isAdHost(m[2])) continue;
     if (m[1] && AD_ALT_RE.test(m[1].trim())) continue;
     if (!isEditorialImage(m[2])) continue;
-    // Ảnh bị bọc trong link [![alt](img.jpg)](...): thumbnail "tin liên quan/
-    // đọc nhiều" (link bài viết) hoặc banner QC (link trỏ ảnh khác, vd
-    // [![QC Xi măng](qc.jpg)](longson.jpg)). Chỉ giữ khi link trỏ đến CHÍNH
-    // ảnh đó (zoom to) — so base URL không query.
-    if (s[m.index - 1] === '[' && s.startsWith('](', m.index + m[0].length)) {
+    // Ảnh bị bọc link [![alt](img.jpg)](href):
+    //  - href trỏ tới CHÍNH ảnh (zoom full: CÙNG FILE, khác thư mục resize như
+    //    /thumb_w/730/... của Tuổi Trẻ) → ảnh nội dung thật → GIỮ, kể cả alt tự
+    //    sinh kiểu "Image 21: ..." — caption thật nằm ở dòng text ngay sau ảnh.
+    //  - href trỏ tới ảnh/bài KHÁC → thumbnail "tin liên quan"/banner QC → BỎ.
+    const wrapped = s[m.index - 1] === '[' && s.startsWith('](', m.index + m[0].length);
+    let markerStart = m.index;
+    let markerEnd = m.index + m[0].length;
+    if (wrapped) {
       const close = s.indexOf(')', m.index + m[0].length + 2);
       const wrapUrl = close >= 0 ? s.slice(m.index + m[0].length + 2, close) : '';
       const wrapHref = wrapUrl.split(/\s/)[0]; // markdown: URL có thể kèm "title"
-      if (wrapHref.split('?')[0] !== m[2].split('?')[0]) continue;
+      const isSelfZoom = !!wrapHref && sameImageFile(wrapHref, m[2]);
+      // gallery lightbox bọc ảnh bằng link về CHÍNH bài đang đọc (Báo Chính
+      // phủ, CAND…) → vẫn là ảnh nội dung. Chỉ bỏ khi href trỏ bài KHÁC.
+      const isSelfArticle = !!wrapHref && !!pageUrl && !articlePathDiffers(wrapHref, pageUrl);
+      if (!isSelfZoom && !isSelfArticle) continue;
+      // Bao trọn [![...](thumb)](full) vào marker: phần ](full) không lọt thành
+      // text rác trước dòng caption thật.
+      markerStart = m.index - 1;
+      if (close >= 0) markerEnd = close + 1;
     }
     const baseKey = baseUrlKey(m[2]);
     if (seenBase.has(baseKey)) continue;
     seenBase.add(baseKey);
     const cap = altToCaption(m[1]);
-    markers.push({ index: m.index, end: m.index + m[0].length, block: { type: 'image', url: m[2], pos: m.index / Math.max(s.length, 1), ...(cap ? { caption: cap } : {}) } });
+    markers.push({ index: markerStart, end: markerEnd, block: { type: 'image', url: m[2], pos: m.index / Math.max(s.length, 1), ...(cap ? { caption: cap } : {}) } });
   }
   // Site lazy-load / tối ưu SEO → Jina giữ <img src="..."> raw thay vì ![alt](url). Bắt cả 2 định dạng.
   const htmlImgRe = /<img\s[^>]*>/gi;
@@ -664,10 +662,12 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
     const url = um?.[1];
     if (!url || isAdHost(url)) continue;
     if (!isEditorialImage(url)) continue;
+    const rawAlt = (tag.match(/\balt=["']([^"']*)["']/i) || [])[1];
+    if (rawAlt && (AD_ALT_RE.test(rawAlt.trim()) || AUTO_ALT_RE.test(rawAlt.trim()))) continue;
     const baseKey = baseUrlKey(url);
     if (seenBase.has(baseKey)) continue;
     seenBase.add(baseKey);
-    const cap = altToCaption((tag.match(/\balt=["']([^"']*)["']/i) || [])[1]);
+    const cap = altToCaption(rawAlt);
     markers.push({ index: m.index, end: m.index + tag.length, block: { type: 'image', url, pos: m.index / Math.max(s.length, 1), ...(cap ? { caption: cap } : {}) } });
   }
   // Chỉ bắt link/video có pattern YouTube, Vimeo, hoặc đuôi file video - bỏ qua link bài báo khác
@@ -693,16 +693,80 @@ export function parseArticleBlocks(raw: string): ArticleBlock[] {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   let last = 0;
+  let stopped = false;
   for (const mk of markers) {
-    if (mk.index < last) continue;
-    const text = scrubAdLines(cleanMarkdownText(s.slice(last, mk.index)));
+    if (stopped || mk.index < last) continue;
+    const rawSlice = s.slice(last, mk.index);
+    // Cắt tại mốc "Bài liên quan"… — mọi text + media phía sau đều của bài khác.
+    const relIdx = findRelatedStart(rawSlice);
+    if (relIdx >= 0) {
+      const text = scrubAdLines(cleanMarkdownText(rawSlice.slice(0, relIdx)));
+      if (text) blocks.push({ type: 'text', text });
+      stopped = true;
+      break;
+    }
+    const text = scrubAdLines(cleanMarkdownText(rawSlice));
     if (text) blocks.push({ type: 'text', text });
     blocks.push(mk.block);
     last = mk.end;
   }
-  const rest = scrubAdLines(cleanMarkdownText(s.slice(last)));
-  if (rest) blocks.push({ type: 'text', text: rest });
-  return blocks;
+  if (!stopped) {
+    const rawRest = s.slice(last);
+    const relIdx = findRelatedStart(rawRest);
+    const rest = scrubAdLines(cleanMarkdownText(relIdx >= 0 ? rawRest.slice(0, relIdx) : rawRest));
+    if (rest) blocks.push({ type: 'text', text: rest });
+  }
+
+  // Caption thật của báo: Jina giữ thành dòng riêng NGAY SAU ảnh lẫn trong block
+  // text kế tiếp — kiểu "Ảnh: ...", "Hình: ...", "Clip: ...", "Nguồn: ...",
+  // hoặc gallery "Tên phim - Ảnh 1." (Tuổi Trẻ). Dời dòng này thành caption của
+  // ảnh (như bố cục bài gốc) + tách khỏi text để không lọt vào nội dung AI tóm.
+  // Nhận diện: dòng NGẮN sau ảnh có từ khóa caption theo sau bởi dấu phân cách
+  // ("Ảnh: ...", "Hình 1.", "Clip: ...", "Nguồn: ...", gallery "Tên phim - Ảnh 2.").
+  // KHÔNG dùng \b — ký tự Việt hoa dấu ("Ả") không phải \w ASCII nên \b không khớp.
+  // Yêu cầu separator để không bắt nhầm từ chứa "hình" ("hình thức", "hình thành")
+  // hay "video" trong câu văn thật. Caption thật có thể dài (~140 ký tự) nhưng
+  // thường KẾT THÚC bằng "Ảnh: <nguồn>" — dòng càng dài càng phải chắc chắn.
+  const isCaptionLine = (line: string): boolean => {
+    const l = line.trim();
+    if (!l || l.length > 200) return false;
+    if (/https?:\/\//i.test(l)) return false;
+    if (/(?:Ảnh|Hình|Photo|Clip|Video|Nguồn|Nguon)\s*[:：\d]/i.test(l)) {
+      if (l.length <= 120) return true;
+      // Dòng dài → chỉ nhận khi kết thúc rõ kiểu caption "… - Ảnh: Nguồn"
+      return /(?:Ảnh|Hình)\s*[:：]\s*\S+$/i.test(l) || /-\s*\(?(?:Ảnh|Hình)\s*[:：]/i.test(l);
+    }
+    // KHÔNG có keyword: báo kiểu Tiền Phong để caption TRẦN ngay dưới ảnh
+    // ("Kalli Nguyễn nhiều lần đăng ảnh hẹn hò cùng Johnny Trí Nguyễn.").
+    // Ảnh carousel/related bài khác đã bị wrapper-check chặn ở trên nên dòng
+    // đứng sát sau ảnh giữ lại gần như chắc chắn là caption. Guard: câu ngắn
+    // trọn vẹn kết thúc bằng dấu chấm, không phải số/metadata đơn.
+    if (l.length < 20 || l.length > 110) return false;
+    // ANTĐ/Kenh14 hay đặt caption KHÔNG có dấu chấm cuối, dạng "… (Xóm Khanh -
+    // Cục Phượng)" → chấp cả kết thúc ) ” ], ngoài . ! …
+    if (!/[.!…”)\]]$/.test(l) || !/[a-zà-ỹ]/i.test(l)) return false;
+    return !/^(?:Ngày|Cập nhật|Cập nhat|Bản dựng|Năm|Tháng|Mùa)/i.test(l);
+  };
+  const withCaps: ArticleBlock[] = [];
+  for (const b of blocks) {
+    const prev = withCaps[withCaps.length - 1];
+    if (
+      b.type === 'text' && b.text && prev && (prev.type === 'image' || prev.type === 'video') && !prev.caption
+    ) {
+      const lines = b.text.split('\n');
+      const firstIdx = lines.findIndex((l) => l.trim());
+      const first = firstIdx >= 0 ? lines[firstIdx].trim() : '';
+      if (first && isCaptionLine(first)) {
+        prev.caption = decodeHtml(first.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
+        lines.splice(firstIdx, 1);
+        const rest = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        if (rest) { b.text = rest; withCaps.push(b); }
+        continue;
+      }
+    }
+    withCaps.push(b);
+  }
+  return withCaps;
 }
 
 // Gộp các block text thành 1 chuỗi (nguồn cho AI tóm tắt + đếm thời gian đọc).
@@ -722,11 +786,39 @@ export function isVideoPageUrl(url: string): boolean {
 // video giấu stream — fallback này bổ sung og:image + img + video thật vào blocks.
 const UA_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
 
-const decodeHtml = (s: string) => s
-  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
-  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+// Named entities HTML thường gặp (tiếng Việt + chung). decodeHtml lặp 2 lần để
+// bắt entity lồng nhau kiểu "&amp;aacute;" sau khi &amp; đã thành &.
+const HTML_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  hellip: '…', mdash: '—', ndash: '–', ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’',
+  laquo: '«', raquo: '»', bull: '•', middot: '·', deg: '°', times: '×', minus: '−',
+  aacute: 'á', agrave: 'à', atilde: 'ã', acirc: 'â', abreve: 'ă',
+  eacute: 'é', egrave: 'è', ecirc: 'ê',
+  iacute: 'í', igrave: 'ì', icirc: 'î',
+  oacute: 'ó', ograve: 'ò', otilde: 'õ', ocirc: 'ô',
+  uacute: 'ú', ugrave: 'ù', ucirc: 'û', yacute: 'ý',
+  ntilde: 'ñ', ccedil: 'ç', auml: 'ä', euml: 'ë', iuml: 'ï', ouml: 'ö', uuml: 'ü',
+  Aacute: 'Á', Agrave: 'À', Atilde: 'Ã', Acirc: 'Â', Abreve: 'Ă',
+  Eacute: 'É', Egrave: 'È', Ecirc: 'Ê',
+  Iacute: 'Í', Igrave: 'Ì', Icirc: 'Î',
+  Oacute: 'Ó', Ograve: 'Ò', Otilde: 'Õ', Ocirc: 'Ô',
+  Uacute: 'Ú', Ugrave: 'Ù', Ucirc: 'Û', Yacute: 'Ý',
+  Ntilde: 'Ñ', Ccedil: 'Ç', Auml: 'Ä', Euml: 'Ë', Iuml: 'Ï', Ouml: 'Ö', Uuml: 'Ü',
+};
+
+function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (m, ent: string) => {
+    if (ent[0] === '#') {
+      const hex = ent[1] === 'x' || ent[1] === 'X';
+      const code = parseInt(ent.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(code) ? String.fromCharCode(code) : m;
+    }
+    return HTML_ENTITIES[ent] ?? m;
+  });
+}
+
+// Entity lồng nhau ("&amp;aacute;") → &amp; thành & ở lượt 1, &aacute; thành á ở lượt 2.
+const decodeHtml = (s: string) => decodeHtmlEntities(decodeHtmlEntities(s));
 
 async function fetchRawHtml(pageUrl: string): Promise<string> {
   // Web: trình duyệt dính CORS khi fetch HTML báo trực tiếp → đi qua proxy /api/fetch.
@@ -770,10 +862,25 @@ function extractContentRegion(html: string): string {
 // Giới hạn số media bóc từ HTML — phòng hờ khi filter lọt rác
 const MAX_HTML_MEDIA = 8;
 
+// href trỏ tới BÀI VIẾT KHÁC (khác path với bài đang đọc, bỏ query/anchor —
+// gallery /?page=2 vẫn tính là cùng bài). Empty string = không xác định được.
+function articlePathDiffers(href: string, pageUrl: string): boolean {
+  let target: string;
+  try {
+    target = new URL(href, pageUrl).href;
+  } catch {
+    return false;
+  }
+  const pathOf = (s: string) => s.replace(/^(?:https?:)?\/\//i, '').replace(/^www\./i, '').split(/[?#]/)[0].replace(/\/+$/, '').toLowerCase();
+  const a = pathOf(target);
+  const b = pathOf(pageUrl);
+  return !!a && !!b && a !== b;
+}
+
 async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
   const html = await fetchRawHtml(pageUrl);
   if (!html) return [];
-  const region = extractContentRegion(html);
+  const region = stripSiteWidgets(extractContentRegion(html));
 
   const out: ArticleBlock[] = [];
   const seenBase = new Set<string>();
@@ -816,8 +923,47 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
     if (!isImg) {
       push(m.index, classifyVideo(u));
     } else {
-      if (!isEditorialImage(u)) continue;
-      const cap = altToCaption((m[0].match(/\balt=["']([^"']*)["']/i) || [])[1]);
+      // Lazyload: <img src="data:image/gif…" data-src/data-original="URL xịn">
+      // → src bắt được không phải ảnh thật, thử các attr data-* URL http.
+      if (!isEditorialImage(u)) {
+        const attr = m[0].match(/(?:data-original|data-large-src|data-src)=["'](https?:\/\/[^"']+)["']/i);
+        if (!attr) continue;
+        u = decodeHtml(attr[1]);
+        if (u.startsWith('//')) u = 'https:' + u;
+        if (!isEditorialImage(u)) continue;
+      }
+      // Ảnh BỌC TRONG <a href="bài KHÁC"> = thumbnail "xem thêm/tin liên quan"
+      // (Tiền Phong nhúng nguyên cụm này trong vùng nội dung, alt = tiêu đề bài
+      // khác → nếu lọt, tóm tắt hiện ảnh + "caption" sai hoàn toàn). Ảnh nội
+      // dung thật: không bọc link, bọc lightbox về CHÍNH ảnh, hoặc link trong
+      // cùng trang (gallery ?page=2…).
+      const before = region.slice(Math.max(0, m.index - 800), m.index);
+      const openA = before.lastIndexOf('<a ');
+      if (openA > before.lastIndexOf('</a>')) {
+        const hrefM = before.slice(openA).match(/\bhref=["']([^"']*)["']/i);
+        const href = hrefM ? decodeHtml(hrefM[1]).trim() : '';
+        if (href && !/^(?:javascript|data):/i.test(href)) {
+          const isSelfZoom = /\.(jpe?g|png|webp|avif|gif)(\?|#|$)/i.test(href) && sameImageFile(href, u);
+          if (!isSelfZoom && articlePathDiffers(href, pageUrl)) continue;
+        }
+      }
+      const rawAlt = (m[0].match(/\balt=["']([^"']*)["']/i) || [])[1];
+      // Alt placeholder ("Image 5: filename.jpg") = thumbnail carousel/UI → bỏ
+      // ảnh; caption thật thì lấy làm ghi chú.
+      if (rawAlt && (AD_ALT_RE.test(rawAlt.trim()) || AUTO_ALT_RE.test(rawAlt.trim()))) continue;
+      let cap = altToCaption(rawAlt);
+      // Alt rỗng → tìm <figcaption> của <figure> chứa ảnh (báo VN hay dùng):
+      // chỉ nhận caption nằm TRƯỚC <img> kế tiếp để không lấy nhầm caption
+      // của ảnh khác trong gallery.
+      if (!cap) {
+        const nextImg = region.indexOf('<img', m.index + 1);
+        const seg = region.slice(m.index, nextImg >= 0 ? Math.min(nextImg, m.index + 900) : m.index + 900);
+        const fc = seg.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i);
+        if (fc) {
+          const text = decodeHtml(fc[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+          if (text.length >= 4 && text.length <= 200 && !AD_ALT_RE.test(text)) cap = text;
+        }
+      }
       push(m.index, { type: 'image', url: u, ...(cap ? { caption: cap } : {}) });
     }
   }
@@ -911,7 +1057,7 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
     if (!res.ok) throw new Error(`Không thể đọc bài báo (HTTP ${res.status})`);
     raw = await res.text();
   }
-  const blocks = parseArticleBlocks(raw);
+  const blocks = parseArticleBlocks(raw, url);
   // Trang video: player JS giấu stream khỏi Jina → bóc m3u8 từ HTML, chèn lên
   // đầu (video chính là lead của trang dạng này). Chỉ gọi khi chưa thấy video.
   if (!blocks.some((b) => b.type === 'video') && isVideoPageUrl(url)) {
@@ -941,3 +1087,59 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
 }
 
 import { LIMITS } from './storage';
+
+// ----- Nén caption ảnh dài bằng AI -----
+// Caption figcaption/alt của báo có thể 120-200 ký tự → UI 2 dòng không đủ.
+// Thay vì cắt "…", gửi TẤT CẢ caption dài trong MỘT request batch, cache theo
+// URL ảnh (mở lại bài = 0 lời gọi). AI chết → giữ caption gốc (lặng lẽ).
+export const CAPTION_AI_MAX = 88;
+
+const captionAIcache = new Map<string, string>(); // baseUrlKey → caption đã nén
+const captionAIpending = new Set<string>();
+
+export function getCachedCaption(url: string): string | undefined {
+  return captionAIcache.get(baseUrlKey(url));
+}
+
+export async function aiCondenseCaptions(
+  items: { url: string; caption: string }[],
+): Promise<number> {
+  const todo = items.filter((it) =>
+    it.caption.length > CAPTION_AI_MAX
+    && !captionAIcache.has(baseUrlKey(it.url))
+    && !captionAIpending.has(baseUrlKey(it.url)),
+  );
+  if (!todo.length) return 0;
+  todo.forEach((t) => captionAIpending.add(baseUrlKey(t.url)));
+  try {
+    const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || 'bai';
+    const cfg = getProviderConfig(provider);
+    if (!cfg) return 0;
+    const apiKey = (await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]))
+      || (provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : DEFAULT_BAI_KEY);
+    const storedModel = await AsyncStorage.getItem(KEYS.model);
+    const model = (storedModel && cfg.models.some((m) => m.id === storedModel) ? storedModel : cfg.models[0]?.id) || '';
+    const list = todo.map((t, i) => `${i + 1}. ${t.caption}`).join('\n');
+    const prompt = `Bạn là biên tập viên ảnh của tòa soạn. Viết lại mỗi chú thích ảnh dưới đây thành bản NGẮN (tối đa 12 từ), tiếng Việt, trọn nghĩa.\nQuy tắc: giữ đúng tên riêng/địa danh và credit nguồn ("Ảnh: ..."); không bịa thêm; giữ nguyên dấu "=" giữa tên phim và credit nếu có; trả về ĐÚNG ${todo.length} dòng theo thứ tự, mỗi dòng chỉ chứa chú thích đã rút gọn, không số thứ tự, không giải thích.\n\n${list}`;
+    const { url, headers, body } = buildLlmRequest(provider, apiKey || '', model, prompt, list, 220);
+    const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 20000);
+    const raw = data.choices?.[0]?.message?.content || '';
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l: string) => l.replace(/^\s*\d+[.):\-]\s*/, '').replace(/^["“«](.*)["”»]$/, '$1').trim())
+      .filter(Boolean);
+    let stored = 0;
+    todo.forEach((t, i) => {
+      const s = lines[i];
+      if (s && s.length >= 4 && s.length < t.caption.length) {
+        captionAIcache.set(baseUrlKey(t.url), s);
+        stored++;
+      }
+    });
+    return stored;
+  } catch {
+    return 0; // thất bại → caption gốc, không lỗi UI
+  } finally {
+    todo.forEach((t) => captionAIpending.delete(baseUrlKey(t.url)));
+  }
+}

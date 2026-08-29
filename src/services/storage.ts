@@ -2,6 +2,7 @@
 
 export const KEYS = {
   provider: '@llm_provider',
+  baiKey: '@bai_key',
   apiKey: '@nim_key',
   openaiKey: '@openai_key',
   anthropicKey: '@anthropic_key',

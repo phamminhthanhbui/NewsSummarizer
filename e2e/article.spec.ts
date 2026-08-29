@@ -71,9 +71,9 @@ test.describe('Tóm tắt AI', () => {
     expect(llmCalls).toBe(callsFirst);
   });
 
-  test('không lưu API key: vẫn tóm tắt được nhờ key mặc định NVIDIA', async ({ page }) => {
+  test('không lưu API key: vẫn tóm tắt được nhờ key mặc định b.AI', async ({ page }) => {
     await page.evaluate(() => {
-      ['@nim_key', '@openai_key', '@anthropic_key', '@google_key', '@openrouter_key', '@custom_key']
+      ['@bai_key', '@nim_key', '@openai_key', '@anthropic_key', '@google_key', '@openrouter_key', '@custom_key']
         .forEach((k) => localStorage.removeItem(k));
     });
     await openFirstArticle(page);

@@ -14,7 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY } from '../services/summarize';
+import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_BAI_KEY, DEFAULT_NVIDIA_KEY } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
 import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
@@ -24,12 +24,8 @@ import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, 
 const isWeb = Platform.OS === 'web';
 
 const PROVIDER_ICONS: Record<LLMProvider, string> = {
+  bai: 'logo-github',
   nvidia: 'cube',
-  openai: 'logo-github',
-  anthropic: 'flame',
-  google: 'logo-google',
-  openrouter: 'globe',
-  custom: 'settings',
 };
 
 // Màu nhận diện từng section — lấy trong 7 màu chủ đạo (THEME_COLORS)
@@ -51,7 +47,7 @@ export default function SettingsScreen() {
   const C = useTheme(); // palette theo dark mode — styles dùng C thay vì Color tĩnh
   const styles = makeStyles(C); // styles động: đổi mode là cả màn hình đổi màu ngay
   const { showAlert } = useAlert();
-  const [provider, setProvider] = useState<LLMProvider>('nvidia');
+  const [provider, setProvider] = useState<LLMProvider>('bai');
   const [apiKey, setApiKey] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [model, setModel] = useState('');
@@ -72,7 +68,7 @@ export default function SettingsScreen() {
 
   const cfg = PROVIDERS.find((p) => p.id === provider);
   const models = getModelsForProvider(provider);
-  const keyStorageKey = cfg?.keyStorageKey || 'apiKey';
+  const keyStorageKey = cfg?.keyStorageKey ? KEYS[cfg.keyStorageKey] : KEYS.apiKey;
   const showCustomUrl = cfg?.supportsCustomUrl;
 
   useEffect(() => {
@@ -107,8 +103,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     const m = models[0]?.id || '';
     setModel(m);
-    // NVIDIA: storage trống thì điền key mặc định vào ô (chạy được ngay khi start)
-    AsyncStorage.getItem(cfg?.keyStorageKey || 'apiKey').then((val) => setApiKey(val || (provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : '')));
+    // Storage trống thì điền key mặc định vào ô (chạy được ngay khi start)
+    AsyncStorage.getItem(keyStorageKey).then((val) => setApiKey(val || (provider === 'bai' ? DEFAULT_BAI_KEY : provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : '')));
     if (showCustomUrl) {
       AsyncStorage.getItem(KEYS.customBaseUrl).then((val) => setCustomBaseUrl(val || ''));
     }
@@ -303,7 +299,7 @@ export default function SettingsScreen() {
               style={styles.input}
               value={apiKey}
               onChangeText={setApiKey}
-              placeholder={cfg?.id === 'custom' ? 'API key (tùy chọn)' : 'sk-... / nvapi-...'}
+              placeholder="sk-... / nvapi-..."
               placeholderTextColor={Color.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -312,11 +308,7 @@ export default function SettingsScreen() {
             />
             <Text style={styles.fieldHint}>
               {cfg?.id === 'nvidia' && 'Lấy key miễn phí tại build.nvidia.com → Any model → Get API Key (1,000 req/ngày)'}
-              {cfg?.id === 'openai' && 'Tạo key tại platform.openai.com/api-keys'}
-              {cfg?.id === 'anthropic' && 'Tạo key tại console.anthropic.com'}
-              {cfg?.id === 'google' && 'Tạo key tại aistudio.google.com → Create API Key → Gemini API'}
-              {cfg?.id === 'openrouter' && 'Tạo key tại openrouter.ai/keys → Hỗ trợ nhiều model free/paid'}
-              {cfg?.id === 'custom' && 'Endpoint tương thích OpenAI (LM Studio, Ollama, vLLM, LocalAI)'}
+              {cfg?.id === 'bai' && 'Key b.AI — mặc định đã dùng key sẵn, nhập key riêng nếu muốn'}
             </Text>
 
             {/* Test kết nối — gọi thật với request nhỏ nhất */}

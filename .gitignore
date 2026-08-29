@@ -48,3 +48,6 @@ server/.tts-cache/
 
 # local env
 .env
+
+# Kilo agent local state
+.kilo/

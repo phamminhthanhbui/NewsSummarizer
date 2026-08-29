@@ -61,7 +61,7 @@ test.describe('Giọng đọc', () => {
 
   test('pitch/rate lưu vào storage sau "Lưu cài đặt"', async ({ page }) => {
     await page.getByText('Lưu cài đặt').click();
-    await expect(page.getByText('Đã lưu')).toBeVisible();
+    await expect(page.getByText('Đã lưu').first()).toBeVisible();
     expect(await getStorage(page, KEYS.pitch)).toBe('1');
     expect(await getStorage(page, KEYS.rate)).toBe('1');
   });
@@ -76,50 +76,49 @@ test.describe('Giọng đọc', () => {
 
 test.describe('Cấu hình AI', () => {
   test('đổi provider: model + hint đổi theo, testResult cũ bị xóa', async ({ page }) => {
-    await page.getByText('OpenRouter', { exact: true }).click();
-    // Model mặc hình của OpenRouter hiện trong select field
-    await expect(page.getByText('Nemotron 3.5 Lightning (free)')).toBeVisible();
-    await expect(page.getByText(/openrouter\.ai\/keys/)).toBeVisible();
+    await page.getByText('NVIDIA NIM', { exact: true }).click();
+    // Model mặc hình của NVIDIA hiện trong select field
+    await expect(page.getByText('Nemotron 3.5 Lightning 30B (nhanh, miễn phí)')).toBeVisible();
+    await expect(page.getByText(/build\.nvidia\.com/)).toBeVisible();
   });
 
   test('chọn model trong dropdown', async ({ page }) => {
-    // Mở dropdown (field đang hiện model mặc định)
-    await page.getByText('Llama 3.1 8B (nhanh, miễn phí)').click();
-    await expect(page.getByText('Gemma 3 12B')).toBeVisible();
-    await page.getByText('Gemma 3 12B').click();
+    // Mở dropdown (field đang hiện model mặc định của b.AI)
+    await page.getByText('DeepSeek V4 Flash Vision (nhanh, mặc định)').click();
+    await expect(page.getByText('DeepSeek V4 Flash', { exact: true })).toBeVisible();
+    await page.getByText('DeepSeek V4 Flash', { exact: true }).click();
     // Dropdown đóng, field hiện model mới
-    await expect(page.getByText('Mistral 7B (nhanh)')).toHaveCount(0);
-    await expect(page.getByText('Gemma 3 12B')).toBeVisible();
+    await expect(page.getByText('DeepSeek V4 Pro (mạnh)')).toHaveCount(0);
+    await expect(page.getByText('DeepSeek V4 Flash', { exact: true })).toBeVisible();
   });
 
-  test('provider Custom hiện mục Endpoint tùy chỉnh', async ({ page }) => {
+  test('chỉ có 2 provider: b.AI + NVIDIA, không có Custom/Endpoint', async ({ page }) => {
     await expect(page.getByText('Endpoint tùy chỉnh')).toHaveCount(0);
-    await page.getByText('Custom (OpenAI-compatible)').click();
-    await expect(page.getByText('Endpoint tùy chỉnh')).toBeVisible();
-    await expect(page.getByPlaceholder('https://your-server.com/v1')).toBeVisible();
+    await expect(page.getByText('b.AI (mặc định)', { exact: true })).toBeVisible();
+    await expect(page.getByText('NVIDIA NIM', { exact: true })).toBeVisible();
   });
 
   test('Lưu cài đặt ghi provider + key + model vào storage', async ({ page }) => {
-    await page.getByPlaceholder('sk-... / nvapi-...').fill('nvapi-test-key-123');
+    await page.getByPlaceholder('sk-... / nvapi-...').fill('sk-test-key-123');
     await page.getByText('Lưu cài đặt').click();
-    await expect(page.getByText('Đã lưu')).toBeVisible();
+    await expect(page.getByText('Đã lưu').first()).toBeVisible();
 
-    expect(await getStorage(page, KEYS.provider)).toBe('nvidia');
-    expect(await getStorage(page, KEYS.apiKey)).toBe('nvapi-test-key-123');
-    expect(await getStorage(page, KEYS.model)).toBe('meta/llama-3.1-8b-instruct');
+    expect(await getStorage(page, KEYS.provider)).toBe('bai');
+    expect(await getStorage(page, KEYS.baiKey)).toBe('sk-test-key-123');
+    expect(await getStorage(page, KEYS.model)).toBe('deepseek-v4-flash-vision-exp');
   });
 
   test('key đã lưu được đọc lại khi mở Settings', async ({ page }) => {
-    await seedStorage(page, { [KEYS.apiKey]: 'nvapi-saved-key' });
+    await seedStorage(page, { [KEYS.provider]: 'bai', [KEYS.baiKey]: 'sk-saved-key' });
     await page.reload();
     await gotoTab(page, 'Cài đặt');
-    await expect(page.getByPlaceholder('sk-... / nvapi-...')).toHaveValue('nvapi-saved-key');
+    await expect(page.getByPlaceholder('sk-... / nvapi-...')).toHaveValue('sk-saved-key');
   });
 
   test('Kiểm tra kết nối: thành công (mock LLM 200)', async ({ page }) => {
-    await page.getByPlaceholder('sk-... / nvapi-...').fill('nvapi-key');
+    await page.getByPlaceholder('sk-... / nvapi-...').fill('sk-key');
     await page.getByText('Kiểm tra kết nối').click();
-    await expect(page.getByText('Kết nối NVIDIA NIM thành công')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Kết nối b.AI (mặc định) thành công')).toBeVisible({ timeout: 20_000 });
   });
 
   test('Kiểm tra kết nối: thất bại hiện lỗi', async ({ page }) => {

@@ -1,12 +1,24 @@
 // Video crawl NGAY TRONG APP — không cần proxy PC.
 // Cập nhật: thêm detail-page fallback để lấy stream cho video thiếu,
-// lấy video nổi bật từ TẤT CẢ nguồn, cache TTL để video không cũ.
+// lấy video nổi bật từ các video MỚI NHẤT (sắp theo ngày), cache TTL để video không cũ.
 
 import type { VideoItem } from '../types';
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
-const FEATURED_PER_SOURCE = 4;
+const FEATURED_COUNT = 6;      // số video nổi bật xuất hiện ở strip
+const NEWEST_WINDOW = 12;      // chỉ chọn featured trong 12 video mới nhất (tránh video cũ)
 const MAX_DETAIL_FETCHES = 10;
+
+// Trích ngày đăng từ URL thumb/stream/link (mỗi báo đều nhúng ngày trong CDN path)
+// hoặc từ pubDate ISO. Ép về post-midnight UTC để so sánh recency.
+function dateOfVideo(v: VideoItem): number {
+  const pool = [v.thumb, v.stream, v.link].filter(Boolean).join(' ');
+  const m = pool.match(/(20\d{2})([\/-])(\d{1,2})\2(\d{1,2})/);
+  if (m) return Date.UTC(+m[1], +m[3] - 1, +m[4]);
+  const iso = String(v.pubDate || '').match(/(20\d{2})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return Date.UTC(+iso[1], +iso[2] - 1, +iso[3]);
+  return 0; // không có ngày — xếp cuối, không rơi vào featured
+}
 
 const decodeHtml = (s: string) => s
   .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -215,40 +227,25 @@ async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[
 
 /* ─── main ─── */
 
-// Xoay vòng chọn video nổi bật theo mốc 3 phút — mỗi lần crawl/app mở sẽ hiện
-// bộ video khác, tránh lúc nào cũng là 4 video đầu mỗi nguồn.
-const ROTATE_BUCKET_MS = 3 * 60 * 1000;
+// Seed xáo ngẫu nhiên MỖI LẦN crawl — mỗi lần mở app/reload ra một bộ
+// featured khác nhau, nhưng luôn chọn từ các video MỚI NHẤT (không video cũ).
 
 export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
-  const featured = await crawlVnExpressVideo().catch(() => [] as VideoItem[]);
-  onPartial?.(featured);
+  const vne = await crawlVnExpressVideo().catch(() => [] as VideoItem[]);
+  onPartial?.(vne);
 
   const restJobs = [
     crawlKenh14, crawlSoha, crawlThanhNien, crawlNld, crawlTuoitre,
   ].map((fn) => () => fn().catch(() => [] as VideoItem[]));
   const others = (await runPool(restJobs, 3)).flat();
 
-  // Gộp tất cả
-  const all = [...featured, ...others];
+  // Gom tất cả; bỏ zone cũ (VNExpress ghim sẵn) — để chọn featured theo ngày
+  // mới nhất thay vì luôn là vài video đã ghim.
+  const all = [...vne, ...others];
+  for (const v of all) v.zone = '';
 
-  // Đánh dấu featured cho source không phải VNExpress — XOAY VÒNG theo mốc 10
-  // phút: offset đổi mỗi bucket nên mỗi lần crawl hiện bộ video nổi bật khác.
-  const bucket = Math.floor(Date.now() / ROTATE_BUCKET_MS);
-  const sourceVideos = new Map<string, VideoItem[]>();
-  for (const v of all) {
-    if (v.source === 'VNExpress') continue;
-    const list = sourceVideos.get(v.source) || [];
-    list.push(v);
-    sourceVideos.set(v.source, list);
-  }
-  for (const [src, list] of sourceVideos) {
-    const n = list.length;
-    if (!n) continue;
-    const offset = bucket % n;
-    for (let i = 0; i < Math.min(FEATURED_PER_SOURCE, n); i++) {
-      list[(offset + i) % n].zone = 'Video nổi bật';
-    }
-  }
+  // Seed xáo ngẫu nhiên MỖI LẦN crawl — mỗi lần mở app/reload ra bộ featured khác.
+  const seed = Math.floor(Math.random() * 0xffffffff);
 
   // Fill stream cho video thiếu (ưu tiên featured trước)
   const missing = all.filter(v => !v.stream && v.zone === 'Video nổi bật')
@@ -259,18 +256,26 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
     if (stream) v.stream = stream;
   }
 
-  // Featured lên đầu; trong nhóm featured xáo thứ tự theo bucket (đổi mỗi 10 phút)
-  all.sort((a, b) => {
-    if (a.zone === 'Video nổi bật' && b.zone !== 'Video nổi bật') return -1;
-    if (a.zone !== 'Video nổi bật' && b.zone === 'Video nổi bật') return 1;
-    return (hashStr(a.link + bucket) % 100) - (hashStr(b.link + bucket) % 100);
-  });
+  // Sắp toàn bộ theo ngày đăng mới nhất → video cũ (VNExpress/Soha ghim sẵn)
+  // tụt xuống cuối, video mới nổi lên đầu.
+  const sorted = all
+    .map(v => ({ v, d: dateOfVideo(v) }))
+    .sort((a, b) => b.d - a.d || a.v.source.localeCompare(b.v.source))
+    .map(x => x.v);
 
-  return all;
-}
+  // Chọn featured từ cửa sổ video MỚI NHẤT (không bao giờ lấy video cũ).
+  // Xoay điểm bắt đầu theo seed — mỗi lần mở app/reload ra bộ featured khác nhau.
+  const window = Math.min(NEWEST_WINDOW, sorted.length);
+  const start = window ? seed % window : 0;
+  const featSet = new Set<VideoItem>();
+  const featured: VideoItem[] = [];
+  for (let i = 0; i < Math.min(FEATURED_COUNT, window); i++) {
+    const v = sorted[(start + i) % window];
+    featSet.add(v);
+    featured.push(v);
+  }
+  for (const v of sorted) v.zone = featSet.has(v) ? 'Video nổi bật' : '';
+  const rest = sorted.filter(v => !featSet.has(v));
 
-function hashStr(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
+  return [...featured, ...rest];
 }

@@ -25,7 +25,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useScrollToTop } from "@react-navigation/native";
 import {
@@ -41,6 +40,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KEYS } from "../services/storage";
 import type { FeedItem, VideoItem } from "../types";
 import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
+import { timeAgo } from "../utils/timeAgo";
 import ArticleCardCompact from "../components/ArticleCardCompact";
 import FeaturedCard from "../components/FeaturedCard";
 import SkeletonCard from "../components/SkeletonCard";
@@ -365,11 +365,11 @@ const SourceDropdown = React.memo(
   },
 );
 
-/* ─── Compact horizontal card ─── */
+/* ─── Trend small card (strip ngang) ─── */
 
-// Card phủ kín: ảnh full + scrim gradient + title đè lên ảnh.
-// Height cố định 150 — không đổi theo số dòng title.
-const CompactCard = React.memo(
+// Card dọc gọn cho strip ngang: ảnh 16:9 + meta (nguồn, giờ) + title 2 dòng.
+// Nội dung lấy từ `rest` — khác hẳn hero carousel.
+const TrendSmallCard = React.memo(
   ({
     item,
     onPress,
@@ -380,37 +380,39 @@ const CompactCard = React.memo(
     styles: ReturnType<typeof makeStyles>;
   }) => {
     const C = useTheme();
+    const t = timeAgo(item.pubDate);
     const srcColor = SOURCE_COLORS[item.source] || C.hot;
     return (
       <TouchableOpacity
-        style={styles.compactCard}
+        style={styles.trendSmallCard}
         onPress={() => onPress(item)}
         activeOpacity={0.85}
       >
         {item.image ? (
           <Image
             source={{ uri: item.image }}
-            style={styles.compactImg}
+            style={styles.trendSmallImg}
             resizeMode="cover"
           />
         ) : (
-          <View style={[styles.compactImg, styles.compactImgPh]}>
-            <Ionicons name="image-outline" size={26} color={C.textMuted} />
+          <View style={[styles.trendSmallImg, styles.trendSmallImgPh]}>
+            <Ionicons name="image-outline" size={20} color={C.textMuted} />
           </View>
         )}
-        <LinearGradient
-          colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.45)", "rgba(0,0,0,0.85)"]}
-          locations={[0.3, 0.65, 1]}
-          style={styles.compactScrim}
-        />
-        <View style={[styles.compactSrcBadge, { backgroundColor: srcColor }]}>
-          <Text style={styles.compactSrcText} numberOfLines={1}>
-            {item.source}
+        <View style={styles.trendSmallBody}>
+          <View style={styles.trendSmallMeta}>
+            <View style={[styles.trendSmallSrcBadge, { backgroundColor: srcColor + "1A" }]}>
+              <View style={[styles.trendSmallSrcDot, { backgroundColor: srcColor }]} />
+              <Text style={[styles.trendSmallSrc, { color: srcColor }]} numberOfLines={1}>
+                {item.source}
+              </Text>
+            </View>
+            {t ? <Text style={styles.trendSmallTime}>{t} trước</Text> : null}
+          </View>
+          <Text style={styles.trendSmallTitle} numberOfLines={2}>
+            {item.title}
           </Text>
         </View>
-        <Text style={styles.compactTitle} numberOfLines={3}>
-          {item.title}
-        </Text>
       </TouchableOpacity>
     );
   },
@@ -445,10 +447,10 @@ export default function HomeScreen({ navigation }: Props) {
   useEffect(
     () => () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      if (idleRefreshRef.current) clearTimeout(idleRefreshRef.current);
     },
     [],
   );
-
   const load = useCallback(async () => {
     const cached = await readFeedsCache();
     if (cached.length) {
@@ -490,13 +492,38 @@ export default function HomeScreen({ navigation }: Props) {
     ]).start();
   }, [load]);
 
-  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 3 phút khi ở Home
+  // ── Tương tác người dùng ──
+  // Nếu user đang scroll/lướt/chạm thì TẠM HOÃN auto-refresh data (video nổi bật,
+  // feed) để không giật/đổi content giữa lúc đang dùng. Hết tương tác ~10s thì
+  // interval chạy lại bình thường (vẫn giữ cơ chế fetch vài phút theo xu hướng).
+  const IDLE_THRESHOLD_MS = 10 * 1000;
+  const lastInteractRef = useRef(0);
+  const idleRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleIdleRefresh = useCallback(() => {
+    if (idleRefreshRef.current) clearTimeout(idleRefreshRef.current);
+    idleRefreshRef.current = setTimeout(() => {
+      fetchVideos(setVideos).catch(() => {});
+    }, IDLE_THRESHOLD_MS);
+  }, []);
+  const markInteract = useCallback(() => {
+    lastInteractRef.current = Date.now();
+    // user vừa thôi tương tác 10s → fetch video mới ngay (nước đến chân mới nhảy)
+    scheduleIdleRefresh();
+  }, [scheduleIdleRefresh]);
+  const shouldSkipAutoRefresh = useCallback(
+    () => Date.now() - lastInteractRef.current < IDLE_THRESHOLD_MS,
+    [],
+  );
+
+  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 3 phút khi ở Home,
+  // nhưng bỏ qua nếu user đang tương tác.
   useEffect(() => {
     const t = setInterval(() => {
+      if (shouldSkipAutoRefresh()) return;
       fetchVideos(setVideos).catch(() => {});
     }, 3 * 60 * 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [shouldSkipAutoRefresh]);
 
   // Mở app / quay lại từ nền → crawl video mới ngay (featured xoay vòng theo bucket)
   useEffect(() => {
@@ -527,6 +554,7 @@ export default function HomeScreen({ navigation }: Props) {
   );
 
   const [videoModal, setVideoModal] = useState<VideoItem | null>(null);
+  const [videoExpanded, setVideoExpanded] = useState(false);
   const goVideo = useCallback((v: VideoItem) => setVideoModal(v), []);
 
   const filtered = useMemo(() => {
@@ -553,6 +581,19 @@ export default function HomeScreen({ navigation }: Props) {
     const heroSet = new Set(heroes);
     return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
   }, [filtered]);
+  // "ĐỌC NHIỀU NHẤT" — lấy từ rest (có ảnh), LOẠI 8 bài mới nhất (đang nằm đầu
+  // TIN MỚI NHẤT) rồi xáo ngẫu nhiên lấy 6 → không trùng với danh sách mới nhất.
+  const trending = useMemo(() => {
+    const pool = rest.filter((i) => i.image);
+    const beyond = pool.slice(8); // bỏ 8 bài mới nhất = phần đầu TIN MỚI NHẤT
+    const source = beyond.length >= 6 ? beyond : pool;
+    const shuffled = [...source];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled.slice(0, 6);
+  }, [rest]);
   const [heroIdx, setHeroIdx] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
   const heroListRef = useRef<FlatList<FeedItem>>(null);
@@ -802,23 +843,26 @@ export default function HomeScreen({ navigation }: Props) {
           </View>
         )}
 
-        {/* SECTION: TOP STORIES */}
-        {heroes.length > 0 && (
+        {/* SECTION: ĐỌC NHIỀU NHẤT — lưới 2 cột từ rest, khác nội dung carousel */}
+        {trending.length > 0 && (
           <>
             <View style={styles.sectionRow}>
               <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
+              <View style={styles.sectionTrendIcon}>
+                <Ionicons name="trending-up" size={12} color="#FFF" />
+              </View>
               <Text style={[styles.sectionTitle, { color: C.hot }]}>
-                TIN NỔI BẬT
+                ĐỌC NHIỀU NHẤT
               </Text>
               <View style={styles.sectionLine} />
             </View>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.topStoriesScroll}
+              contentContainerStyle={styles.trendStrip}
             >
-              {heroes.map((h) => (
-                <CompactCard
+              {trending.map((h) => (
+                <TrendSmallCard
                   key={h.link}
                   item={h}
                   onPress={goArticle}
@@ -839,8 +883,30 @@ export default function HomeScreen({ navigation }: Props) {
               </View>
               <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO NỔI BẬT</Text>
               <View style={styles.sectionLine} />
+              {sortedVideos.length > 6 && (
+                <TouchableOpacity
+                  style={styles.videoToggle}
+                  onPress={() => setVideoExpanded((e) => !e)}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: videoExpanded }}
+                  accessibilityLabel={
+                    videoExpanded ? "Thu gọn video" : "Xem thêm video"
+                  }
+                >
+                  <Ionicons
+                    name={videoExpanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={C.hot}
+                  />
+                </TouchableOpacity>
+              )}
             </View>
-            <VideoGrid videos={sortedVideos} onPress={goVideo} />
+            <VideoGrid
+              videos={sortedVideos}
+              onPress={goVideo}
+              expanded={videoExpanded}
+            />
           </View>
         )}
 
@@ -857,18 +923,23 @@ export default function HomeScreen({ navigation }: Props) {
     [
       sortedVideos,
       heroes,
+      trending,
       heroIdx,
       goVideo,
       goHero,
       heroRenderItem,
       handleHeroScroll,
       goArticle,
+      videoExpanded,
       styles,
     ],
   );
 
   return (
-    <Animated.View style={[styles.root, { opacity: headerAnim }]}>
+    <Animated.View
+      style={[styles.root, { opacity: headerAnim }]}
+      onTouchStart={markInteract}
+    >
       {/* HEADER — masthead */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <View style={styles.headerRow}>
@@ -1051,6 +1122,8 @@ export default function HomeScreen({ navigation }: Props) {
           ListHeaderComponent={listHeader}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
+          onScroll={markInteract}
+          scrollEventThrottle={100}
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
               <View style={styles.emptyIcon}>
@@ -1293,6 +1366,26 @@ const makeStyles = (
       justifyContent: "center",
       marginRight: 8,
     },
+    sectionTrendIcon: {
+      width: 20,
+      height: 20,
+      borderRadius: 4,
+      backgroundColor: Color.hot,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: 8,
+    },
+    videoToggle: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: Color.surfaceAlt,
+      borderWidth: 1,
+      borderColor: Color.border,
+      alignItems: "center",
+      justifyContent: "center",
+      marginLeft: 6,
+    },
     sectionLine: {
       flex: 1,
       height: 1,
@@ -1300,70 +1393,54 @@ const makeStyles = (
       marginLeft: 10,
     },
 
-    /* ── Top stories strip — card phủ kín, height cố định 150 ── */
-    topStoriesScroll: { paddingHorizontal: 12, paddingBottom: 4, gap: 10 },
-    compactCard: {
-      width: 200,
-      height: 150,
-      borderRadius: Radius.md,
+    /* ── Đọc nhiều nhất — strip ngang gọn ── */
+    trendStrip: { paddingHorizontal: 12, paddingBottom: 2, gap: 10 },
+    trendSmallCard: {
+      width: 150,
+      backgroundColor: Color.card,
+      borderRadius: Radius.sm,
       overflow: "hidden",
-      backgroundColor: Color.skeleton,
       ...Platform.select({
         ios: {
-          shadowColor: "#000",
+          shadowColor: "#0F172A",
           shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.12,
-          shadowRadius: 8,
+          shadowOpacity: 0.06,
+          shadowRadius: 6,
         },
-        android: { elevation: 3 },
-        default: { boxShadow: "0 2px 8px rgba(0,0,0,0.12)" },
+        android: { elevation: 2 },
+        default: { boxShadow: "0 2px 6px rgba(15, 23, 42, 0.08)" },
       }),
     },
-    compactImg: { width: "100%", height: "100%" },
-    compactImgPh: {
+    trendSmallImg: {
+      width: "100%",
+      height: 84,
       backgroundColor: Color.skeleton,
+    },
+    trendSmallImgPh: { alignItems: "center", justifyContent: "center" },
+    trendSmallBody: { padding: 8 },
+    trendSmallMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 3 },
+    trendSmallSrcBadge: {
+      flexDirection: "row",
       alignItems: "center",
-      justifyContent: "center",
+      gap: 3,
+      paddingHorizontal: 5,
+      paddingVertical: 1,
+      borderRadius: 20,
+      maxWidth: 90,
     },
-    compactScrim: {
-      position: "absolute",
-      left: 0,
-      right: 0,
-      bottom: 0,
-      height: "70%",
-    },
-    compactSrcBadge: {
-      position: "absolute",
-      top: 8,
-      left: 8,
-      paddingHorizontal: 7,
-      paddingVertical: 3,
-      borderRadius: 4,
-      maxWidth: 110,
-    },
-    compactSrcText: {
-      fontSize: 10,
+    trendSmallSrcDot: { width: 4, height: 4, borderRadius: 2 },
+    trendSmallSrc: {
+      fontSize: Font.tiny - 1,
+      color: Color.hot,
       fontWeight: "800",
-      color: "#FFF",
-      letterSpacing: 0.3,
+      letterSpacing: 0.2,
     },
-    compactTitle: {
-      position: "absolute",
-      left: 10,
-      right: 10,
-      bottom: 10,
+    trendSmallTime: { fontSize: Font.tiny - 1, color: Color.textMuted },
+    trendSmallTitle: {
       fontSize: Font.caption,
-      fontWeight: "800",
-      color: "#FFF",
-      lineHeight: 17,
-      ...Platform.select({
-        web: { textShadow: "0 1px 3px rgba(0,0,0,0.5)" },
-        default: {
-          textShadowColor: "rgba(0,0,0,0.5)",
-          textShadowOffset: { width: 0, height: 1 },
-          textShadowRadius: 3,
-        },
-      }),
+      fontWeight: "700",
+      color: Color.text,
+      lineHeight: 16,
     },
 
     /* ── Video nổi bật — list dọc ── */
