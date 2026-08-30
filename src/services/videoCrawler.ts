@@ -231,51 +231,55 @@ async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[
 // featured khác nhau, nhưng luôn chọn từ các video MỚI NHẤT (không video cũ).
 
 export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Promise<VideoItem[]> {
-  const vne = await crawlVnExpressVideo().catch(() => [] as VideoItem[]);
-  onPartial?.(vne);
+  // Crawl TẤT CẢ nguồn song song ngay từ đầu (trước đây await VnExpress trước rồi
+  // mới crawl nguồn khác → video delay bằng thời gian crawl nguồn chậm nhất).
+  const sources = [
+    crawlVnExpressVideo, crawlKenh14, crawlSoha, crawlThanhNien, crawlNld, crawlTuoitre,
+  ];
+  const results: VideoItem[][] = new Array(sources.length);
+  let settledCount = 0;
+  let lastPartial = [] as VideoItem[];
 
-  const restJobs = [
-    crawlKenh14, crawlSoha, crawlThanhNien, crawlNld, crawlTuoitre,
-  ].map((fn) => () => fn().catch(() => [] as VideoItem[]));
-  const others = (await runPool(restJobs, 3)).flat();
+  const emitIfBetter = () => {
+    const all = results.filter(Boolean).flat();
+    if (!all.length) return;
+    for (const v of all) v.zone = '';
+    const sorted = all
+      .map((v) => ({ v, d: dateOfVideo(v) }))
+      .sort((a, b) => b.d - a.d || a.v.source.localeCompare(b.v.source))
+      .map((x) => x.v);
+    const window = Math.min(NEWEST_WINDOW, sorted.length);
+    const start = window ? Math.floor(Math.random() * 0xffffffff) % window : 0;
+    const featSet = new Set<VideoItem>();
+    const featured: VideoItem[] = [];
+    for (let i = 0; i < Math.min(FEATURED_COUNT, window); i++) {
+      const v = sorted[(start + i) % window];
+      featSet.add(v);
+      featured.push(v);
+    }
+    for (const v of sorted) v.zone = featSet.has(v) ? 'Video nổi bật' : '';
+    lastPartial = [...featured, ...sorted.filter((v) => !featSet.has(v))];
+    onPartial?.(lastPartial);
+  };
 
-  // Gom tất cả; bỏ zone cũ (VNExpress ghim sẵn) — để chọn featured theo ngày
-  // mới nhất thay vì luôn là vài video đã ghim.
-  const all = [...vne, ...others];
-  for (const v of all) v.zone = '';
+  await Promise.all(sources.map((fn, i) =>
+    fn().catch(() => [] as VideoItem[]).then((v) => {
+      results[i] = v;
+      settledCount++;
+      // Có nguồn đầu tiên xong là push featured ngay, không chờ nguồn chậm nhất.
+      if (settledCount === 1 || settledCount === sources.length) emitIfBetter();
+    }),
+  ));
+  emitIfBetter();
 
-  // Seed xáo ngẫu nhiên MỖI LẦN crawl — mỗi lần mở app/reload ra bộ featured khác.
-  const seed = Math.floor(Math.random() * 0xffffffff);
-
-  // Fill stream cho video thiếu (ưu tiên featured trước)
-  const missing = all.filter(v => !v.stream && v.zone === 'Video nổi bật')
-    .concat(all.filter(v => !v.stream && v.zone !== 'Video nổi bật'))
+  // Fill stream cho video thiếu song song (batch giới hạn) — chỉ đợi nếu chưa
+  // có gì để hiện; nếu đã có partial thì trả ngay, stream về sau gắn vào object.
+  const missing = lastPartial
+    .filter((v) => !v.stream)
+    .concat([])
     .slice(0, MAX_DETAIL_FETCHES);
-  for (const v of missing) {
-    const stream = await fetchStreamFromDetail(v.link, v.source).catch(() => '');
-    if (stream) v.stream = stream;
+  if (missing.length) {
+    await runPool(missing.map((v) => () => fetchStreamFromDetail(v.link, v.source).then((s) => { if (s) v.stream = s; })), 5);
   }
-
-  // Sắp toàn bộ theo ngày đăng mới nhất → video cũ (VNExpress/Soha ghim sẵn)
-  // tụt xuống cuối, video mới nổi lên đầu.
-  const sorted = all
-    .map(v => ({ v, d: dateOfVideo(v) }))
-    .sort((a, b) => b.d - a.d || a.v.source.localeCompare(b.v.source))
-    .map(x => x.v);
-
-  // Chọn featured từ cửa sổ video MỚI NHẤT (không bao giờ lấy video cũ).
-  // Xoay điểm bắt đầu theo seed — mỗi lần mở app/reload ra bộ featured khác nhau.
-  const window = Math.min(NEWEST_WINDOW, sorted.length);
-  const start = window ? seed % window : 0;
-  const featSet = new Set<VideoItem>();
-  const featured: VideoItem[] = [];
-  for (let i = 0; i < Math.min(FEATURED_COUNT, window); i++) {
-    const v = sorted[(start + i) % window];
-    featSet.add(v);
-    featured.push(v);
-  }
-  for (const v of sorted) v.zone = featSet.has(v) ? 'Video nổi bật' : '';
-  const rest = sorted.filter(v => !featSet.has(v));
-
-  return [...featured, ...rest];
+  return lastPartial;
 }

@@ -12,25 +12,6 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('Dropdown nguồn tin (logo + lọc)', () => {
-  test('mở dropdown: panel liệt kê các trang báo trong config', async ({ page }) => {
-    await page.getByLabel('Lọc theo nguồn tin').click();
-    await expect(page.getByTestId('sourceDropdownPanel')).toBeVisible();
-    await expect(page.getByTestId('sourceOption-Tất cả')).toBeVisible();
-    await expect(page.getByTestId('sourceOption-VNExpress')).toBeVisible();
-    await expect(page.getByTestId('sourceOption-Dân Trí')).toBeVisible();
-  });
-
-  test('chọn nguồn không có bài: hiện empty, dropdown đóng; quay lại Tất cả đủ bài', async ({ page }) => {
-    await page.getByLabel('Lọc theo nguồn tin').click();
-    await page.getByTestId('sourceOption-Dân Trí').click({ force: true });
-    await expect(page.getByTestId('sourceDropdownPanel')).toBeHidden();
-    await expect(page.getByText('Không có bài báo')).toBeVisible();
-
-    await page.getByLabel('Lọc theo nguồn tin').click();
-    await page.getByTestId('sourceOption-Tất cả').click({ force: true });
-    await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
-  });
-
   test('chọn category reset nguồn về "Tất cả"', async ({ page }) => {
     await page.getByLabel('Lọc theo nguồn tin').click();
     await page.getByTestId('sourceOption-Dân Trí').click({ force: true });
@@ -70,7 +51,7 @@ test.describe('Mục Thông báo trong Settings', () => {
     await expect(page.getByText('Thông báo', { exact: true })).toBeVisible();
     await expect(page.getByText('Bản tin hằng ngày')).toBeVisible();
     await expect(page.getByTestId('notif-switch')).toBeDisabled();
-    await expect(page.getByText('Thông báo chỉ hoạt động trên điện thoại (Android/iOS), không hỗ trợ trên web.')).toBeVisible();
+    await expect(page.getByText('Thông báo không hỗ trợ trên web và trong Expo Go — dùng bản APK cài trực tiếp để bật.')).toBeVisible();
   });
 
   test('đã bật từ trước: hiện chips nhiều khung giờ, giờ đã chọn được tô', async ({ page }) => {

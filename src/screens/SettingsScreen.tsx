@@ -14,7 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_BAI_KEY, DEFAULT_NVIDIA_KEY } from '../services/summarize';
+import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_BAI_KEY, DEFAULT_NVIDIA_KEY, DEFAULT_PROVIDER } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
 import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
@@ -47,7 +47,7 @@ export default function SettingsScreen() {
   const C = useTheme(); // palette theo dark mode — styles dùng C thay vì Color tĩnh
   const styles = makeStyles(C); // styles động: đổi mode là cả màn hình đổi màu ngay
   const { showAlert } = useAlert();
-  const [provider, setProvider] = useState<LLMProvider>('bai');
+  const [provider, setProvider] = useState<LLMProvider>(DEFAULT_PROVIDER);
   const [apiKey, setApiKey] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [model, setModel] = useState('');

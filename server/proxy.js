@@ -355,26 +355,48 @@ function pickNewestFeatured(videos) {
 }
 
 let videoCache = null; // { t, videos }
+let videoCrawlPromise = null; // crawl đang chạy (tránh bắn trùng request)
+
+async function crawlAllSources() {
+  return Promise.allSettled([
+    crawlKenh14(), crawlSoha(), crawlVnExpressVideo(), crawlThanhNien(), crawlNld(), crawlTuoitre(),
+  ]).then((results) => results
+    .map((r) => (r.status === 'fulfilled' ? r.value : []))
+    .flat());
+}
+
+// Crawl đầy đủ + cache — chạy nền, KHÔNG chặn response đầu.
+async function crawlAndCache() {
+  if (videoCrawlPromise) return videoCrawlPromise;
+  videoCrawlPromise = crawlAllSources()
+    .then((videos) => {
+      if (videos.length) videoCache = { t: Date.now(), videos: pickNewestFeatured(videos) };
+    })
+    .catch(() => {})
+    .finally(() => { videoCrawlPromise = null; });
+  return videoCrawlPromise;
+}
 
 app.get('/api/videos', async (req, res) => {
+  // Cache còn hạn → trả ngay.
   if (videoCache && Date.now() - videoCache.t < VIDEO_CACHE_TTL) {
     return res.json({ videos: videoCache.videos, cached: true });
   }
   try {
-    // Nguồn nào chết thì trả list rỗng, không kéo sập cả endpoint
-    const [kenh14, soha, vnexpress, thanhnien, nld, tuoitre] = await Promise.all([
-      crawlKenh14().catch(() => []),
-      crawlSoha().catch(() => []),
-      crawlVnExpressVideo().catch(() => []),
-      crawlThanhNien().catch(() => []),
-      crawlNld().catch(() => []),
-      crawlTuoitre().catch(() => []),
+    // Crawl nền dùng chung (1 lần/đợt) — không bắn trùng khi nhiều client cùng hỏi.
+    if (!videoCrawlPromise) {
+      videoCrawlPromise = crawlAllSources()
+        .then((videos) => { if (videos.length) videoCache = { t: Date.now(), videos: pickNewestFeatured(videos) }; })
+        .catch(() => {})
+        .finally(() => { videoCrawlPromise = null; });
+    }
+    // Chờ crawl xong HOẶC tối đa 5s — video xuất hiện trong ~5s thay vì 10-20s.
+    await Promise.race([
+      videoCrawlPromise,
+      new Promise((r) => setTimeout(r, 5000)),
     ]);
-    const videos = pickNewestFeatured([
-      ...kenh14, ...soha, ...vnexpress, ...thanhnien, ...nld, ...tuoitre,
-    ]);
-    videoCache = { t: Date.now(), videos };
-    res.json({ videos });
+    if (videoCache && videoCache.videos.length) return res.json({ videos: videoCache.videos, cached: true });
+    return res.json({ videos: [], cached: false });
   } catch (e) {
     res.status(502).json({ error: 'Video crawl failed', message: e.message });
   }

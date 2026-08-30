@@ -40,7 +40,7 @@ async function fetchViaProxy(): Promise<VideoItem[]> {
   for (const base of candidates) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
+      const timeout = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(base + '/api/videos', { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) { markProxyDead(base); continue; }

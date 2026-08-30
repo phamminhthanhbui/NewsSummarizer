@@ -45,10 +45,10 @@ test.describe('Dark mode', () => {
     await gotoTab(page, 'Cài đặt');
     await expect(page.getByText('Đang bật')).toBeVisible();
 
-    // Tab Home cũng đổi màu: title section "TIN MỚI NHẤT" màu chữ dark
+    // Tab Home cũng đổi màu: title section "TIN MỚI NHẤT" (màu accent giữ nguyên trong dark)
     await gotoTab(page, 'Trang chủ');
     const color = await page.getByText('TIN MỚI NHẤT').evaluate((el) => getComputedStyle(el).color);
-    expect(color).toBe('rgb(242, 244, 248)');
+    expect(color).toBe('rgb(37, 99, 235)');
   });
 });
 
@@ -84,12 +84,12 @@ test.describe('Cấu hình AI', () => {
 
   test('chọn model trong dropdown', async ({ page }) => {
     // Mở dropdown (field đang hiện model mặc định của b.AI)
-    await page.getByText('DeepSeek V4 Flash Vision (nhanh, mặc định)').click();
-    await expect(page.getByText('DeepSeek V4 Flash', { exact: true })).toBeVisible();
-    await page.getByText('DeepSeek V4 Flash', { exact: true }).click();
+    await page.getByText('DeepSeek V4 Flash Vision (nhanh, miễn phí, mặc định)').click();
+    await expect(page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true })).toBeVisible();
+    await page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true }).click();
     // Dropdown đóng, field hiện model mới
     await expect(page.getByText('DeepSeek V4 Pro (mạnh)')).toHaveCount(0);
-    await expect(page.getByText('DeepSeek V4 Flash', { exact: true })).toBeVisible();
+    await expect(page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true })).toBeVisible();
   });
 
   test('chỉ có 2 provider: b.AI + NVIDIA, không có Custom/Endpoint', async ({ page }) => {

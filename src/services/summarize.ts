@@ -17,7 +17,7 @@ export interface ProviderConfig {
   id: LLMProvider;
   label: string;
   baseUrl: string;
-  models: { id: string; label: string }[];
+  models: { id: string; label: string; power?: number }[];
   needsKey: boolean;
   keyStorageKey: keyof typeof KEYS;
   // For custom: user provides baseUrl
@@ -30,9 +30,17 @@ export const PROVIDERS: ProviderConfig[] = [
     label: 'b.AI (mặc định)',
     baseUrl: 'https://api.b.ai/v1',
     models: [
-      { id: 'deepseek-v4-flash-vision-exp', label: 'DeepSeek V4 Flash Vision (nhanh, mặc định)' },
-      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-      { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (mạnh)' },
+      { id: 'deepseek-v4-flash-vision-exp', label: 'DeepSeek V4 Flash Vision (nhanh, miễn phí, mặc định)', power: 4 },
+      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (nhanh, miễn phí)', power: 4 },
+      { id: 'hy3', label: 'Tencent Hunyuan Hy3 (miễn phí)', power: 5 },
+      { id: 'qwen3.8-flash', label: 'Qwen 3.8 Flash (miễn phí)', power: 4 },
+      // ĐÃ LOẠI (kiểm tra thực tế 29/8/2026, bảng giá b.AI):
+      // - deepseek-v4-pro: giá 1.32 → HTTP 403 "Deposit required" (MẤT PHÍ).
+      // - glm-5.3-flash: giá 0 (free) nhưng 400 khi app gửi thinking:{type:'disabled'}
+      //   (model bắt buộc reasoning) → không dùng được.
+      // - mimo-v2.5: giá 0 (free) nhưng luôn timeout (>90s) → không dùng được.
+      // Các model khác (gpt-5.x, claude, gemini, glm-5.x, qwen3.8-max/27b,
+      // minimax, kimi, mimo-v2.5-pro...) đều có giá > 0 → MẤT PHÍ, không thêm.
     ],
     needsKey: true,
     keyStorageKey: 'baiKey',
@@ -42,15 +50,18 @@ export const PROVIDERS: ProviderConfig[] = [
     label: 'NVIDIA NIM',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     models: [
-      { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)' },
-      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)' },
-      { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron Super 49B (miễn phí)' },
-      { id: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (mạnh)' },
-      { id: 'google/gemma-3-12b-it', label: 'Gemma 3 12B' },
-      { id: 'mistralai/mistral-large-2-instruct', label: 'Mistral Large 2 (mạnh nhất)' },
-      // Model cũ — NIM đã retire (410 Gone); giữ làm fallback cuối
-      { id: 'meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (nhanh, miễn phí)' },
-      { id: 'mistralai/mistral-7b-instruct-v0.3', label: 'Mistral 7B (nhanh)' },
+      { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)', power: 3 },
+      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)', power: 6 },
+      { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro (mạnh, miễn phí)', power: 5 },
+      { id: 'google/gemma-4-31b-it', label: 'Gemma 4 31B (mới, mạnh, miễn phí)', power: 5 },
+      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (mới, miễn phí)', power: 4 },
+      // ĐÃ LOẠI (kiểm tra thực tế 29/8/2026):
+      // - nvidia/llama-3.3-nemotron-super-49b-v1.5, meta/llama-3.3-70b-instruct,
+      //   google/gemma-3-12b-it, mistralai/mistral-large-2-instruct,
+      //   meta/llama-3.1-8b-instruct, mistralai/mistral-7b-instruct-v0.3 → 404/NOT_IN_LIST (NIM retire).
+      // - nvidia/nemotron-3-nano-30b-a3b, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+      //   → 400 khi app gửi thinking:{type:'disabled'} (model bắt buộc có reasoning).
+      // - nvidia/nemotron-3-ultra-550b-a55b → 200 nhưng là model enterprise, rủi ro tốn phí → loại.
     ],
     needsKey: true,
     keyStorageKey: 'apiKey',
@@ -61,7 +72,7 @@ export function getProviderConfig(provider: LLMProvider): ProviderConfig | undef
   return PROVIDERS.find((p) => p.id === provider);
 }
 
-export function getModelsForProvider(provider: LLMProvider): { id: string; label: string }[] {
+export function getModelsForProvider(provider: LLMProvider): { id: string; label: string; power?: number }[] {
   return getProviderConfig(provider)?.models || [];
 }
 
@@ -328,31 +339,71 @@ export async function testProviderConnection(
 }
 
 // High-level: fetch key + model from storage, then summarize
-export async function summarizeArticle(articleText: string, category?: string): Promise<string> {
-  const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || 'bai';
-  const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
+// Provider mặc định của app: b.AI (chạy ngay khi start, key có sẵn, miễn phí).
+// Fallback model/provider luôn thử b.AI trước; NVIDIA chỉ dùng khi b.AI chết.
+export const DEFAULT_PROVIDER: LLMProvider = 'bai';
 
-  let apiKey = await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]);
-  if (!apiKey && provider === 'bai') apiKey = DEFAULT_BAI_KEY; // default sẵn, chạy ngay khi start
-  if (!apiKey && provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY;
-  if (!apiKey && cfg.needsKey) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
+// Thứ tự ưu tiên provider khi fallback (provider người dùng chọn luôn thử đầu).
+const PROVIDER_FALLBACK_ORDER: LLMProvider[] = ['bai', 'nvidia'];
 
-  // Chỉ dùng model đã lưu nếu thuộc danh sách provider hiện tại — tránh model cũ
-  // (vd nvidia) bị gửi nhầm sang b.AI rồi lỗi.
-  const storedModel = await AsyncStorage.getItem(KEYS.model);
-  const model = storedModel && cfg.models.some((m) => m.id === storedModel) ? storedModel : cfg.models[0]?.id;
+// Danh sách (provider, model) cần thử, theo thứ tự ưu tiên:
+// 1) model người dùng chọn (trong provider đã chọn)
+// 2) các model CÙNG provider, sắp mạnh→yếu (power giảm)
+// 3) provider KHÁC, mỗi provider thử model mạnh→yếu
+// Mục tiêu: model lỗi → đổi model khác (mạnh nhất trước); provider lỗi → đổi
+// provider khác (với model mạnh nhất của provider đó).
+function buildFallbackCandidates(preferredProvider: LLMProvider, preferredModel?: string): { provider: LLMProvider; model: string }[] {
+  const out: { provider: LLMProvider; model: string }[] = [];
+  const seen = new Set<string>();
+  const push = (p: LLMProvider, m: string) => {
+    const k = `${p}:${m}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ provider: p, model: m });
+  };
 
-  try {
-    return await summarizeWithProvider(articleText, provider, apiKey || '', model || cfg.models[0]?.id, undefined, category);
-  } catch (e) {
-    // Provider lưu cũ (vd nvidia) có thể fail (410/model retire/mạng) →
-    // fallback về b.AI mặc định để luôn có tóm tắt.
-    if (provider !== 'bai') {
-      return summarizeWithProvider(articleText, 'bai', DEFAULT_BAI_KEY, 'deepseek-v4-flash-vision-exp', undefined, category);
-    }
-    throw e;
+  const pCfg = getProviderConfig(preferredProvider);
+  if (pCfg) {
+    const models = [...pCfg.models].sort((a, b) => (b.power ?? 0) - (a.power ?? 0));
+    const pref = preferredModel && models.some((m) => m.id === preferredModel) ? preferredModel : models[0]?.id;
+    if (pref) push(preferredProvider, pref);
+    for (const m of models) if (m.id !== pref) push(preferredProvider, m.id);
   }
+
+  for (const p of PROVIDER_FALLBACK_ORDER) {
+    if (p === preferredProvider) continue;
+    const c = getProviderConfig(p);
+    if (!c) continue;
+    for (const m of [...c.models].sort((a, b) => (b.power ?? 0) - (a.power ?? 0))) push(p, m.id);
+  }
+  return out;
+}
+
+export async function summarizeArticle(articleText: string, category?: string): Promise<string> {
+  const storedProvider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || DEFAULT_PROVIDER;
+  const provider = getProviderConfig(storedProvider) ? storedProvider : DEFAULT_PROVIDER;
+  const storedModel = await AsyncStorage.getItem(KEYS.model);
+  const candidates = buildFallbackCandidates(provider, storedModel || undefined);
+
+  let lastError: Error = new Error('Tất cả model/provider đều không khả dụng, thử lại sau');
+  for (const c of candidates) {
+    const cfg = getProviderConfig(c.provider);
+    if (!cfg) continue;
+    let apiKey = await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]);
+    if (!apiKey && c.provider === 'bai') apiKey = DEFAULT_BAI_KEY;
+    if (!apiKey && c.provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY;
+    if (!apiKey && cfg.needsKey) continue; // không có key → bỏ qua candidate này
+
+    try {
+      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category);
+      // model có thể trả 200 nhưng rỗng (vd reasoning bị tắt thinking) → xem là lỗi, thử model tiếp.
+      if (summary && summary.trim().length >= 20) return summary;
+      lastError = new Error(`Model ${c.model} (${c.provider}) trả nội dung rỗng`);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  throw lastError;
 }
 
 // ----- Article parsing (Jina markdown → text/ảnh/video blocks) -----
@@ -433,7 +484,8 @@ function cleanMarkdownText(s: string): string {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/!?\[\]\([^)]*\)/g, ' ')
     // Heading-link tới bài KHÁC (related card lồng trong bài: "### [Headline](url-article)")
-    // → bỏ hẳn, không để headline bài khác lọt thành text.
+    // → bỏ hẳn, không để headline bài khác lọt thành text. (Các khối bài KHÁC
+    // có kèm đoạn body được xử lý trong parseArticleBlocks — nơi có pageUrl.)
     .replace(/^#{1,4}\s*\[[^\]]+\]\(https?:\/\/[^)\s]*\.(?:tpo|html|chn|vn|com\.vn)[^)]*\)/gim, '')
     // Dòng chỉ gồm 1 link tới BÀI KHÁC — carousel "tin liên quan" của site nhúng
     // NGAY TRONG thân bài, không có heading (khác RELATED_RE ở cuối bài):
@@ -450,11 +502,26 @@ function cleanMarkdownText(s: string): string {
     .replace(/`([^`]*)`/g, '$1')
     .replace(/^\s*(?:[*+-]|\d+[.)])[ \t]+/gm, '')
     .replace(/^[ \t]*\[[ xXoO]?\][ \t]*/gm, '')
+    // Chrome trình phát video nhúng cuối bài (VnExpress…): "0:00 / 0:00",
+    // "Next video", "Tiếp theo (5s):", "Bật tiếng", "Tua lại 3 giây"… không phải
+    // nội dung → xoá sạch để không lọt vào tóm tắt.
+    .replace(/0:\d\d\s*\/\s*0:\d\d/g, ' ')
+    .replace(/(?:Dialog\s*End\s*of\s*dialog\s*window|Next\s*video|Tiếp\s*theo\s*\(\d+s\):|Bật\s*tiếng|Tắt\s*tiếng|Tua\s*lại\s*3\s*giây|Tua\s*đi\s*3\s*giây|Phát\s*tiếp|Remaining\s*Time)/gi, ' ')
+    // Thanh share-bar (ANTD.Vn…): `); "Facebook")); "Twitter")); "In bài viết")`
+    // lọt vào thân bài sau byline → xoá phần `)); "..."` thừa.
+    .replace(/\)\);\s*"[^"]*"/g, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   // decodeHtml gọi sau cùng — chỉ giữ khi module đã load xong (runtime).
   return decodeHtml(s);
+}
+
+// Bọc cleanMarkdownText + decode entity HTML trên KẾT QUẢ đã làm sạch
+// (sửa bug: bản cũ return sạch rồi mới tới dòng decodeHtml(s) → code dead,
+//  entity trong body text không bao giờ được decode).
+function cleanMarkdownTextDecoded(s: string): string {
+  return decodeHtml(cleanMarkdownText(s));
 }
 
 // Host của mạng quảng cáo/tracking (VN + quốc tế) chèn banner/player giả vào bài.
@@ -598,12 +665,23 @@ function stripSiteWidgets(s: string): string {
   // nếu phía sau widget có heading bài thật (# ...) — không có heading thì để
   // nguyên (không cắt nhầm thân bài; lúc đó các lớp khác như AUTO_ALT_RE lo).
   const m = s.match(/AI\s*TÓM\s*TẮT[\s\S]*?(?=#{1,3}\s)/i);
-  return m && m.index !== undefined ? s.slice(0, m.index) + s.slice(m.index + m[0].length) : s;
+  if (m && m.index !== undefined) {
+    s = s.slice(0, m.index) + s.slice(m.index + m[0].length);
+  }
+  // VnExpress: widget "AI TÓM TẮT" render client-side (Jina KHÔNG bắt được),
+  // nhưng Jina vẫn append ĐUÔI trang gồm: (1) CTA "Chọn VnExpress làm nguồn ưu
+  // tiên trên Google Search" (có cả Bước 1/Bước 2 và ảnh nguonuutien.jpg) và
+  // (2) danh sách "tin liên quan" (headline + "1h trước"). Cắt từ mốc đầu CTA
+  // trở đi — cả 2 khối rác đều nằm sau mốc này nên bị loại sạch.
+  const vne = s.search(/Thêm VnExpress trên Google|Chọn VnExpress làm nguồn ưu tiên/i);
+  if (vne >= 0) s = s.slice(0, vne);
+  return s;
 }
 
 // Parse markdown → mảng block giữ nguyên vị trí text/ảnh/video (để render xen kẽ "dưới mỗi text").
 // pageUrl (nếu có) giúp phân biệt ảnh nội dung bọc link về CHÍNH bài (gallery
 // self-link của Báo CP/CAND…) với thumbnail related bọc link bài khác.
+
 export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   const s = stripSiteWidgets(stripJinaHeader(raw));
   const blocks: ArticleBlock[] = [];
@@ -611,7 +689,7 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   // Mốc cắt: bắt đầu mục "Bài viết liên quan" / "Tin cùng chuyên mục" / "Đọc thêm"
   // / "Có thể bạn quan tâm" / "Related"… Jina hay để nguyên mục này cuối markdown,
   // kéo theo text + ảnh/video của BÀI KHÁC lẫn vào blocks.
-  const RELATED_RE = /^[\s#>]*\[?(?:Bài\s*viết\s*liên\s*quan|Tin\s*liên\s*quan|Tin\s*cùng\s*chuyên\s*mục|Tin\s*nổi\s*bật|Đọc\s*thêm|Xem\s*thêm|Có\s*thể\s*bạn\s*quan\s*tâm|Related\s*(?:articles|news|stories)|Read\s*more|More\s*from|Tin\s*khác|Bài\s*viết\s*cùng\s*chủ\s*đề|Tin\s*tức|Tin\s*mới|Mới\s*nhất)(?:\]?\s*\([^)]*\))?[\s:：\-–—]*$/im;
+  const RELATED_RE = /^[\s#>]*(?:\*{1,3}|_{1,3})?\s*\[?(?:Bài\s*viết\s*liên\s*quan|Tin\s*liên\s*quan|Tin\s*cùng\s*chuyên\s*mục|Tin\s*nổi\s*bật|Đọc\s*thêm|Xem\s*thêm|Có\s*thể\s*bạn\s*quan\s*tâm|Tin\s*đọc\s*nhiều|Đọc\s*nhiều|Xem\s*nhiều|Bạn\s*có\s*thể\s*quan\s*tâm|Related\s*(?:articles|news|stories)|Read\s*more|More\s*from|Tin\s*khác|Bài\s*viết\s*cùng\s*chủ\s*đề|Tin\s*tức|Tin\s*mới|Mới\s*nhất)(?:\]?\s*\([^)]*\))?\s*(?:\*{1,3}|_{1,3})?\s*[:：\-–—]*$/im;
   const findRelatedStart = (text: string): number => {
     const m = text.match(RELATED_RE);
     return m ? (m.index ?? -1) : -1;
@@ -700,12 +778,12 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
     // Cắt tại mốc "Bài liên quan"… — mọi text + media phía sau đều của bài khác.
     const relIdx = findRelatedStart(rawSlice);
     if (relIdx >= 0) {
-      const text = scrubAdLines(cleanMarkdownText(rawSlice.slice(0, relIdx)));
+      const text = scrubAdLines(cleanMarkdownTextDecoded(rawSlice.slice(0, relIdx)));
       if (text) blocks.push({ type: 'text', text });
       stopped = true;
       break;
     }
-    const text = scrubAdLines(cleanMarkdownText(rawSlice));
+    const text = scrubAdLines(cleanMarkdownTextDecoded(rawSlice));
     if (text) blocks.push({ type: 'text', text });
     blocks.push(mk.block);
     last = mk.end;
@@ -713,7 +791,7 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   if (!stopped) {
     const rawRest = s.slice(last);
     const relIdx = findRelatedStart(rawRest);
-    const rest = scrubAdLines(cleanMarkdownText(relIdx >= 0 ? rawRest.slice(0, relIdx) : rawRest));
+    const rest = scrubAdLines(cleanMarkdownTextDecoded(relIdx >= 0 ? rawRest.slice(0, relIdx) : rawRest));
     if (rest) blocks.push({ type: 'text', text: rest });
   }
 
@@ -727,7 +805,7 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   // Yêu cầu separator để không bắt nhầm từ chứa "hình" ("hình thức", "hình thành")
   // hay "video" trong câu văn thật. Caption thật có thể dài (~140 ký tự) nhưng
   // thường KẾT THÚC bằng "Ảnh: <nguồn>" — dòng càng dài càng phải chắc chắn.
-  const isCaptionLine = (line: string): boolean => {
+const isCaptionLine = (line: string): boolean => {
     const l = line.trim();
     if (!l || l.length > 200) return false;
     if (/https?:\/\//i.test(l)) return false;
@@ -736,15 +814,14 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
       // Dòng dài → chỉ nhận khi kết thúc rõ kiểu caption "… - Ảnh: Nguồn"
       return /(?:Ảnh|Hình)\s*[:：]\s*\S+$/i.test(l) || /-\s*\(?(?:Ảnh|Hình)\s*[:：]/i.test(l);
     }
-    // KHÔNG có keyword: báo kiểu Tiền Phong để caption TRẦN ngay dưới ảnh
-    // ("Kalli Nguyễn nhiều lần đăng ảnh hẹn hò cùng Johnny Trí Nguyễn.").
-    // Ảnh carousel/related bài khác đã bị wrapper-check chặn ở trên nên dòng
-    // đứng sát sau ảnh giữ lại gần như chắc chắn là caption. Guard: câu ngắn
-    // trọn vẹn kết thúc bằng dấu chấm, không phải số/metadata đơn.
+    // KHÔNG có keyword: báo kiểu Tiền Phong/Thanh Niên để caption TRẦN ngay dưới ảnh
+    // ("Kalli Nguyễn nhiều lần đăng ảnh hẹn hò cùng Johnny Trí Nguyễn.",
+    //  "Một góc làng biển Cảnh Dương"). Ảnh carousel/related bài khác đã bị
+    // wrapper-check chặn ở trên nên dòng đứng sát sau ảnh giữ lại gần như chắc
+    // chắn là caption. Guard: câu ngắn trọn vẹn, không phải số/metadata đơn.
+    // KHÔNG yêu cầu dấu câu cuối (Thanh Niên: "Một góc làng biển Cảnh Dương").
     if (l.length < 20 || l.length > 110) return false;
-    // ANTĐ/Kenh14 hay đặt caption KHÔNG có dấu chấm cuối, dạng "… (Xóm Khanh -
-    // Cục Phượng)" → chấp cả kết thúc ) ” ], ngoài . ! …
-    if (!/[.!…”)\]]$/.test(l) || !/[a-zà-ỹ]/i.test(l)) return false;
+    if (!/[a-zà-ỹ]/i.test(l)) return false;
     return !/^(?:Ngày|Cập nhật|Cập nhat|Bản dựng|Năm|Tháng|Mùa)/i.test(l);
   };
   const withCaps: ArticleBlock[] = [];
@@ -754,11 +831,23 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
       b.type === 'text' && b.text && prev && (prev.type === 'image' || prev.type === 'video') && !prev.caption
     ) {
       const lines = b.text.split('\n');
+      // Tìm dòng đầu tiên không rỗng sau ảnh → thử làm caption.
       const firstIdx = lines.findIndex((l) => l.trim());
       const first = firstIdx >= 0 ? lines[firstIdx].trim() : '';
       if (first && isCaptionLine(first)) {
         prev.caption = decodeHtml(first.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
         lines.splice(firstIdx, 1);
+        const rest = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        if (rest) { b.text = rest; withCaps.push(b); }
+        continue;
+      }
+      // Dòng đầu không phải caption → thử dòng thứ hai
+      // (Thanh Niên: dòng 1 = "Một góc làng biển Cảnh Dương", dòng 2 = "ẢNH: NGUYỄN PHÚC").
+      const secondIdx = firstIdx >= 0 ? lines.findIndex((l, i) => i > firstIdx && l.trim()) : -1;
+      const second = secondIdx >= 0 ? lines[secondIdx].trim() : '';
+      if (second && isCaptionLine(second)) {
+        prev.caption = decodeHtml(second.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
+        lines.splice(secondIdx, 1);
         const rest = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
         if (rest) { b.text = rest; withCaps.push(b); }
         continue;
@@ -978,8 +1067,17 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
 
 // Chỉ lấy media (ảnh/video) từ HTML bài gốc — NHANH, không chờ Jina. Dùng để
 // hiện ảnh cùng lúc với tóm tắt; Jina text về sau sẽ thay thế blocks đầy đủ.
+// Cache in-memory media HTML theo URL: fetchArticleMedia (fast path) và
+// loadArticleContent (Jina) đều gọi fetchMediaFromHtml — cache tránh fetch HTML
+// TRÙNG 2 lần, rút ngắn thời gian ảnh xuất hiện.
+const mediaHtmlCache = new Map<string, Promise<ArticleBlock[]>>();
+
 export async function fetchArticleMedia(url: string): Promise<ArticleBlock[]> {
-  return fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+  const hit = mediaHtmlCache.get(url);
+  if (hit) return hit;
+  const p = fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+  mediaHtmlCache.set(url, p);
+  return p;
 }
 
 // Hỏi proxy lấy stream HLS nhúng trong trang. Không có proxy / lỗi / không
@@ -1009,6 +1107,9 @@ const CONTENT_CACHE_MAX = 24;
 
 export function prefetchArticleContent(url: string): void {
   if (!url || contentCache.has(url)) return;
+  // E2E: mockNetwork toàn bộ, prefetch chỉ làm nhiễu cache (lưu kết quả giả mặc
+  // định trước khi test kịp override route) → bỏ qua.
+  if ((typeof window !== 'undefined' && (window as any).__E2E__)) return;
   if (contentCache.size >= CONTENT_CACHE_MAX) {
     const oldest = contentCache.keys().next().value as string | undefined;
     if (oldest) contentCache.delete(oldest);
@@ -1022,7 +1123,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> 
   const hit = contentCache.get(url);
   if (hit) return hit;
   prefetchArticleContent(url);
-  return contentCache.get(url)!;
+  const cached = contentCache.get(url);
+  if (cached) return cached;
+  // Content cache trống (vd E2E đã tắt prefetch) → load trực tiếp, không cache.
+  return loadArticleContent(url);
 }
 
 async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
@@ -1032,8 +1136,9 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
   };
 
   // Chạy SONG SONG Jina + HTML media fallback để media xuất hiện cùng lúc với
-  // text tóm tắt, không đợi xong Jina mới fetch HTML.
-  const mediaHtmlPromise = fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
+  // text tóm tắt, không đợi xong Jina mới fetch HTML. Media HTML dùng chung
+  // cache với fetchArticleMedia → không fetch trùng 2 lần.
+  const mediaHtmlPromise = fetchArticleMedia(url);
 
   // Jina qua proxy local — failover qua các candidate base (cùng origin → IP
   // Metro → loopback). Base chết (IP cũ sau khi đổi Wi-Fi) bị skip sau lần đầu.
@@ -1112,7 +1217,7 @@ export async function aiCondenseCaptions(
   if (!todo.length) return 0;
   todo.forEach((t) => captionAIpending.add(baseUrlKey(t.url)));
   try {
-    const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || 'bai';
+    const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || DEFAULT_PROVIDER;
     const cfg = getProviderConfig(provider);
     if (!cfg) return 0;
     const apiKey = (await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]))

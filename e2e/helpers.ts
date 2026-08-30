@@ -27,6 +27,7 @@ export const KEYS = {
   saved: '@saved_articles',
   history: '@summary_history',
   feedsCache: '@feeds_cache',
+  feedsCacheTime: '@feeds_cache_time',
   pitch: '@voice_pitch',
   rate: '@voice_rate',
   aiUnlocked: '@ai_unlocked',

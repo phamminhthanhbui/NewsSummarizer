@@ -31,6 +31,7 @@ import {
   FEEDS,
   fetchAllFeeds,
   readFeedsCache,
+  isFeedsCacheFresh,
   SOURCE_COLORS,
 } from "../services/feeds";
 import { useAlert } from "../components/AppAlert";
@@ -462,6 +463,12 @@ export default function HomeScreen({ navigation }: Props) {
     fetchVideos(setVideos)
       .then(setVideos)
       .catch(() => {});
+    // Cache vừa ghi (< 1 phút) → reload KHÔNG fetch lại 18 feed (reload nhanh,
+    // không cạnh tranh mạng với video crawl). Cache cũ/trống mới fetch mạng.
+    if (await isFeedsCacheFresh()) {
+      if (!cached.length) setItems([]);
+      return;
+    }
     // Feed xong đến đâu hiện đến đó, không chờ feed chậm nhất
     let shown = cached.length > 0;
     const data = await fetchAllFeeds((partial) => {
@@ -782,10 +789,16 @@ export default function HomeScreen({ navigation }: Props) {
 
   // Prefetch content bài đang hiện rõ trên màn hình (>60%, tối thiểu 1.2s):
   // bấm vào là article đã tải sẵn trong cache — tóm tắt chạy ngay, không chờ network.
+  // GIỚI HẠN lần đầu: chỉ prefetch 1 bài (hero) để không cạnh tranh với feed/video load.
+  const prefetchCountRef = useRef(0);
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: any }) => {
     for (const v of viewableItems) {
       const link = v?.item?.link;
-      if (link) prefetchArticleContent(link);
+      if (link) {
+        if (prefetchCountRef.current >= 3) return; // tối đa 3 bài prefetch
+        prefetchCountRef.current++;
+        prefetchArticleContent(link);
+      }
     }
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60, minimumViewTime: 1200 }).current;

@@ -13,8 +13,9 @@ export const KEYS = {
   model: '@nim_model',
   saved: '@saved_articles',
   history: '@summary_history',
-  feedsCache: '@feeds_cache', // cache RSS cho lần mở sau tức thì (stale-while-revalidate)
-  videosCache: '@videos_cache', // cache video crawl — mở lại app hiện ngay, crawl mới chạy nền
+  feedsCache: '@feeds_cache',       // cache RSS cho lần mở sau tức thì (stale-while-revalidate)
+  feedsCacheTime: '@feeds_cache_time', // thời điểm ghi cache RSS — reload gần đây bỏ qua fetch lại
+  videosCache: '@videos_cache',     // cache video crawl — mở lại app hiện ngay, crawl mới chạy nền
   voice: '@voice',          // giọng đọc cũ (expo-speech voice identifier)
   pitch: '@voice_pitch',
   rate: '@voice_rate',

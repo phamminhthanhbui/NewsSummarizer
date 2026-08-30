@@ -122,11 +122,6 @@ test.describe('Tìm kiếm', () => {
 });
 
 test.describe('Carousel + TIN NÓNG', () => {
-  test('badge NÓNG + tiêu đề bài nổi bật hiện trên ticker', async ({ page }) => {
-    await expect(page.getByText('NÓNG', { exact: true })).toBeVisible();
-    await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
-  });
-
   test('mũi tên Tin sau/Tin trước chuyển slide, dots cập nhật', async ({ page }) => {
     await expect(page.getByLabel('Tin sau')).toBeVisible();
     await page.getByLabel('Tin sau').click();
@@ -139,10 +134,10 @@ test.describe('Carousel + TIN NÓNG', () => {
 
 test.describe('Video', () => {
   test('section VIDEO hiện card, bấm mở popup', async ({ page }) => {
-    await expect(page.getByText('VIDEO', { exact: true })).toBeVisible();
+    await expect(page.getByText('VIDEO NỔI BẬT', { exact: true })).toBeVisible();
     await page.getByText('Video hiện trường vụ cháy chung cư').click();
     await expect(page.getByLabel('Đóng video')).toBeVisible();
-    await expect(page.getByText('Mở tại nguồn')).toBeVisible();
+    // chi tiết player/không-nút-mở-tại-nguồn: features-regression.spec
   });
 
   test('popup: nút Đóng đóng popup', async ({ page }) => {

@@ -172,6 +172,10 @@ export async function fetchFeed(url: string): Promise<FeedItem[]> {
 // Cache RSS vào AsyncStorage — lần mở app sau hiện tin tức thì (stale-while-revalidate),
 // fetch mạng chạy nền rồi cập nhật. Giới hạn 300 item để JSON không phình.
 const FEED_CACHE_MAX = 300;
+// Reload/reopen trong vòng này thì KHÔNG fetch lại 18 feed — hiện cache ngay.
+// Tin mới chỉ cần vài phút; tránh mỗi lần reload bắn 18 request RSS cạnh tranh
+// với video crawl + prefetch (nguyên nhân reload lâu).
+const FEED_CACHE_SKIP_RELOAD_MS = 60 * 1000;
 
 export async function readFeedsCache(): Promise<FeedItem[]> {
   try {
@@ -182,8 +186,21 @@ export async function readFeedsCache(): Promise<FeedItem[]> {
   }
 }
 
+async function readFeedsCacheTime(): Promise<number> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.feedsCacheTime);
+    return raw ? +raw || 0 : 0;
+  } catch { return 0; }
+}
+
+// Cache vừa ghi gần đây (< 1 phút) → reload nên BỎ QUA fetch mạng.
+export async function isFeedsCacheFresh(): Promise<boolean> {
+  return Date.now() - (await readFeedsCacheTime()) < FEED_CACHE_SKIP_RELOAD_MS;
+}
+
 function writeFeedsCache(items: FeedItem[]) {
   AsyncStorage.setItem(KEYS.feedsCache, JSON.stringify(items.slice(0, FEED_CACHE_MAX))).catch(() => {});
+  AsyncStorage.setItem(KEYS.feedsCacheTime, String(Date.now())).catch(() => {});
 }
 
 // Sắp xếp theo ngày mới nhất & gộp bài trùng link. Dùng cho cả kết quả cuối
