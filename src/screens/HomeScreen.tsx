@@ -789,6 +789,7 @@ export default function HomeScreen({ navigation }: Props) {
 
   // Prefetch content bài đang hiện rõ trên màn hình (>60%, tối thiểu 1.2s):
   // bấm vào là article đã tải sẵn trong cache — tóm tắt chạy ngay, không chờ network.
+  // Kèm PRE-SUMMARIZE nền: tóm tắt luôn bằng full text, mở bài = hiện tức thì.
   // GIỚI HẠN lần đầu: chỉ prefetch 1 bài (hero) để không cạnh tranh với feed/video load.
   const prefetchCountRef = useRef(0);
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: any }) => {
@@ -797,7 +798,7 @@ export default function HomeScreen({ navigation }: Props) {
       if (link) {
         if (prefetchCountRef.current >= 3) return; // tối đa 3 bài prefetch
         prefetchCountRef.current++;
-        prefetchArticleContent(link);
+        prefetchArticleContent(link, v.item);
       }
     }
   }).current;

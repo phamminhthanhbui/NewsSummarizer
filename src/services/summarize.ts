@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxiedFetchText } from '../utils/proxy';
+import type { FeedItem, SummaryRecord } from '../types';
 
 export type LLMProvider = 'bai' | 'nvidia';
 
@@ -1105,7 +1106,7 @@ async function fetchEmbeddedVideo(pageUrl: string): Promise<ArticleBlock | null>
 const contentCache = new Map<string, Promise<ArticleBlock[]>>();
 const CONTENT_CACHE_MAX = 24;
 
-export function prefetchArticleContent(url: string): void {
+export function prefetchArticleContent(url: string, item?: FeedItem): void {
   if (!url || contentCache.has(url)) return;
   // E2E: mockNetwork toàn bộ, prefetch chỉ làm nhiễu cache (lưu kết quả giả mặc
   // định trước khi test kịp override route) → bỏ qua.
@@ -1115,8 +1116,91 @@ export function prefetchArticleContent(url: string): void {
     if (oldest) contentCache.delete(oldest);
   }
   // Fail → tự xóa khỏi cache để lần sau retry, không kẹt [] vĩnh viễn
-  const p = loadArticleContent(url).catch((e) => { contentCache.delete(url); throw e; });
+  const p = loadArticleContent(url)
+    .then((blocks) => {
+      if (item) preSummarize(item, blocks);
+      return blocks;
+    })
+    .catch((e) => { contentCache.delete(url); throw e; });
   contentCache.set(url, p);
+}
+
+// ----- Tóm tắt trước (pre-summarize) nền -----
+// HomeScreen prefetch bài nào → summarize ngay bằng FULL TEXT vừa tải + ghi
+// history. Người dùng mở bài → history hit → tóm tắt hiện TỨC THÌ (độ trễ ~0ms,
+// không chờ LLM). Bài chưa kịp xong khi mở → peekPendingSummary() để await chứ
+// không gọi LLM trùng lần hai.
+const summaryInflight = new Map<string, Promise<string>>();
+
+export function peekPendingSummary(url: string): Promise<string> | undefined {
+  return summaryInflight.get(url);
+}
+
+// Summary cũ từ trước khi fix (metadata lọt, fragment, dấu vết markdown) vẫn nằm
+// trong history cache → mở lại bài vẫn thấy bản "lạ". Phát hiện + purge để tóm lại.
+export function isStaleSummary(s: string): boolean {
+  if (!s) return false;
+  const lines = s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  // Quá dài (>12 dòng) = summary cũ chứa cả bài/related của báo → tóm lại
+  if (lines.length > 12) return true;
+  // Dòng còn dấu vết markdown ảnh/link, hoặc kết thúc "…" (caption cụt)
+  if (lines.some((l) => /\]\(/i.test(l) || /…$|\.\.\.$/.test(l))) return true;
+  const first = lines[0];
+  // Dòng đầu còn label "TL;DR" / "Tóm tắt:" → summary cũ chưa được làm sạch
+  if (/^TL;?DR\s*[:：—-]?/i.test(first)) return true;
+  if (/^Tóm\s*tắt\s*[:：—-]/i.test(first)) return true;
+  // Dòng đầu là chuyên mục / ngày giờ / ghi chú ảnh / fragment chữ thường
+  if (/^(?:ảnh|hình|photo)\s*[:：]/i.test(first)) return true;
+  if (/^nhóm\s+phóng\s+viên/i.test(first)) return true;
+  if (/^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]/i.test(first)) return true;
+  const c = first.charAt(0);
+  return !!c && c.toLowerCase() === c && c !== c.toUpperCase();
+}
+
+export async function saveSummaryToHistory(item: FeedItem, summary: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.history);
+    const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
+    const next = history.filter((h) => h.url !== item.link); // dedupe — bản mới nhất thắng
+    next.unshift({
+      url: item.link, title: item.title, summary, date: new Date().toISOString(), source: item.source,
+    });
+    await AsyncStorage.setItem(KEYS.history, JSON.stringify(next.slice(0, LIMITS.historyMax)));
+  } catch { /* history hỏng thì bỏ qua, không chặn UX */ }
+}
+
+function startSummaryFor(item: FeedItem, src: string): Promise<string> {
+  const existing = summaryInflight.get(item.link);
+  if (existing) return existing;
+  const p = summarizeArticle(src, item.category)
+    .then((s) => {
+      summaryInflight.delete(item.link);
+      if (s && s.trim().length >= 20 && !isStaleSummary(s)) void saveSummaryToHistory(item, s);
+      return s;
+    })
+    .catch((e) => {
+      summaryInflight.delete(item.link);
+      throw e;
+    });
+  summaryInflight.set(item.link, p);
+  return p;
+}
+
+function preSummarize(item: FeedItem, blocks: ArticleBlock[]): void {
+  if (typeof window !== 'undefined' && (window as any).__E2E__) return;
+  if (summaryInflight.has(item.link)) return;
+  const src = blocksToText(blocks) || item.description || '';
+  if (src.length < 200) return; // bài quá ngắn/rác → mặc màn hình mở bài tự xử
+  void (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEYS.history);
+      const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
+      const hit = history.find((h) => h.url === item.link);
+      if (hit && !isStaleSummary(hit.summary)) return; // đã có summary tốt → khỏi tốn LLM
+    } catch { /* tính cả khi đọc history lỗi */ }
+    startSummaryFor(item, src).catch(() => {});
+  })();
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {

@@ -22,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
-import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX } from '../services/summarize';
+import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
@@ -123,29 +123,6 @@ const useWebSpeech = () => {
 type TtsWord = { text: string; flat: number };
 type TtsChunk = { text: string; first: number; last: number };
 
-// Summary cũ từ trước khi fix (metadata lọt, fragment, dấu vết markdown) vẫn nằm
-// trong history cache → mở lại bài vẫn thấy bản "lạ". Phát hiện + purge để tóm lại.
-function isStaleSummary(s: string): boolean {
-  if (!s) return false;
-  const lines = s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return false;
-  // Quá dài (>12 dòng) = summary cũ chứa cả bài/related của báo → tóm lại
-  if (lines.length > 12) return true;
-  // Dòng còn dấu vết markdown ảnh/link, hoặc kết thúc "…" (caption cụt)
-  if (lines.some((l) => /\]\(/i.test(l) || /…$|\.\.\.$/.test(l))) return true;
-  const first = lines[0];
-  // Dòng đầu còn label "TL;DR" / "Tóm tắt:" → summary cũ chưa được làm sạch
-  // (chỉ khớp "Tóm tắt" khi có separator : — để không nhầm "Tóm tắt AI giả lập...")
-  if (/^TL;?DR\s*[:：—-]?/i.test(first)) return true;
-  if (/^Tóm\s*tắt\s*[:：—-]/i.test(first)) return true;
-  // Dòng đầu là chuyên mục / ngày giờ / ghi chú ảnh / fragment chữ thường
-  if (/^(?:ảnh|hình|photo)\s*[:：]/i.test(first)) return true;
-  if (/^nhóm\s+phóng\s+viên/i.test(first)) return true;
-  if (/^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]/i.test(first)) return true;
-  const c = first.charAt(0);
-  return !!c && c.toLowerCase() === c && c !== c.toUpperCase();
-}
-
 function buildTtsChunks(paras: TtsWord[][]): TtsChunk[] {
   const all = paras.flat();
   const chunks: TtsChunk[] = [];
@@ -233,15 +210,9 @@ export default function ArticleScreen({ navigation, route }: any) {
     // Tóm tắt nhanh: chạy độc lập, không chặn việc tải bài
     (async () => {
       setOffline(false);
-      // Lưu summary vào History (cache để lần sau mở lại là tức thì)
-      const saveToHistory = async (summary: string) => {
-        const raw = await AsyncStorage.getItem(KEYS.history);
-        const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
-        history.unshift({
-          url: item.link, title: item.title, summary, date: new Date().toISOString(), source: item.source,
-        });
-        await AsyncStorage.setItem(KEYS.history, JSON.stringify(history.slice(0, LIMITS.historyMax)));
-      };
+      // Lưu summary vào History (cache để lần sau mở lại là tức thì) — writer
+      //chung, dedupe theo URL (bản mới nhất thắng).
+      const saveToHistory = (summary: string) => saveSummaryToHistory(item, summary);
 
       // Chạy song song không chặn nhau: tóm nhanh từ mô tả + tải toàn bài để render
       const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
@@ -285,6 +256,22 @@ export default function ArticleScreen({ navigation, route }: any) {
       // Lỗi ở đây KHÔNG báo ngay: còn full-text + fallback phía sau.
       let lastErr = '';
       setSummarizing(true);
+      // Pre-summarize nền (Home prefetch) đang chạy/chờ xong → await bản
+      // FULL TEXT (chất lượng cao) thay vì gọi LLM trùng lần hai.
+      const pend = peekPendingSummary(item.link);
+      if (pend) {
+        const s = await pend.catch(() => null);
+        if (s && s.trim().length >= 20 && !isStaleSummary(s)) {
+          setSummary(s);
+          setSummarizing(false);
+          setError('');
+          setOffline(false);
+          const prefetchedBlocks = await blocksTask;
+          setBlocks(prefetchedBlocks);
+          setContent(blocksToText(prefetchedBlocks));
+          return;
+        }
+      }
       const fast = await summarizeArticle(item.description, item.category)
         .catch((e: Error) => { lastErr = e.message || ''; return null; });
       setSummarizing(false);
