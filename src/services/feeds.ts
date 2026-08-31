@@ -235,9 +235,10 @@ function finalize(results: FeedItem[], featured: FeedItem[]): FeedItem[] {
 const FEED_POOL_SIZE = 8;
 const PROGRESS_MIN_MS = 150;
 
-async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[]> {
+async function runPool<T>(tasks: (() => Promise<T>)[], size: number, deadlineMs = 0): Promise<T[]> {
   const results: T[] = new Array(tasks.length);
   let next = 0;
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   const worker = async () => {
     while (next < tasks.length) {
       const i = next++;
@@ -245,7 +246,15 @@ async function runPool<T>(tasks: (() => Promise<T>)[], size: number): Promise<T[
     }
   };
   const workers = Array.from({ length: Math.min(size, tasks.length) }, worker);
-  await Promise.all(workers);
+  if (deadlineMs > 0) {
+    await Promise.race([
+      Promise.all(workers),
+      new Promise((r) => { deadlineTimer = setTimeout(r, deadlineMs); }),
+    ]);
+  } else {
+    await Promise.all(workers);
+  }
+  if (deadlineTimer) clearTimeout(deadlineTimer);
   return results;
 }
 
@@ -290,7 +299,9 @@ export async function fetchAllFeeds(onProgress?: (items: FeedItem[]) => void): P
     ...featuredJobs.map((j) => () => runJob(j, true)),
     ...regularJobs.map((j) => () => runJob(j, false)),
   ];
-  await runPool(jobs, FEED_POOL_SIZE);
+  // Deadline 8s: reload không chờ feed chậm nhất (8 pool × 8s/feed = tối đa ~24s
+  // trước đây) — trả phần đã có, feed chậm bỏ qua (lần sau reload sẽ lấy).
+  await runPool(jobs, FEED_POOL_SIZE, 8000);
   if (emitTimer) clearTimeout(emitTimer);
 
   const final = finalize(accRegular, accFeatured);

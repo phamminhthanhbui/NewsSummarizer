@@ -11,7 +11,6 @@ import { orderedProxyBases, markProxyAlive, markProxyDead } from '../utils/proxy
 import { crawlAllVideos } from './videoCrawler';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 phút — video nổi bật theo xu hướng mới nhất
-const FOREGROUND_TIMEOUT_MS = 12000;
 
 interface CacheEntry { ts: number; videos: VideoItem[]; }
 
@@ -66,8 +65,10 @@ export async function fetchVideos(onFresh?: (v: VideoItem[]) => void): Promise<V
   const now = Date.now();
   const fresh = entry && (now - entry.ts) < CACHE_TTL_MS;
 
-  if (entry && fresh) {
-    // Cache còn hạn: trả ngay, crawl nền cập nhật
+  // Có cache (kể cả HẾT HẠN): trả NGAY cache → video hiện tức thì lúc launch,
+  // crawl nền cập nhật qua onFresh (partial từng nguồn + bản đầy đủ khi xong).
+  // Trước đây cache hết hạn phải chờ crawl foreground tới 12s mới hiện video.
+  if (entry && entry.videos.length) {
     refresh(onFresh).then((videos) => {
       if (videos.length) writeCache({ ts: Date.now(), videos });
       if (videos.length) onFresh?.(videos);
@@ -75,21 +76,9 @@ export async function fetchVideos(onFresh?: (v: VideoItem[]) => void): Promise<V
     return entry.videos;
   }
 
-  if (entry && !fresh) {
-    // Cache hết hạn: trả cache cũ (UI không trống) nhưng chờ crawl mới
-    // foreground với timeout — nếu kịp thì trả mới, không thì trả cũ.
-    const timeout = new Promise<null>((_, reject) => setTimeout(() => reject(), FOREGROUND_TIMEOUT_MS));
-    const crawl = refresh().then((videos) => {
-      if (videos.length) { writeCache({ ts: Date.now(), videos }); onFresh?.(videos); }
-      return videos;
-    });
-    const freshVideos = await Promise.race([crawl, timeout]).catch(() => null);
-    if (freshVideos && freshVideos.length) return freshVideos;
-    return entry.videos;
-  }
-
-  // Không cache: crawl foreground
-  const videos = await refresh().catch(() => [] as VideoItem[]);
+  // Không cache (lần đầu mở app): crawl — nguồn nào xong trước onFresh push
+  // partial lên UI ngay (video nổi bật hiện sau ~2-3s, không chờ cả 6 nguồn).
+  const videos = await refresh(onFresh).catch(() => [] as VideoItem[]);
   if (videos.length) writeCache({ ts: Date.now(), videos });
   return videos;
 }

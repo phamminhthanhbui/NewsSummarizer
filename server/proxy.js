@@ -27,6 +27,25 @@ app.post('/api/llm', async (req, res) => {
       body: JSON.stringify(body),
     });
 
+    const ct = response.headers.get('content-type') || '';
+    // Stream (SSE): bơm thẳng từng chunk về client — chữ chạy dần thay vì chờ
+    // model sinh xong hết (giảm cảm giác chờ 2-5s xuống ~0.5s tới token đầu).
+    if (response.ok && body && body.stream && ct.includes('event-stream')) {
+      res.status(response.status);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('X-Accel-Buffering', 'no');
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+      } catch (e) { /* client đóng sớm */ }
+      return res.end();
+    }
+
     const data = await response.text();
 
     // Forward response headers
@@ -477,8 +496,21 @@ app.get('/api/hls', async (req, res) => {
 });
 
 // Jina Reader proxy — fetch phía server nên không dính CORS của trình duyệt,
-// kèm retry khi Jina chập chờn (503).
+// kèm retry khi Jina chập chờn (503). MỖI attempt có timeout 20s (trước đây
+// fetch treo vô hạn khi r.jina.ai chậm → cả chuỗi tóm tắt chết theo).
+// In-flight dedup: prefetch + open article cùng call 1 URL → gộp 1 upstream.
+// Cache RAM 3 phút: web reload không phải chờ Jina 9-12s lại từ đầu.
 const JINA_REMOVE_SELECTOR = 'header, nav, footer, aside, .header, .nav, .footer, .sidebar, .menu, [role="navigation"], [role="banner"]';
+const JINA_CACHE_TTL = 3 * 60 * 1000;
+const jinaInflight = new Map(); // url -> Promise<{status, body}>
+const jinaCache = new Map();    // url -> { t, body }
+
+function jinaFetchOnce(url) {
+  return fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
+    headers: { 'Accept': 'text/markdown', 'X-Remove-Selector': JINA_REMOVE_SELECTOR },
+    signal: AbortSignal.timeout(20000),
+  }).then(async (r) => ({ status: r.status, body: await r.text() }));
+}
 
 app.get('/api/jina', async (req, res) => {
   const url = req.query.url;
@@ -486,26 +518,36 @@ app.get('/api/jina', async (req, res) => {
     return res.status(400).json({ error: 'Missing required query param: url' });
   }
 
+  const hit = jinaCache.get(url);
+  if (hit && Date.now() - hit.t < JINA_CACHE_TTL) {
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    return res.send(hit.body);
+  }
+
   let lastStatus = 502;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
-        headers: { 'Accept': 'text/markdown', 'X-Remove-Selector': JINA_REMOVE_SELECTOR },
-      });
-      if (response.ok) {
-        const data = await response.text();
-        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-        return res.send(data);
+      let p = jinaInflight.get(url);
+      if (!p) {
+        p = jinaFetchOnce(url).finally(() => jinaInflight.delete(url));
+        jinaInflight.set(url, p);
       }
-      lastStatus = response.status;
+      const { status, body } = await p;
+      if (status >= 200 && status < 300) {
+        if (jinaCache.size > 100) jinaCache.clear();
+        jinaCache.set(url, { t: Date.now(), body });
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        return res.send(body);
+      }
+      lastStatus = status;
       // 4xx (trừ 408/429) là lỗi request, retry vô ích
-      if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        return res.status(response.status).json({ error: `Jina error ${response.status}` });
+      if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+        return res.status(status).json({ error: `Jina error ${status}` });
       }
     } catch (e) {
       console.error('Jina proxy error:', e.message);
     }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    if (attempt < 1) await new Promise((r) => setTimeout(r, 800));
   }
   res.status(502).json({ error: 'Jina failed after retries', status: lastStatus });
 });

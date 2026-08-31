@@ -239,6 +239,9 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
   const results: VideoItem[][] = new Array(sources.length);
   let settledCount = 0;
   let lastPartial = [] as VideoItem[];
+  // Seed xáo ngẫu nhiên GIỮ NGUYÊN trong 1 lần crawl — partial→full emit không
+  // đổi bộ featured (strip không nhảy). Lần crawl sau mới ra seed khác.
+  const seed = Math.floor(Math.random() * 0xffffffff);
 
   const emitIfBetter = () => {
     const all = results.filter(Boolean).flat();
@@ -249,7 +252,7 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
       .sort((a, b) => b.d - a.d || a.v.source.localeCompare(b.v.source))
       .map((x) => x.v);
     const window = Math.min(NEWEST_WINDOW, sorted.length);
-    const start = window ? Math.floor(Math.random() * 0xffffffff) % window : 0;
+    const start = window ? seed % window : 0;
     const featSet = new Set<VideoItem>();
     const featured: VideoItem[] = [];
     for (let i = 0; i < Math.min(FEATURED_COUNT, window); i++) {
@@ -266,8 +269,9 @@ export async function crawlAllVideos(onPartial?: (v: VideoItem[]) => void): Prom
     fn().catch(() => [] as VideoItem[]).then((v) => {
       results[i] = v;
       settledCount++;
-      // Có nguồn đầu tiên xong là push featured ngay, không chờ nguồn chậm nhất.
-      if (settledCount === 1 || settledCount === sources.length) emitIfBetter();
+      // Nguồn nào xong là push featured ngay — strip hiện dần từ nguồn đầu
+      // (~2-3s) thay vì chờ cả 6 nguồn (~10-20s).
+      emitIfBetter();
     }),
   ));
   emitIfBetter();

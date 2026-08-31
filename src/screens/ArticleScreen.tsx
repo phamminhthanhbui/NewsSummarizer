@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import {
   View,
   Text,
@@ -25,130 +25,12 @@ import { KEYS } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
-import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung, clearWebVoiceHung } from '../services/edgeTts';
-import { buildWordMap } from '../services/wordMap';
 import ArticleCard from '../components/ArticleCard';
 import { getGoodProxyBase, getProxyBase } from '../utils/proxy';
+import { speakSystem, stopSystem, clearVoiceHung } from '../services/edgeTts';
+import { buildWordMap } from '../services/wordMap';
+import { buildTtsChunks, type TtsWord } from '../services/ttsChunks';
 
-// Web Speech API (word boundary events) — only on web
-const useWebSpeech = () => {
-  const synthRef = useRef<SpeechSynthesis | null>(null);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const onWordRef = useRef<((wordIndex: number) => void) | null>(null);
-  const onEndRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      synthRef.current = window.speechSynthesis;
-    }
-    return () => { if (synthRef.current) synthRef.current.cancel(); };
-  }, []);
-
-  const speak = (text: string, opts: { lang?: string; rate?: number; pitch?: number; voice?: SpeechSynthesisVoice | null } = {}) => {
-    return new Promise<void>((resolve, reject) => {
-      if (!synthRef.current) { reject(new Error('Web Speech API not available')); return; }
-      const synth = synthRef.current;
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = opts.lang || 'vi-VN';
-      u.rate = opts.rate ?? 1.0;
-      u.pitch = opts.pitch ?? 1.0;
-      u.voice = opts.voice || null;
-      // Start-guard: một số giọng (vd giọng nữ cloud) bị treo — không kích hoạt
-      // onstart/onend/onerror → promise treo vĩnh viễn, không fallback được.
-      // Giọng hoạt động thì onstart kích hoạt gần như tức thì (<300ms) nên chỉ
-      // chờ 1.2s rồi hủy + reject để caller rơi xuống Edge TTS cho nhanh.
-      // Cờ `settled` chặn callback muộn của utterance đã bị cancel (tránh tắt nhầm
-      // trạng thái đang đọc khi Edge TTS đã tiếp quản).
-      let started = false;
-      let settled = false;
-      const fail = (e: any) => { if (settled) return; settled = true; clearTimeout(startGuard); reject(e); };
-      const ok = () => { if (settled) return; settled = true; clearTimeout(startGuard); onEndRef.current?.(); resolve(); };
-      const startGuard = setTimeout(() => {
-        if (!started) {
-          try { synth.cancel(); } catch {}
-          fail(new Error('Web Speech did not start'));
-        }
-      }, 1200);
-      u.onstart = () => { started = true; clearTimeout(startGuard); };
-      u.onend = ok;
-      u.onerror = (e: any) => {
-        // 'interrupted'/'canceled' = bình thường khi cancel() hoặc giọng mới đè
-        // giọng cũ — resolve KHÔNG kèm onEndRef: onEndRef bây giờ trỏ về callback
-        // của lần đọc MỚI (set trước khi speak), gọi nó sẽ tắt nhầm trạng thái
-        // đang đọc. Cũng KHÔNG reject: reject sẽ chạy vào catch →
-        // markWebVoiceHung() → bấm NÚT DỪNG cũng thành "giọng treo", lần sau
-        // mất word-highlight Web Speech oan. (Fix ở commit cũ 05fa5b0c, bị mất.)
-        if (e && (e.error === 'interrupted' || e.error === 'canceled')) {
-          if (settled) return; settled = true; clearTimeout(startGuard); resolve(); return;
-        }
-        fail(e);
-      };
-      // Word boundary event: gives charIndex, charLength, elapsedTime
-      u.onboundary = (e) => {
-        if (e.name === 'word' && onWordRef.current) {
-          onWordRef.current(e.charIndex);
-        }
-      };
-      utteranceRef.current = u;
-      // Cancel giọng đang đọc/đang TREO trong queue trước khi speak. Web Speech xếp
-      // utterance mới SAU utterance cũ; utterance cũ mà treo (vd giọng nữ cloud trên
-      // Edge) thì utterance mới KHÔNG BAO GIỜ chạy → bấm đọc im lặng. Cancel sạch
-      // queue để lần nào cũng phát được. (Fix này có ở commit cũ 05fa5b0c, bị mất.)
-      // KHÔNG cancel NGAY TRƯỚC speak(): Chrome/Edge có race — cancel() xong speak()
-      // liền thì utterance mới bị hủy nhầm hoặc engine kẹt cứng, onstart không bao
-      // giờ kích hoạt → guard 1.2s reject → Edge TTS chậm. Cancel SỚM, chờ engine
-      // xả queue rồi mới speak.
-      synth.cancel();
-      setTimeout(() => {
-        if (settled) return; // đã dừng/hết hạn trong lúc chờ
-        try { synth.speak(u); } catch { fail(new Error('Web Speech speak failed')); }
-      }, 120);
-    });
-  };
-
-  const stop = () => {
-    if (synthRef.current) { synthRef.current.cancel(); }
-  };
-
-  const setWordCallback = (cb: (wordIndex: number) => void) => { onWordRef.current = cb; };
-  const setEndCallback = (cb: () => void) => { onEndRef.current = cb; };
-
-  return { speak, stop, setWordCallback, setEndCallback };
-};
-
-// ---- TTS theo cụm câu (chunked playback) ----
-// Lỗi đồng bộ highlight tích tụ theo độ dài văn bản: đọc cả bài một hơi thì
-// lệch 2-3s cuối bài là chuyện thường. Chia cụm ~1-2 câu thì sai số reset sau
-// mỗi cụm + hiệu chỉnh ms/ký tự chạy liên tục → bám giọng ở MỌI tốc độ.
-type TtsWord = { text: string; flat: number };
-type TtsChunk = { text: string; first: number; last: number };
-
-function buildTtsChunks(paras: TtsWord[][]): TtsChunk[] {
-  const all = paras.flat();
-  const chunks: TtsChunk[] = [];
-  let ws: TtsWord[] = [];
-  const flush = () => {
-    if (!ws.length) return;
-    chunks.push({
-      text: ws.map((w) => w.text).join(' '),
-      first: ws[0].flat,
-      last: ws[ws.length - 1].flat,
-    });
-    ws = [];
-  };
-  for (let i = 0; i < all.length; i++) {
-    const w = all[i];
-    if (/^[-–—•*]$/.test(w.text)) continue; // marker gạch đầu dòng — không đọc thành "gạch"
-    ws.push(w);
-    const endsSentence = /[.!?…]["')]*$/.test(w.text);
-    // flat nhảy >1 giữa 2 từ liên tiếp = có \n ở giữa = hết đoạn
-    const paraBreak = i + 1 < all.length && all[i + 1].flat - w.flat > 1;
-    if (ws.length >= 22 && (endsSentence || paraBreak)) flush();
-    else if (ws.length >= 36) flush(); // câu quá dài — cắt cứng cho đều
-  }
-  flush();
-  return chunks;
-}
 
 // ponytail: magic numbers centralized in storage.LIMITS
 import { LIMITS } from '../services/storage';
@@ -193,9 +75,6 @@ export default function ArticleScreen({ navigation, route }: any) {
     setImageModal({ visible: true, url: best });
   }, [blocks]);
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
-
-  // Web Speech API hook for word-level highlighting (web only)
-  const webSpeech = useWebSpeech();
 
   // Auto-fetch article + summarize + load related + saved state
   useEffect(() => {
@@ -252,40 +131,53 @@ export default function ArticleScreen({ navigation, route }: any) {
         await AsyncStorage.setItem(KEYS.history, JSON.stringify(cleaned));
       }
 
-      // TÓM NHANH trước từ mô tả (không chờ Jina) — summary hiện trong ~1-2s.
+      // HIỆN NGAY mô tả RSS làm placeholder tóm tắt (0ms) — AI về sau thay thế.
+      // Đảm bảo không có summary nào để "tóm nhanh" trên màn hình khi vừa mở.
+      if (!peekPendingSummary(item.link) && item.description) {
+        setSummary(item.description.trim());
+      }
+
+      // TÓM NHANH trước từ mô tả (không chờ Jina) + STREAM token → chữ bắt đầu
+      // xuất hiện sau ~1s thay vì chờ model sinh xong cả đoạn (2-5s).
       // Lỗi ở đây KHÔNG báo ngay: còn full-text + fallback phía sau.
       let lastErr = '';
       setSummarizing(true);
-      // Pre-summarize nền (Home prefetch) đang chạy/chờ xong → await bản
-      // FULL TEXT (chất lượng cao) thay vì gọi LLM trùng lần hai.
+      // Pre-summarize nền (Home prefetch) — KHÔNG await chặn fast path: nó về
+      // tới đâu dùng tới đó (bản full-text, chất lượng cao hơn), flag chặnfast
+      // path/upgrade đè lại sau.
+      let fullArrived = false;
+      let pendText: string | null = null;
       const pend = peekPendingSummary(item.link);
       if (pend) {
-        const s = await pend.catch(() => null);
-        if (s && s.trim().length >= 20 && !isStaleSummary(s)) {
-          setSummary(s);
-          setSummarizing(false);
-          setError('');
-          setOffline(false);
-          const prefetchedBlocks = await blocksTask;
-          setBlocks(prefetchedBlocks);
-          setContent(blocksToText(prefetchedBlocks));
-          return;
-        }
+        pend.then((s) => {
+          if (s && s.trim().length >= 20 && !isStaleSummary(s)) {
+            fullArrived = true;
+            pendText = s;
+            setSummary(s);
+            setSummarizing(false);
+            setError('');
+            setOffline(false);
+          }
+        }).catch(() => { /* thất bại → fast/upgrade thường sẽ lo */ });
       }
-      const fast = await summarizeArticle(item.description, item.category)
-        .catch((e: Error) => { lastErr = e.message || ''; return null; });
-      setSummarizing(false);
-      if (fast) { setSummary(fast); setError(''); setOffline(false); }
 
-      // Toàn bài về → hiện bài gốc + NÂNG CẤP summary âm thầm bằng bản đầy đủ
+      const fast = await summarizeArticle(item.description, item.category, (partial) => {
+        if (!fullArrived && partial) setSummary(partial);
+      }).catch((e: Error) => { lastErr = e.message || ''; return null; });
+      setSummarizing(false);
+      if (fast && !fullArrived) { setSummary(fast); setError(''); setOffline(false); }
+
+      // Toàn bài về → hiện bài gốc + NÂNG CẤP summary (stream) bằng bản đầy đủ
       const articleBlocks = await blocksTask;
       setBlocks(articleBlocks);
       const fullText = blocksToText(articleBlocks);
       setContent(fullText);
 
-      let finalSummary = fast;
-      if (fullText.length > item.description.length) {
-        const full = await summarizeArticle(fullText, item.category).catch(() => null);
+      let finalSummary = fullArrived ? pendText : fast;
+      if (!fullArrived && fullText.length > item.description.length) {
+        const full = await summarizeArticle(fullText, item.category, (partial) => {
+          if (partial) setSummary(partial);
+        }).catch(() => null);
         if (full) { finalSummary = full; setOffline(false); }
       }
       // AI chết hoàn toàn → fallback extractive (chọn-câu, không cần mạng):
@@ -297,7 +189,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       if (finalSummary) {
         setSummary(finalSummary);
         setError('');
-        await saveToHistory(finalSummary);
+        if (!fullArrived) await saveToHistory(finalSummary); // nền đã tự ghi history
       } else if (lastErr) {
         setError(lastErr);
       }
@@ -324,9 +216,11 @@ export default function ArticleScreen({ navigation, route }: any) {
     setSummarizing(true);
     try {
       const src = content || item.description;
-      const s = await summarizeArticle(src, item.category);
+      // stream: chữ refresh cũng hiện dần thay vì chờ xong cả câu
+      const s = await summarizeArticle(src, item.category, (partial) => { if (partial) setSummary(partial); });
       setSummary(s);
       setOffline(false);
+      await saveSummaryToHistory(item, s);
     } catch {
       // AI lỗi → thử fallback extractive từ blocks đã tải
       const ex = blocks.length ? buildExtractiveSummary(item.title, blocks) : '';
@@ -351,7 +245,10 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   const copySummary = () => Clipboard.setStringAsync(summary);
 
-  // State for synchronized highlighting - word-level on web, paragraph-level on native
+
+  const goArticle = useCallback((feedItem: FeedItem) =>
+    navigation.push('Article', { item: feedItem }), [navigation]);
+
   const [highlightWordIndex, setHighlightWordIndex] = useState(-1);
   const [highlightParaIndex, setHighlightParaIndex] = useState(-1);
   // wordMap tính đồng bộ theo summary (useMemo, KHÔNG phải state+effect) —
@@ -365,13 +262,14 @@ export default function ArticleScreen({ navigation, route }: any) {
     return { wordOffsets: offsets, paraWords: paras, flatToPara: f2p };
   }, [summary]);
 
-  // Không warm cache Edge TTS nữa — đã bỏ Edge TTS
-
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Hiệu chỉnh tốc độ đọc thực RIÊNG CHO TỪNG rate (ms/ký tự), cập nhật EMA sau
   // MỖI cụm câu trong lúc đọc → highlight tự bám lại giọng trong vòng vài câu
   // khi user tăng/giảm tốc. Rate TTS không tuyến tính nên không quy đổi chéo.
   const sysCalibRef = useRef<Record<string, number>>({});
+  // Chunk index + word index cho resume: stop → lưu lại, nút Nghe lại → tiếp tục
+  // từ đó thay vì đọc lại từ đầu.
+  const resumeRef = useRef<{ chunkIdx: number; wordIdx: number } | null>(null);
 
   // Reset highlight khi summary đổi
   useEffect(() => {
@@ -388,38 +286,29 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   const toggleSpeak = async () => {
     if (speaking) {
-      cancelledRef.current = true; // chặn continuation của cụm đang phát dở
+      // Dừng → lưu vị trí hiện tại để resume
+      cancelledRef.current = true;
       clearSpeakTimer();
       stopSystem();
-      webSpeech.stop();
       setSpeaking(false);
-      setHighlightWordIndex(-1);
-      setHighlightParaIndex(-1);
+      // Giữ highlight nguyên (không reset về -1) để biết đã đọc tới đâu
       return;
     }
     if (!summary || !paraWords.length) return;
     cancelledRef.current = false;
-    clearWebVoiceHung(); // thử lại Web Speech mỗi lần bấm — mark cũ có thể oan
+    clearVoiceHung();
     setSpeaking(true);
-    setHighlightWordIndex(0);
-    setHighlightParaIndex(0);
+    if (!resumeRef.current) {
+      // Lần đầu: highlight từ đầu
+      setHighlightWordIndex(0);
+      setHighlightParaIndex(0);
+    }
     try {
       const rate = parseFloat((await AsyncStorage.getItem(KEYS.rate)) || '') || 1.0;
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
-      const isWeb = typeof window !== 'undefined' && 'speechSynthesis' in window;
-
-      // Web cần giọng vi resolve trước; thiếu → báo lỗi ngay (không rơi Edge TTS nữa)
-      let webVoice: SpeechSynthesisVoice | null = null;
-      if (isWeb) {
-        webVoice = isWebVoiceHung() ? null : await resolveWebVoice();
-        if (!webVoice) throw new Error('Trình duyệt không có giọng đọc tiếng Việt');
-      }
-
       const chunks = buildTtsChunks(paraWords);
       if (!chunks.length) throw new Error('Không có nội dung để đọc');
 
-      // Hiệu chỉnh tốc độ đọc THỰC (ms/ký tự) riêng cho từng rate, cập nhật EMA
-      // sau mỗi cụm → highlight tự bám lại giọng ngay cả khi user tăng/giảm tốc.
       const rateKey = rate.toFixed(1);
       let msPerChar = sysCalibRef.current[rateKey] ?? 90 / Math.max(rate, 0.01);
 
@@ -429,50 +318,76 @@ export default function ArticleScreen({ navigation, route }: any) {
         if (pi !== undefined) setHighlightParaIndex(pi);
       };
 
-      for (const chunk of chunks) {
+      // Resume: bắt đầu từ chunk đã lưu, không phải từ đầu
+      const startChunk = resumeRef.current?.chunkIdx ?? 0;
+      resumeRef.current = null;
+
+      for (let ci = startChunk; ci < chunks.length; ci++) {
         if (cancelledRef.current) break;
+        const chunk = chunks[ci];
         const t0 = Date.now();
-        // Anchor nội suy: vị trí flat gần nhất + mốc thời gian — boundary cập nhật
-        // anchor, timer chiếu tiếp theo msPerChar nên không bao giờ "đứng hình".
-        let anchorFlat = chunk.first;
-        let anchorTime = t0;
+        let anchorChar = 0; // vị trí ký tự từ boundary cuối (chính xác hơn wordIndex)
+        let anchorTime = 0;
+
+        const applyWordAtChar = (charPos: number) => {
+          let lo = 0, hi = chunk.starts.length - 1, i = 0;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (chunk.starts[mid] <= charPos) { i = mid; lo = mid + 1; } else { hi = mid - 1; }
+          }
+          applyFlat(chunk.flats[Math.max(0, Math.min(i, chunk.flats.length - 1))]);
+        };
+
+        // Nếu resume, tính offset từ highlightWordIndex hiện tại
+        if (ci === startChunk && startChunk > 0) {
+          // Ước lượng vị trí ký tự từ word index (để resume không bị nhảy)
+          const w = highlightWordIndex;
+          // Tìm word index trong chunk.flats — nếu không có, dùng 0
+          const flatIdx = chunk.flats.indexOf(w);
+          if (flatIdx >= 0 && flatIdx < chunk.starts.length) anchorChar = chunk.starts[flatIdx];
+        }
+
+        applyWordAtChar(anchorChar);
         clearSpeakTimer();
         intervalRef.current = setInterval(() => {
-          if (cancelledRef.current) return;
-          const projected = anchorFlat + Math.round((Date.now() - anchorTime) / Math.max(msPerChar, 20));
-          applyFlat(Math.min(chunk.last, Math.max(chunk.first, projected)));
-        }, 200);
+          if (cancelledRef.current || !anchorTime) return;
+          const projectedChar = anchorChar + Math.round((Date.now() - anchorTime) / Math.max(msPerChar, 20));
+          // Giới hạn: không vượt quá độ dài chunk để tránh nhảy quá xa
+          const clamped = Math.min(projectedChar, chunk.text.length);
+          applyWordAtChar(clamped);
+        }, 100); // 100ms thay vì 200ms — bám sát giọng hơn
+
+        let tSpeak = 0;
         try {
-          const onAnchor = (ratio01: number) => {
-            anchorFlat = Math.min(chunk.last, chunk.first + Math.round(ratio01 * (chunk.last - chunk.first)));
-            anchorTime = Date.now();
-          };
-          if (isWeb) {
-            webSpeech.setWordCallback((charIndex) => {
-              onAnchor(Math.min(charIndex / Math.max(chunk.text.length, 1), 1));
-            });
-            await webSpeech.speak(chunk.text, { lang: 'vi-VN', rate, pitch, voice: webVoice });
-          } else {
-            await speakSystem(chunk.text, {
-              pitch,
-              rate,
-              onBoundary: (ev) => {
-                if (typeof ev?.charIndex !== 'number') return;
-                onAnchor(Math.min(ev.charIndex / Math.max(chunk.text.length, 1), 1));
-              },
-            });
-          }
+          // Lưu vị trí hiện tại để resume nếu stop giữa chừng
+          resumeRef.current = { chunkIdx: ci, wordIdx: 0 };
+          await speakSystem(chunk.text, {
+            pitch,
+            rate,
+            onStart: () => {
+              tSpeak = Date.now();
+              anchorTime = tSpeak;
+              if (ci === startChunk && startChunk > 0) {
+                // Resume: anchorTime đã set, highlight giữ nguyên từ lúc stop
+              } else {
+                applyWordAtChar(0);
+              }
+            },
+            onBoundary: (ev) => {
+              if (typeof ev?.charIndex !== 'number') return;
+              anchorChar = ev.charIndex;
+              anchorTime = Date.now();
+              applyWordAtChar(ev.charIndex);
+            },
+          });
         } catch (e) {
           clearSpeakTimer();
-          // Chỉ mark TREO khi đúng lỗi start-guard — lỗi khác là tạm thời
-          if (e instanceof Error && e.message === 'Web Speech did not start') markWebVoiceHung();
-          throw new Error('Không đọc được giọng Việt trên thiết bị này');
+          throw e instanceof Error ? e : new Error('Không đọc được giọng Việt trên thiết bị này');
         }
         clearSpeakTimer();
         if (cancelledRef.current) break;
-        // Đo tốc độ thực của cụm vừa đọc → EMA (kẹp biên chống nhiễu:
-        // tiếng Việt ~45-170ms/ký tự tại rate 1)
-        const dur = Date.now() - t0;
+        // Đo tốc độ đọc THỰC của cụm
+        const dur = tSpeak ? Date.now() - tSpeak : Date.now() - t0;
         if (dur > 600 && chunk.text.length > 12) {
           const lo = 45 / Math.max(rate, 0.05);
           const hi = 170 / Math.max(rate, 0.05);
@@ -485,12 +400,15 @@ export default function ArticleScreen({ navigation, route }: any) {
         setSpeaking(false);
         setHighlightWordIndex(-1);
         setHighlightParaIndex(-1);
+        resumeRef.current = null; // đọc xong hết → xóa resume
+      } else {
+        // Bị stop → lưu vị trí để resume
+        // resumeRef đã được set trong speakSystem/onBoundary
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Không đọc được');
-      cancelledRef.current = true; // dừng vòng chunk đang lặp (nếu còn)
+      cancelledRef.current = true;
       stopSystem();
-      webSpeech.stop();
       clearSpeakTimer();
       setSpeaking(false);
       setHighlightWordIndex(-1);
@@ -504,7 +422,6 @@ export default function ArticleScreen({ navigation, route }: any) {
     cancelledRef.current = true; // chặn continuation của speakSystem đang chờ
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
-    webSpeech.stop();
     setSpeaking(false);
     setHighlightWordIndex(-1);
     setHighlightParaIndex(-1);
@@ -514,9 +431,6 @@ export default function ArticleScreen({ navigation, route }: any) {
     const unsub = navigation.addListener('blur', stopSpeaking);
     return () => { unsub(); stopSpeaking(); };
   }, []);
-
-  const goArticle = useCallback((feedItem: FeedItem) =>
-    navigation.push('Article', { item: feedItem }), [navigation]);
 
   // Read time estimate (chars → minutes); degrades to stub until content loads
   const READ_WPM = 250;
@@ -650,7 +564,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     }
 
     // Fallback (summary trống/từ vựng rỗng): paragraph-level highlighting với interleaved media
-    const renderParaNative = (i: number) => {
+    const renderPara = (i: number) => {
       const p = paras[i];
       const bullet = isBullet(p);
       const isTldr = i === 0 && !bullet && hasFacts;
@@ -661,7 +575,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           isTldr && styles.tldrPara,
           lead && styles.summaryLead,
           bullet && styles.bulletText,
-          highlightParaIndex === i && { backgroundColor: C.hotSoft, borderRadius: 3 }
+          highlightParaIndex === i && { backgroundColor: C.hotSoft },
         ]}>{bullet ? p.replace(/^[-•*]\s+/, '') : p}</Text>
       );
       if (!bullet) return <React.Fragment key={'p' + i}>{text}</React.Fragment>;
@@ -672,13 +586,13 @@ export default function ArticleScreen({ navigation, route }: any) {
         </View>
       );
     };
-    if (!media.length) return paras.map((_, i) => renderParaNative(i));
+    if (!media.length) return paras.map((_, i) => renderPara(i));
     let cur = 0;
     for (let mi = 0; mi < atIdx.length; mi++) {
-      while (cur < atIdx[mi]) { nodes.push(renderParaNative(cur)); cur++; }
+      while (cur < atIdx[mi]) { nodes.push(renderPara(cur)); cur++; }
       nodes.push(renderMedia(media[mi], 'm' + mi));
     }
-    while (cur < paras.length) { nodes.push(renderParaNative(cur)); cur++; }
+    while (cur < paras.length) { nodes.push(renderPara(cur)); cur++; }
     return nodes;
   };
 
@@ -1020,21 +934,6 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     borderRadius: Radius.sm,
   },
   summaryLabel: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.6 },
-  speakBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 13,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: Color.hot,
-    backgroundColor: Color.hotSoft,
-    marginLeft: 'auto',
-  },
-  speakBtnOn: { backgroundColor: Color.hot, borderColor: Color.hot },
-  speakBtnText: { fontSize: Font.tiny, fontWeight: '700', color: Color.hot },
-  speakBtnTextOn: { color: '#FFF' },
   // Chip "OFFLINE" — summary do fallback extractive tạo khi không tới được AI
   offlineChip: {
     flexDirection: 'row',
@@ -1053,6 +952,21 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     letterSpacing: 0.5,
     color: Color.textMuted,
   },
+  // Nút Nghe/Dừng trong hàng badge của thẻ tóm tắt
+  speakBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Color.hot,
+    marginLeft: 'auto',
+  },
+  speakBtnOn: { backgroundColor: Color.hot, borderColor: Color.hot },
+  speakBtnText: { fontSize: Font.tiny, fontWeight: '700', color: Color.hot },
+  speakBtnTextOn: { color: '#FFF' },
   // Thanh tiến trình đọc (hiện khi đang Nghe) — mảnh, nằm ngay dưới hàng badge
   speakProgress: {
     height: 3,

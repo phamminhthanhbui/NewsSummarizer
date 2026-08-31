@@ -22,6 +22,7 @@ import {
   Dimensions,
   AccessibilityInfo,
   AppState,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -68,6 +69,30 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Thể thao": "#059669",
   "Giải trí": "#DB2777",
   "Sức khỏe": "#2563EB",
+};
+
+// Logo thương hiệu thật của từng tờ báo (assets/sources/*.png). Nếu thiếu ảnh
+// cho nguồn nào → fallback về chữ viết tắt (SOURCE_ABBR).
+const SOURCE_LOGOS: Record<string, number> = {
+  VNExpress: require("../../assets/sources/vnexpress.png"),
+  "Tuổi Trẻ": require("../../assets/sources/tuoitre.png"),
+  "Thanh Niên": require("../../assets/sources/thanhnien.png"),
+  VietNamNet: require("../../assets/sources/vietnamnet.png"),
+  "Dân Trí": require("../../assets/sources/dantri.png"),
+  "Người Lao Động": require("../../assets/sources/nld.png"),
+  "Tiền Phong": require("../../assets/sources/tienphong.png"),
+  "Sài Gòn Giải Phóng": require("../../assets/sources/sggp.png"),
+  CAND: require("../../assets/sources/cand.png"),
+  "An ninh Thủ đô": require("../../assets/sources/anninhthudo.png"),
+  "Báo Chính phủ": require("../../assets/sources/baochinhphu.png"),
+  "Báo Giao Thông": require("../../assets/sources/baogiaothong.png"),
+  GenK: require("../../assets/sources/genk.png"),
+  Cafebiz: require("../../assets/sources/cafebiz.png"),
+  BongDaPlus: require("../../assets/sources/bongdaplus.png"),
+  Kenh14: require("../../assets/sources/kenh14.png"),
+  HelloBacSi: require("../../assets/sources/hellobacsi.png"),
+  "Sức khỏe & Đời sống": require("../../assets/sources/suckhoedoisong.png"),
+  Soha: require("../../assets/sources/soha.png"),
 };
 
 const CATEGORY_ICONS: Record<
@@ -186,6 +211,29 @@ const SourceLogo = React.memo(
     size?: number;
     active?: boolean;
   }) => {
+    const logo = SOURCE_LOGOS[source];
+    if (logo) {
+      return (
+        <View
+          style={{
+            width: size,
+            height: size,
+            borderRadius: Math.round(size * 0.25),
+            backgroundColor: active ? "#FFFFFF" : "#FFF",
+            borderWidth: 1,
+            borderColor: active ? "rgba(255,255,255,0.4)" : color + "3D",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+          }}
+        >
+          <Image
+            source={logo}
+            style={{ width: size - 4, height: size - 4, resizeMode: "contain" }}
+          />
+        </View>
+      );
+    }
     const abbr = SOURCE_ABBR[source] || source.slice(0, 2).toUpperCase();
     return (
       <View
@@ -232,29 +280,22 @@ const SourceDropdown = React.memo(
   }) => {
     const C = useTheme();
     const [open, setOpen] = useState(false);
-    // Hiệu ứng mở panel: fade + trượt xuống nhẹ. E2E tắt hẳn để click không đợi ổn định vị trí.
-    const panelAnim = useRef(new Animated.Value(0)).current;
-    const toggle = useCallback(() => {
-      setOpen((o) => {
-        if (!o) {
-          panelAnim.setValue(0);
-          Animated.timing(panelAnim, {
-            toValue: 1,
-            duration: E2E ? 0 : 180,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }).start();
-        }
-        return !o;
+    const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+    const triggerRef = useRef<View>(null);
+    const openDropdown = useCallback(() => {
+      triggerRef.current?.measureInWindow((x, y, w, h) => {
+        setAnchor({ x, y, w, h });
+        setOpen(true);
       });
-    }, [panelAnim]);
+    }, []);
     const currentColor =
       value === "Tất cả" ? C.hot : SOURCE_COLORS[value] || C.hot;
     return (
       <View style={styles.dropdownWrap}>
         <TouchableOpacity
+          ref={triggerRef as any}
           style={[styles.dropdownButton, { borderColor: currentColor }]}
-          onPress={toggle}
+          onPress={openDropdown}
           activeOpacity={0.7}
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
@@ -276,91 +317,31 @@ const SourceDropdown = React.memo(
           ) : (
             <SourceLogo source={value} color={currentColor} size={20} />
           )}
-          <Text
-            style={[styles.dropdownValue, { color: currentColor }]}
-            numberOfLines={1}
-          >
-            {value}
-          </Text>
-          <Ionicons
-            name={open ? "chevron-up" : "chevron-down"}
-            size={14}
-            color={C.textMuted}
-          />
+          <Text style={[styles.dropdownValue, { color: currentColor }]} numberOfLines={1}>{value}</Text>
+          <Ionicons name="chevron-down" size={14} color={C.textMuted} />
         </TouchableOpacity>
-        {open && (
-          <Animated.View
-            testID="sourceDropdownPanel"
-            style={[
-              styles.dropdownPanel,
-              {
-                opacity: panelAnim,
-                transform: [
-                  {
-                    translateY: panelAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [-8, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <ScrollView
-              style={styles.dropdownList}
-              contentContainerStyle={styles.dropdownGrid}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-            >
-              {SOURCES.map((src) => {
-                const active = src === value;
-                const sc =
-                  src === "Tất cả" ? C.hot : SOURCE_COLORS[src] || C.hot;
-                return (
-                  <TouchableOpacity
-                    key={src}
-                    style={[
-                      styles.sourceChip,
-                      active && { backgroundColor: sc, borderColor: sc },
-                    ]}
-                    onPress={() => {
-                      onChange(src);
-                      setOpen(false);
-                    }}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    testID={"sourceOption-" + src}
-                    accessibilityState={{ selected: active }}
-                  >
-                    {src === "Tất cả" ? (
-                      <Ionicons
-                        name="flash"
-                        size={14}
-                        color={active ? "#FFF" : sc}
-                      />
-                    ) : (
-                      <SourceLogo
-                        source={src}
-                        color={sc}
-                        size={22}
-                        active={active}
-                      />
-                    )}
-                    <Text
-                      style={[
-                        styles.sourceChipText,
-                        active && styles.sourceChipTextActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {src}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </Animated.View>
-        )}
+
+        <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+          <View style={styles.sourceModalOverlay}>
+            <TouchableOpacity style={styles.sourceModalBackdrop} activeOpacity={1} onPress={() => setOpen(false)} accessibilityLabel="Đóng chọn nguồn" />
+            <View style={[styles.sourceModalSheet, anchor && { position: "absolute", top: anchor.y + anchor.h + 6, left: Math.max(8, anchor.x), right: undefined, width: Math.max(220, anchor.w), maxWidth: 360 }]} testID="sourceDropdownPanel">
+              <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={styles.sourceModalGrid} nestedScrollEnabled showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                {SOURCES.map((src) => {
+                  const active = src === value;
+                  const sc = src === "Tất cả" ? C.hot : SOURCE_COLORS[src] || C.hot;
+                  return (
+                    <TouchableOpacity key={src} style={[styles.sourceChip, active && { backgroundColor: sc, borderColor: sc }]}
+                      onPress={() => { onChange(src); setOpen(false); }}
+                      activeOpacity={0.7} accessibilityRole="button" testID={"sourceOption-" + src} accessibilityState={{ selected: active }}>
+                      {src === "Tất cả" ? <Ionicons name="flash" size={14} color={active ? "#FFF" : sc} /> : <SourceLogo source={src} color={sc} size={22} active={active} />}
+                      <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]} numberOfLines={1}>{src}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </View>
     );
   },
@@ -544,8 +525,15 @@ export default function HomeScreen({ navigation }: Props) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    // Hiện cache ngay — không chờ 18 feed xong (reload cảm nhận nhanh).
+    const cached = await readFeedsCache();
+    if (cached.length) setItems(cached);
+    // Refresh nền: cập nhật dần qua partial; spinner tắt khi có partial đầu
+    // tiên HOẶC tối đa 5s (không để spinner treo tới feed chậm nhất 24s).
+    let done = false;
+    const finish = () => { if (!done) { done = true; setRefreshing(false); } };
+    load().then(finish).catch(finish);
+    setTimeout(finish, 5000);
     if (Platform.OS !== "web") {
       const Haptics = require("expo-haptics");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1138,6 +1126,7 @@ export default function HomeScreen({ navigation }: Props) {
           viewabilityConfig={viewabilityConfig}
           onScroll={markInteract}
           scrollEventThrottle={100}
+          nestedScrollEnabled
           ListEmptyComponent={
             <View style={styles.empty} accessibilityLabel="Không có bài báo">
               <View style={styles.emptyIcon}>
@@ -1497,35 +1486,22 @@ const makeStyles = (
       borderWidth: 1,
     },
     dropdownValue: { flex: 1, fontSize: Font.body, fontWeight: "700" },
-    dropdownPanel: {
-      position: "absolute",
-      top: "100%",
-      left: 0,
-      right: 0,
-      marginTop: 6,
+    // Modal drop-down nguồn — ScrollView độc lập cuộn ổn định trên Android/iOS
+    sourceModalOverlay: { flex: 1, backgroundColor: "rgba(15, 23, 42, 0.45)" },
+    sourceModalBackdrop: { ...StyleSheet.absoluteFillObject },
+    sourceModalSheet: {
       backgroundColor: Color.card,
       borderRadius: Radius.lg,
-      overflow: "hidden",
+      paddingVertical: 8,
+      maxWidth: 360,
+      ...Shadow.card,
+      zIndex: 200,
+      elevation: 24,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: Color.border,
-      maxHeight: 340,
-      zIndex: 100,
-      elevation: 24,
-      ...Platform.select({
-        default: { boxShadow: "0 16px 32px rgba(15, 23, 42, 0.22)" },
-      }),
     },
-    dropdownList: { maxHeight: 360 },
-    // Lưới chip 2 cột — flexGrow để hàng cuối tự giãn đều
-    dropdownGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 8,
-      padding: 10,
-    },
+    sourceModalGrid: { padding: 10, gap: 8 },
     sourceChip: {
-      flexGrow: 1,
-      flexBasis: "44%",
       flexDirection: "row",
       alignItems: "center",
       gap: 8,

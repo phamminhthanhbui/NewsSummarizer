@@ -129,6 +129,7 @@ async function sendLlmRequest(
   provider: LLMProvider,
   label: string,
   timeoutMs?: number,
+  onToken?: (partial: string) => void,
 ): Promise<any> {
   const isWeb = Platform.OS === 'web';
 
@@ -181,6 +182,28 @@ async function sendLlmRequest(
         throw new Error(`Dịch vụ AI tạm thời lỗi (${msg})`);
       }
       if (corsProxy) markProxyAlive(base);
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('event-stream')) {
+        // Stream thật sự (web): đọc từng chunk, onToken vẽ dần.
+        if (onToken && res.body && typeof (res.body as any).getReader === 'function') {
+          const content = await readSseContent(res, onToken);
+          return { choices: [{ message: { content } }] };
+        }
+        // Native / không hỗ trợ reader → đọc trọn body text rồi parse SSE 1 lần.
+        const raw = await res.text();
+        const content = raw.split('\n').reduce((acc, line) => {
+          const l = line.trim();
+          if (!l.startsWith('data:')) return acc;
+          const payload = l.slice(5).trim();
+          if (!payload || payload === '[DONE]') return acc;
+          try {
+            const j = JSON.parse(payload);
+            return acc + (j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.text ?? '');
+          } catch { return acc; }
+        }, '');
+        onToken?.(content);
+        return { choices: [{ message: { content } }] };
+      }
       return await res.json();
     } catch (e) {
       if (timer) clearTimeout(timer);
@@ -197,6 +220,40 @@ async function sendLlmRequest(
     }
   }
   throw lastError;
+}
+
+// Đọc SSE (data: {json}\n\n ...) từ response, gom delta.content, gọi onToken
+// cho phần text đã tích lũy (throttle ~100ms) để UI vẽ dần chữ.
+async function readSseContent(res: Response, onToken: (acc: string) => void): Promise<string> {
+  const reader = (res.body as any).getReader() as ReadableStreamDefaultReader<Uint8Array>;
+  const decoder = new TextDecoder();
+  let buf = '';
+  let acc = '';
+  let lastCb = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const j = JSON.parse(payload);
+        const delta = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.text ?? '';
+        if (delta) {
+          acc += delta;
+          const now = Date.now();
+          if (now - lastCb >= 100) { lastCb = now; onToken(acc); }
+        }
+      } catch { /* chunk chẵn lẻ chưa đủ JSON — chờ dòng sau */ }
+    }
+  }
+  onToken(acc); // bản cuối trước khi normalize
+  return acc;
 }
 
 // Gợi ý riêng theo chuyên mục — FeedItem đã mang category từ RSS
@@ -221,6 +278,7 @@ export async function summarizeWithProvider(
   model: string,
   customBaseUrl?: string,
   category?: string,
+  onToken?: (partial: string) => void,
 ): Promise<string> {
   const hint = (category && CATEGORY_PROMPT_HINTS[category]) || '';
   const prompt = `Bạn là biên tập viên tin tức. Tóm tắt bài báo dưới đây bằng tiếng Việt, trả về ĐÚNG cấu trúc sau — không tiêu đề, không giải thích, không markdown:
@@ -242,7 +300,11 @@ ${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ ng
     : articleText;
 
   const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 480, customBaseUrl);
-  const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
+  // Stream chỉ khi UI muốn xem dần; normalize từng partial để không nhả label
+  // ("TL;DR:")/markdown residue lên màn hình giữa chừng.
+  const emit = onToken ? (acc: string) => onToken(normalizeStructuredSummary(acc)) : undefined;
+  if (emit) body.stream = true; // web+server proxy hỗ trợ SSE passthrough
+  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, undefined, emit);
 
   // Cả 2 provider đều OpenAI-compatible → content trong choices[0].message.content
   const raw = data.choices?.[0]?.message?.content || '';
@@ -380,7 +442,7 @@ function buildFallbackCandidates(preferredProvider: LLMProvider, preferredModel?
   return out;
 }
 
-export async function summarizeArticle(articleText: string, category?: string): Promise<string> {
+export async function summarizeArticle(articleText: string, category?: string, onToken?: (partial: string) => void): Promise<string> {
   const storedProvider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || DEFAULT_PROVIDER;
   const provider = getProviderConfig(storedProvider) ? storedProvider : DEFAULT_PROVIDER;
   const storedModel = await AsyncStorage.getItem(KEYS.model);
@@ -396,7 +458,7 @@ export async function summarizeArticle(articleText: string, category?: string): 
     if (!apiKey && cfg.needsKey) continue; // không có key → bỏ qua candidate này
 
     try {
-      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category);
+      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category, onToken);
       // model có thể trả 200 nhưng rỗng (vd reasoning bị tắt thinking) → xem là lỗi, thử model tiếp.
       if (summary && summary.trim().length >= 20) return summary;
       lastError = new Error(`Model ${c.model} (${c.provider}) trả nội dung rỗng`);
@@ -819,11 +881,16 @@ const isCaptionLine = (line: string): boolean => {
     // ("Kalli Nguyễn nhiều lần đăng ảnh hẹn hò cùng Johnny Trí Nguyễn.",
     //  "Một góc làng biển Cảnh Dương"). Ảnh carousel/related bài khác đã bị
     // wrapper-check chặn ở trên nên dòng đứng sát sau ảnh giữ lại gần như chắc
-    // chắn là caption. Guard: câu ngắn trọn vẹn, không phải số/metadata đơn.
-    // KHÔNG yêu cầu dấu câu cuối (Thanh Niên: "Một góc làng biển Cảnh Dương").
+    // chắn là caption. Guard: câu ngắn kết thúc bằng dấu câu, không phải
+    // số/metadata đơn. (KHÔNG bỏ dấu câu — nếu không body text dài lọt làm
+    // caption, gây lỗi "caption không hiển thị" cho ảnh thứ 2 trong gallery.)
     if (l.length < 20 || l.length > 110) return false;
-    if (!/[a-zà-ỹ]/i.test(l)) return false;
+    if (!/[.!…”)\]]$/.test(l) || !/[a-zà-ỹ]/i.test(l)) return false;
     return !/^(?:Ngày|Cập nhật|Cập nhat|Bản dựng|Năm|Tháng|Mùa)/i.test(l);
+  };
+  const isCreditLine = (line: string) => {
+    const l = (line || '').trim();
+    return l.length >= 4 && l.length <= 60 && /^(?:Ảnh|Hình|Photo|ẢNH|HÌNH|Photo|Clip|Video|Nguồn)\s*[:：]/i.test(l);
   };
   const withCaps: ArticleBlock[] = [];
   for (const b of blocks) {
@@ -835,20 +902,22 @@ const isCaptionLine = (line: string): boolean => {
       // Tìm dòng đầu tiên không rỗng sau ảnh → thử làm caption.
       const firstIdx = lines.findIndex((l) => l.trim());
       const first = firstIdx >= 0 ? lines[firstIdx].trim() : '';
-      if (first && isCaptionLine(first)) {
-        prev.caption = decodeHtml(first.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
-        lines.splice(firstIdx, 1);
-        const rest = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-        if (rest) { b.text = rest; withCaps.push(b); }
-        continue;
-      }
-      // Dòng đầu không phải caption → thử dòng thứ hai
-      // (Thanh Niên: dòng 1 = "Một góc làng biển Cảnh Dương", dòng 2 = "ẢNH: NGUYỄN PHÚC").
       const secondIdx = firstIdx >= 0 ? lines.findIndex((l, i) => i > firstIdx && l.trim()) : -1;
       const second = secondIdx >= 0 ? lines[secondIdx].trim() : '';
-      if (second && isCaptionLine(second)) {
-        prev.caption = decodeHtml(second.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
-        lines.splice(secondIdx, 1);
+      // Thanh Niên để caption TRẦN không dấu câu ("Một góc làng biển Cảnh Dương")
+      // rồi dòng kế tiếp là credit ngắn ("Ảnh: NGUYỄN PHÚC") → nhận dòng 1.
+      // Ngược lại body text dài lọt sau ảnh KHÔNG được tính caption.
+      const bareCaption = !isCaptionLine(first) && !isCreditLine(first)
+        && first.length >= 20 && first.length <= 110
+        && /[a-zà-ỹ]/i.test(first)
+        && !/^(?:Ngày|Cập nhật|Cập nhat|Bản dựng|Năm|Tháng|Mùa|\d)/i.test(first)
+        && !/https?:\/\//i.test(first)
+        && isCreditLine(second);
+      const capLine = isCaptionLine(first) ? first : bareCaption ? first : isCaptionLine(second) ? second : '';
+      if (capLine) {
+        prev.caption = decodeHtml(capLine.replace(/^[\s*_>#-]+/, '').replace(/[\s*_]+$/, '').trim());
+        const rmIdx = capLine === first ? firstIdx : secondIdx;
+        lines.splice(rmIdx, 1);
         const rest = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
         if (rest) { b.text = rest; withCaps.push(b); }
         continue;
@@ -1038,22 +1107,37 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
         }
       }
       const rawAlt = (m[0].match(/\balt=["']([^"']*)["']/i) || [])[1];
-      // Alt placeholder ("Image 5: filename.jpg") = thumbnail carousel/UI → bỏ
-      // ảnh; caption thật thì lấy làm ghi chú.
-      if (rawAlt && (AD_ALT_RE.test(rawAlt.trim()) || AUTO_ALT_RE.test(rawAlt.trim()))) continue;
-      let cap = altToCaption(rawAlt);
-      // Alt rỗng → tìm <figcaption> của <figure> chứa ảnh (báo VN hay dùng):
-      // chỉ nhận caption nằm TRƯỚC <img> kế tiếp để không lấy nhầm caption
-      // của ảnh khác trong gallery.
-      if (!cap) {
+      // Ảnh quảng cáo/banner → loại hẳn.
+      if (rawAlt && AD_ALT_RE.test(rawAlt.trim())) continue;
+      // Caption: ƯU TIÊN <figcaption> của <figure> chứa ảnh (canonical trong CMS
+      // hiện đại — alt nhiều khi chỉ là tên riêng trần, vd "Châu Bùi" trong khi
+      // figcaption là "Châu Bùi và bố tại bản Mường"). Alt placeholder
+      // ("Image 5", "Ảnh 1") chỉ bỏ nếu KHÔNG có figcaption — gallery VnE/ANTĐ
+      // vẫn giữ ảnh vì caption thật nằm trong figure.
+      let cap: string | null = null;
+      {
+        // Tìm <figcaption> của figure chứa ảnh: nếu ảnh nằm trong <figure> thì
+        // quét tới </figure> (không cắt ở <img> kế tiếp — ảnh noscript duplicate
+        // cùng figure sẽ che mất figcaption). Ảnh trần (không figure) chỉ lấy
+        // caption đứng TRƯỚC <img> kế tiếp — không nuốt caption ảnh khác.
+        const figEnd = region.indexOf('</figure>', m.index);
         const nextImg = region.indexOf('<img', m.index + 1);
-        const seg = region.slice(m.index, nextImg >= 0 ? Math.min(nextImg, m.index + 900) : m.index + 900);
+        const limit = figEnd >= 0
+          ? Math.min(figEnd + 15, m.index + 1500)
+          : Math.min(nextImg >= 0 ? nextImg : m.index + 900, m.index + 900);
+        const seg = region.slice(m.index, Math.max(m.index, limit));
         const fc = seg.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i);
         if (fc) {
           const text = decodeHtml(fc[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
           if (text.length >= 4 && text.length <= 200 && !AD_ALT_RE.test(text)) cap = text;
         }
       }
+      if (!cap && rawAlt && !AUTO_ALT_RE.test(rawAlt.trim())) {
+        cap = altToCaption(rawAlt) || null;
+      }
+      // Không có caption mà alt cũng là placeholder thuần ("Image 5") → ảnh UI/
+      // carousel, không phải ảnh bài viết → bỏ.
+      if (!cap && rawAlt && AUTO_ALT_RE.test(rawAlt.trim())) continue;
       push(m.index, { type: 'image', url: u, ...(cap ? { caption: cap } : {}) });
     }
   }
@@ -1206,11 +1290,16 @@ function preSummarize(item: FeedItem, blocks: ArticleBlock[]): void {
 export async function fetchArticleContent(url: string): Promise<ArticleBlock[]> {
   const hit = contentCache.get(url);
   if (hit) return hit;
-  prefetchArticleContent(url);
-  const cached = contentCache.get(url);
-  if (cached) return cached;
-  // Content cache trống (vd E2E đã tắt prefetch) → load trực tiếp, không cache.
-  return loadArticleContent(url);
+  // Cache result của chính lần fetch này (kể cả E2E — prefetch bị guard bỏ qua
+  // ở Home, nhưng mở bài phải được cache để "Quay lại → mở lại" không gọi Jina
+  // lần hai). Fail → tự xóa để lần sau retry.
+  if (contentCache.size >= CONTENT_CACHE_MAX) {
+    const oldest = contentCache.keys().next().value as string | undefined;
+    if (oldest) contentCache.delete(oldest);
+  }
+  const p = loadArticleContent(url).catch((e) => { contentCache.delete(url); throw e; });
+  contentCache.set(url, p);
+  return p;
 }
 
 async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
@@ -1266,6 +1355,16 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
       if (!mb.url || existingBase.has(baseUrlKey(mb.url))) continue;
       existingBase.add(baseUrlKey(mb.url));
       blocks.push(mb);
+    }
+  }
+// BACKFILL caption: nhiều báo (ANTĐ trang gallery, VietnamNet…) để Jina gộp
+  // alt về "Image N" trần — caption THẬT chỉ còn trong <figcaption> của HTML.
+  // Khớp theo FILE ảnh (sameImageFile) để kéo caption vào ảnh Jina chưa có caption.
+  if (mediaHtml.length) {
+    for (const b of blocks) {
+      if (b.type !== 'image' || !b.url) continue;
+      const src = mediaHtml.find((mb) => mb.url && mb.caption && sameImageFile(mb.url, b.url!));
+      if (src?.caption) b.caption = src.caption;
     }
   }
 

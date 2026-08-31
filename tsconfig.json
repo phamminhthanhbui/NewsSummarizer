@@ -10,6 +10,7 @@
     "jest.config.js",
     "android",
     "ios",
-    "src/services/wordMap.test.ts"
+    "src/services/wordMap.test.ts",
+    "src/services/ttsChunks.test.ts"
   ]
 }

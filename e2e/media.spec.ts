@@ -22,7 +22,7 @@ function mockJina(page: Page, md: string) {
   );
 }
 
-const P = (text: string, bg: string) => `https://placehold.co/600x400/${bg}/FFFFFF.jpg?text=${text}`;
+const P = (text: string, bg: string, fg?: string) => `https://placehold.co/600x400/${bg}/${fg || 'FFFFFF'}.jpg?text=${text}`;
 
 test.beforeEach(async ({ page }) => {
   await mockNetwork(page);
@@ -131,8 +131,7 @@ test.describe('Đường HTML: lazyload + figcaption + related <a>', () => {
     await mockJina(page, textOnly);
 
     const articleHtml = `<html><body><div class="detail-page"><div class="detail-content">
-<figure><img class="lazyload" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" data-src="${P('LazyReal', '123456')}" alt="Châu Bùi - Ảnh 1."><noscript><img src="${P('LazyReal', '123456')}" alt="Châu Bùi"></noscript></figure>
-<figcaption>Châu Bùi và bố tại bản Mường</figcaption>
+<figure><img class="lazyload" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" data-src="${P('LazyReal', '123456')}" alt="Châu Bùi - Ảnh 1."><noscript><img src="${P('LazyReal', '123456')}" alt="Châu Bùi"></noscript><figcaption>Châu Bùi và bố tại bản Mường</figcaption></figure>
 <p>Đoạn văn trong bài sau ảnh nội dung, có đủ độ dài để vùng nội dung được nhận diện khi quét media.</p>
 <a class="cms-link" href="https://example.com/other-post-123.tpo"><figure><img class="lazyload" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" data-src="${P('RelatedLazy', '999999')}" alt="Tin khác"><noscript><img src="${P('RelatedLazy', '999999')}" alt="Tin khác"></noscript></figure></a>
 </div></div></body></html>`;
@@ -149,6 +148,55 @@ test.describe('Đường HTML: lazyload + figcaption + related <a>', () => {
     await expect(page.locator('img[src*="LazyReal"]').first()).toBeVisible();
     await expect(page.getByText('Châu Bùi và bố tại bản Mường')).toBeVisible();
     await expect(page.locator('img[src*="RelatedLazy"]')).toHaveCount(0);
+  });
+
+  test('backfill: Jina gộp alt về "Image N" → caption kéo từ figcaption HTML cùng file', async ({ page }) => {
+    // Trang gallery ANTĐ/VnE: markdown chỉ có ![Image 1](a.jpg) ![Image 2](b.jpg)
+    // (alt placeholder, không dòng caption sau ảnh) → Jina có ≥2 ảnh nên KHÔNG
+    // merge media HTML; caption thật chỉ còn trong <figcaption> → backfill khớp
+    // theo file phải gắn được caption vào 2 ảnh Jina.
+    const imgA = P('EaSuck99', '444444', '111111');
+    const imgB = P('ObamaVN98', '555555', '222222');
+    await mockJina(page, `![Image 1](${imgA})
+
+![Image 2](${imgB})
+
+Nội dung bài viết kiểu trang gallery, hai ảnh đặt cạnh nhau không kèm dòng chú
+thích nào sau ảnh trong markdown — caption nằm trong HTML bài gốc.`);
+    const html = `<html><body><div class="detail-content">
+<figure><img src="${imgA}" alt=""><figcaption>Đại sứ Mỹ Kirby ở EA Suck, Đắk Lắk (Ảnh: TT)</figcaption></figure>
+<p>Đoạn nội dung giữa hai ảnh giúp vùng nội dung được nhận diện đúng khi quét caption.</p>
+<figure><img src="${imgB}" alt=""><figcaption>Obama trong chuyến thăm Việt Nam (Ảnh: FBNV)</figcaption></figure>
+</div></body></html>`;
+    await page.route('**/api/fetch**', async (route) => {
+      const decoded = decodeURIComponent(route.request().url());
+      if (decoded.includes(FIRST.link)) {
+        await route.fulfill({ status: 200, contentType: 'text/html', body: html });
+        return;
+      }
+      await route.fallback();
+    });
+    // Summary dài nhiều đoạn để 2 ảnh gallery đều có chỗ đan xen (ArticleScreen
+    // bỏ ảnh thừa khi summary chỉ 1 đoạn ngắn).
+    await page.route('**/api/llm', async (route) => {
+      const body = route.request().postData() || '';
+      if (body.includes('chú thích ảnh')) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          choices: [{
+            message: { content: 'Đoạn mở đầu nêu bối cảnh sự kiện và nhân vật chính của bài báo này.\n\nÝ chính thứ hai phân tích diễn biến then chốt với số liệu cụ thể từ cơ quan chức năng.\n\nÝ chính thứ ba dẫn phát biểu của chuyên gia về tác động dài hạn đối với thị trường.\n\nĐoạn kết tóm lại ý nghĩa sự kiện và hướng theo dõi trong thời gian tới.' },
+          }],
+        }),
+      });
+    });
+    page.on('console', (m) => { if (m.text().includes('BF ')) console.log('BROWSER:', m.text()); });
+    await openFirstArticle(page);
+    await expect(page.getByText('Đại sứ Mỹ Kirby ở EA Suck, Đắk Lắk (Ảnh: TT)')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Obama trong chuyến thăm Việt Nam (Ảnh: FBNV)')).toBeVisible({ timeout: 15_000 });
   });
 });
 

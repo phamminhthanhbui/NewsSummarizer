@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Platform,
   Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,12 +15,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_BAI_KEY, DEFAULT_NVIDIA_KEY, DEFAULT_PROVIDER } from '../services/summarize';
 import { KEYS } from '../services/storage';
-import { speakSystem, stopSystem, resolveWebVoice, markWebVoiceHung, isWebVoiceHung } from '../services/edgeTts';
+import { speakSystem, stopSystem, clearVoiceHung } from '../services/edgeTts';
 import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
 import { useAlert } from '../components/AppAlert';
 import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
-
-const isWeb = Platform.OS === 'web';
 
 const PROVIDER_ICONS: Record<LLMProvider, string> = {
   bai: 'logo-github',
@@ -64,7 +61,6 @@ export default function SettingsScreen() {
   const [notifTimes, setNotifTimes] = useState<string[]>([]);
   const [notifCustom, setNotifCustom] = useState('');
   const [notifSending, setNotifSending] = useState(false);
-  const webUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const cfg = PROVIDERS.find((p) => p.id === provider);
   const models = getModelsForProvider(provider);
@@ -82,6 +78,7 @@ export default function SettingsScreen() {
     AsyncStorage.getItem(KEYS.model).then((val) => val && setModel(val));
     AsyncStorage.getItem(KEYS.pitch).then((val) => setPitch(parseFloat(val || '') || 1.0));
     AsyncStorage.getItem(KEYS.rate).then((val) => setRate(parseFloat(val || '') || 1.0));
+
   }, []);
 
   // Load trạng thái thông báo
@@ -125,11 +122,7 @@ export default function SettingsScreen() {
   };
 
   const stopAudio = () => {
-    // Dừng cả 2 đường: Web Speech (web) + expo-speech (native)
-    if (isWeb) {
-      speechSynthesis.cancel();
-      webUtteranceRef.current = null;
-    }
+    // expo-speech xử lý cả web lẫn native
     stopSystem();
   };
   const previewVoice = async () => {
@@ -140,52 +133,10 @@ export default function SettingsScreen() {
     }
     setPreviewing(true);
     try {
-      const text = 'Xin chào, đây là giọng đọc tin tức tiếng Việt.';
-      if (!isWeb) {
-        // Native: expo-speech (thư viện RN, offline, không cần proxy/mạng)
-        await speakSystem(text, { pitch, rate });
-        setPreviewing(false);
-        return;
-      }
-      // Web: browser có giọng vi và chưa từng bị treo → Web Speech (offline, tức thì)
-      const matched = isWebVoiceHung() ? null : await resolveWebVoice();
-      if (!matched) {
-        markWebVoiceHung();
-        throw new Error('Trình duyệt không có giọng đọc tiếng Việt');
-      }
-      const started = await new Promise<boolean>((resolve) => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'vi-VN';
-        utterance.rate = rate;
-        utterance.pitch = pitch;
-        utterance.voice = matched;
-        let decided = false; // guard đã quyết định chưa (started | timeout)
-        const guard = setTimeout(() => {
-          if (!decided) { decided = true; try { speechSynthesis.cancel(); } catch {} resolve(false); }
-        }, 1200);
-        const cleanup = () => { setPreviewing(false); webUtteranceRef.current = null; };
-        utterance.onstart = () => { if (!decided) { decided = true; clearTimeout(guard); resolve(true); } };
-        utterance.onend = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(true); } };
-        utterance.onerror = () => { clearTimeout(guard); cleanup(); if (!decided) { decided = true; resolve(false); } };
-        webUtteranceRef.current = utterance;
-        speechSynthesis.cancel();
-        setTimeout(() => {
-          if (decided) return;
-          try { speechSynthesis.speak(utterance); }
-          catch { if (!decided) { decided = true; clearTimeout(guard); resolve(false); } }
-        }, 120);
-      });
-      if (started) {
-        setTimeout(() => {
-          if (webUtteranceRef.current) {
-            stopAudio();
-            setPreviewing(false);
-          }
-        }, 15000);
-        return;
-      }
-      markWebVoiceHung();
-      throw new Error('Không nghe được giọng Việt trên web');
+      clearVoiceHung(); // mark treo cũ có thể oan — cho thử lại ngay
+      // expo-speech: native đọc offline; web bọc sẵn Web Speech API của browser
+      await speakSystem('Xin chào, đây là giọng đọc tin tức tiếng Việt.', { pitch, rate });
+      setPreviewing(false);
     } catch (e) {
       showAlert({ type: 'error', message: 'Lỗi giọng đọc: ' + (e instanceof Error ? e.message : 'Unknown') });
       setPreviewing(false);
@@ -436,7 +387,7 @@ export default function SettingsScreen() {
               <Ionicons name={previewing ? 'stop-circle' : 'play-circle'} size={18} color="#FFF" />
               <Text style={styles.previewBtnText}>{previewing ? 'Đang phát...' : 'Nghe thử giọng đọc'}</Text>
             </TouchableOpacity>
-            <Text style={styles.fieldHint}>Ưu tiên giọng máy (đọc tức thì); giọng máy lỗi tự chuyển Edge TTS (Microsoft, cần internet).</Text>
+            <Text style={styles.fieldHint}>Điện thoại đọc offline bằng giọng máy; trên web dùng giọng tiếng Việt của trình duyệt.</Text>
           </Card>
         </SectionHeader>
 
