@@ -17,7 +17,8 @@ test.describe('Dropdown nguồn tin (logo + lọc)', () => {
     await page.getByTestId('sourceOption-Dân Trí').click({ force: true });
     // đang lọc Dân Trí → empty, nhưng category Công nghệ reset source về Tất cả
     await page.getByRole('button', { name: 'Công nghệ' }).click();
-    await expect(page.getByText('Trí tuệ nhân tạo thay đổi ngành giáo dục')).toBeVisible();
+    // .first(): mock dồn nhiều feed về cùng item nên tiêu đề bị trùng giữa các card
+    await expect(page.getByText('Trí tuệ nhân tạo thay đổi ngành giáo dục').first()).toBeVisible();
   });
 });
 
@@ -35,12 +36,13 @@ test.describe('Ticker NÓNG', () => {
 
 test.describe('Card gọn TIN MỚI NHẤT', () => {
   test('bài không nổi bật hiện dạng card gọn trong danh sách', async ({ page }) => {
-    await expect(page.getByText('Đội tuyển Việt Nam thắng đậm trận giao hữu')).toBeVisible();
-    await expect(page.getByText('Ca sĩ trẻ ra mắt album đầu tay')).toBeVisible();
+    // .first(): tiêu đề trùng giữa các card (mock per-feed cùng item)
+    await expect(page.getByText('Đội tuyển Việt Nam thắng đậm trận giao hữu').first()).toBeVisible();
+    await expect(page.getByText('Ca sĩ trẻ ra mắt album đầu tay').first()).toBeVisible();
   });
 
   test('bấm card gọn mở bài', async ({ page }) => {
-    await page.getByText('Quốc hội thảo luận dự luật ngân sách').click();
+    await page.getByText('Quốc hội thảo luận dự luật ngân sách').first().click();
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
   });
 });
@@ -50,7 +52,9 @@ test.describe('Mục Thông báo trong Settings', () => {
     await gotoTab(page, 'Cài đặt');
     await expect(page.getByText('Thông báo', { exact: true })).toBeVisible();
     await expect(page.getByText('Bản tin hằng ngày')).toBeVisible();
-    await expect(page.getByTestId('notif-switch')).toBeDisabled();
+    // RN-web Switch: testID nằm trên <div> wrapper, input[disabled] nằm BÊN TRONG
+    // → phải scope xuống input con, không thì div luôn "enabled"
+    await expect(page.getByTestId('notif-switch').locator('input')).toBeDisabled();
     await expect(page.getByText('Thông báo không hỗ trợ trên web và trong Expo Go — dùng bản APK cài trực tiếp để bật.')).toBeVisible();
   });
 

@@ -1,4 +1,4 @@
-// E2E: Performance — verify fast paths for reload, videos, and article summary/media.
+// E2E: Performance — verify fast paths for reload and article summary/media.
 // Các test này kiểm tra BEHAVIOR (fast path được dùng), không đo thời gian thực.
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -37,40 +37,6 @@ test.describe('Reload nhanh (cache fresh)', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await expect(page.getByText(FIRST.title).first()).toBeVisible();
-  });
-});
-
-// ════════════════════════════════════════════════════════════════════
-// Issue 2: Video nổi bật xuất hiện sau 5-10s — proxy trả partial nhanh
-// ════════════════════════════════════════════════════════════════════
-test.describe('Video nổi bật xuất hiện kịp thời', () => {
-  test('video nổi bật hiện sau khi feed load xong (trong khung thời gian hợp lý)', async ({ page }) => {
-    // Mock video crawl trả kết quả sau 2s delay (mô phỏng crawl thực tế)
-    await page.route('**/api/videos', async (route) => {
-      await new Promise((r) => setTimeout(r, 2000));
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          videos: [
-            {
-              title: 'Video hiện trường vụ cháy',
-              link: 'https://example.com/video-1',
-              thumb: 'https://placehold.co/320x180/111111/FFFFFF.jpg?text=Video+1',
-              duration: '02:15',
-              pubDate: new Date().toISOString(),
-              zone: 'Video nổi bật',
-              source: 'VNExpress',
-              stream: 'https://example.com/stream/video-1/master.m3u8',
-            },
-          ],
-        }),
-      });
-    });
-    await page.goto('/');
-    await waitForFeedLoaded(page);
-    // Video phải hiện trong vòng 10s (feed + video crawl delay)
-    await expect(page.getByText('Video hiện trường vụ cháy')).toBeVisible({ timeout: 15_000 });
   });
 });
 

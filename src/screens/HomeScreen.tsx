@@ -36,18 +36,16 @@ import {
   SOURCE_COLORS,
 } from "../services/feeds";
 import { useAlert } from "../components/AppAlert";
-import { fetchVideos } from "../services/videos";
-import { prefetchArticleContent } from "../services/summarize";
+import { prefetchArticleContent, isVideoPageUrl } from "../services/summarize";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KEYS } from "../services/storage";
-import type { FeedItem, VideoItem } from "../types";
+import type { FeedItem } from "../types";
 import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
 import { timeAgo } from "../utils/timeAgo";
 import ArticleCardCompact from "../components/ArticleCardCompact";
 import FeaturedCard from "../components/FeaturedCard";
 import SkeletonCard from "../components/SkeletonCard";
-import VideoGrid from "../components/VideoGrid";
-import VideoModal from "../components/VideoModal";
+import SourceLogo from "../components/SourceLogo";
 
 type Props = { navigation: NativeStackNavigationProp<any> };
 
@@ -59,7 +57,6 @@ const getHeroWidth = (insets: { left: number; right: number }) =>
   Dimensions.get("window").width - insets.left - insets.right;
 
 const CATEGORIES = ["Tất cả", ...new Set(FEEDS.map((f) => f.category))];
-const SOURCES = ["Tất cả", ...new Set(FEEDS.map((f) => f.name))];
 
 const CATEGORY_COLORS: Record<string, string> = {
   "Tất cả": "#FB512A",
@@ -71,29 +68,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Sức khỏe": "#2563EB",
 };
 
-// Logo thương hiệu thật của từng tờ báo (assets/sources/*.png). Nếu thiếu ảnh
-// cho nguồn nào → fallback về chữ viết tắt (SOURCE_ABBR).
-const SOURCE_LOGOS: Record<string, number> = {
-  VNExpress: require("../../assets/sources/vnexpress.png"),
-  "Tuổi Trẻ": require("../../assets/sources/tuoitre.png"),
-  "Thanh Niên": require("../../assets/sources/thanhnien.png"),
-  VietNamNet: require("../../assets/sources/vietnamnet.png"),
-  "Dân Trí": require("../../assets/sources/dantri.png"),
-  "Người Lao Động": require("../../assets/sources/nld.png"),
-  "Tiền Phong": require("../../assets/sources/tienphong.png"),
-  "Sài Gòn Giải Phóng": require("../../assets/sources/sggp.png"),
-  CAND: require("../../assets/sources/cand.png"),
-  "An ninh Thủ đô": require("../../assets/sources/anninhthudo.png"),
-  "Báo Chính phủ": require("../../assets/sources/baochinhphu.png"),
-  "Báo Giao Thông": require("../../assets/sources/baogiaothong.png"),
-  GenK: require("../../assets/sources/genk.png"),
-  Cafebiz: require("../../assets/sources/cafebiz.png"),
-  BongDaPlus: require("../../assets/sources/bongdaplus.png"),
-  Kenh14: require("../../assets/sources/kenh14.png"),
-  HelloBacSi: require("../../assets/sources/hellobacsi.png"),
-  "Sức khỏe & Đời sống": require("../../assets/sources/suckhoedoisong.png"),
-  Soha: require("../../assets/sources/soha.png"),
-};
 
 const CATEGORY_ICONS: Record<
   string,
@@ -174,98 +148,6 @@ const CategoryChip = React.memo(
   },
 );
 
-/* ─── Source logo (monogram tile theo màu thương hiệu) ─── */
-const SOURCE_ABBR: Record<string, string> = {
-  "Tất cả": "TC",
-  VNExpress: "VNE",
-  "Tuổi Trẻ": "TT",
-  "Thanh Niên": "TN",
-  VietNamNet: "VNN",
-  "Dân Trí": "DT",
-  "Người Lao Động": "NLD",
-  "Tiền Phong": "TP",
-  "Sài Gòn Giải Phóng": "SG",
-  CAND: "CA",
-  "An ninh Thủ đô": "AN",
-  "Sức khỏe & Đời sống": "SK",
-  "Báo Chính phủ": "CP",
-  "Báo Giao Thông": "GT",
-  GenK: "GK",
-  Cafebiz: "CF",
-  BongDaPlus: "BD",
-  Kenh14: "K14",
-  HelloBacSi: "HB",
-  Soha: "SH",
-};
-
-// active = item đang được chọn (nền brand đậm) → tile chuyển nền trắng để tương phản
-const SourceLogo = React.memo(
-  ({
-    source,
-    color,
-    size = 24,
-    active = false,
-  }: {
-    source: string;
-    color: string;
-    size?: number;
-    active?: boolean;
-  }) => {
-    const logo = SOURCE_LOGOS[source];
-    if (logo) {
-      return (
-        <View
-          style={{
-            width: size,
-            height: size,
-            borderRadius: Math.round(size * 0.25),
-            backgroundColor: active ? "#FFFFFF" : "#FFF",
-            borderWidth: 1,
-            borderColor: active ? "rgba(255,255,255,0.4)" : color + "3D",
-            alignItems: "center",
-            justifyContent: "center",
-            overflow: "hidden",
-          }}
-        >
-          <Image
-            source={logo}
-            style={{ width: size - 4, height: size - 4, resizeMode: "contain" }}
-          />
-        </View>
-      );
-    }
-    const abbr = SOURCE_ABBR[source] || source.slice(0, 2).toUpperCase();
-    return (
-      <View
-        style={{
-          width: size,
-          height: size,
-          borderRadius: Math.round(size * 0.32),
-          backgroundColor: active ? "#FFFFFF" : color + "22",
-          borderWidth: 1,
-          borderColor: active ? "rgba(255,255,255,0.4)" : color + "3D",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Text
-          style={{
-            color,
-            fontSize: Math.round(size * 0.42),
-            fontWeight: "800",
-            letterSpacing: 0.2,
-            lineHeight: Math.round(size * 0.42) + 2,
-          }}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-        >
-          {abbr}
-        </Text>
-      </View>
-    );
-  },
-);
-
 /* ─── Source dropdown ─── */
 
 const SourceDropdown = React.memo(
@@ -273,10 +155,12 @@ const SourceDropdown = React.memo(
     value,
     onChange,
     styles,
+    options,
   }: {
     value: string;
     onChange: (s: string) => void;
     styles: ReturnType<typeof makeStyles>;
+    options: string[];
   }) => {
     const C = useTheme();
     const [open, setOpen] = useState(false);
@@ -326,7 +210,7 @@ const SourceDropdown = React.memo(
             <TouchableOpacity style={styles.sourceModalBackdrop} activeOpacity={1} onPress={() => setOpen(false)} accessibilityLabel="Đóng chọn nguồn" />
             <View style={[styles.sourceModalSheet, anchor && { position: "absolute", top: anchor.y + anchor.h + 6, left: Math.max(8, anchor.x), right: undefined, width: Math.max(220, anchor.w), maxWidth: 360 }]} testID="sourceDropdownPanel">
               <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={styles.sourceModalGrid} nestedScrollEnabled showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                {SOURCES.map((src) => {
+                {options.map((src) => {
                   const active = src === value;
                   const sc = src === "Tất cả" ? C.hot : SOURCE_COLORS[src] || C.hot;
                   return (
@@ -364,23 +248,31 @@ const TrendSmallCard = React.memo(
     const C = useTheme();
     const t = timeAgo(item.pubDate);
     const srcColor = SOURCE_COLORS[item.source] || C.hot;
+    const isVideo = isVideoPageUrl(item.link);
     return (
       <TouchableOpacity
         style={styles.trendSmallCard}
         onPress={() => onPress(item)}
         activeOpacity={0.85}
       >
-        {item.image ? (
-          <Image
-            source={{ uri: item.image }}
-            style={styles.trendSmallImg}
-            resizeMode="cover"
-          />
-        ) : (
-          <View style={[styles.trendSmallImg, styles.trendSmallImgPh]}>
-            <Ionicons name="image-outline" size={20} color={C.textMuted} />
-          </View>
-        )}
+        <View style={styles.trendSmallImgWrap}>
+          {item.image ? (
+            <Image
+              source={{ uri: item.image }}
+              style={styles.trendSmallImg}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={[styles.trendSmallImg, styles.trendSmallImgPh]}>
+              <Ionicons name="image-outline" size={20} color={C.textMuted} />
+            </View>
+          )}
+          {isVideo ? (
+            <View style={styles.videoBadge} accessibilityLabel="Video">
+              <Ionicons name="play" size={9} color="#FFF" />
+            </View>
+          ) : null}
+        </View>
         <View style={styles.trendSmallBody}>
           <View style={styles.trendSmallMeta}>
             <View style={[styles.trendSmallSrcBadge, { backgroundColor: srcColor + "1A" }]}>
@@ -407,7 +299,6 @@ export default function HomeScreen({ navigation }: Props) {
   const C = useTheme();
   const styles = useMemo(() => makeStyles(C, insets), [C, insets]);
   const [items, setItems] = useState<FeedItem[]>([]);
-  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("Tất cả");
@@ -419,6 +310,11 @@ export default function HomeScreen({ navigation }: Props) {
   const searchInputRef = useRef<TextInput>(null);
   const searchTextRef = useRef("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiUnlockedRef = useRef(false);
+  // Đọc cờ unlock 1 lần khi mount — ref sync nên toggle không cần await
+  useEffect(() => {
+    AsyncStorage.getItem(KEYS.aiUnlocked).then((v) => { aiUnlockedRef.current = v === '1'; });
+  }, []);
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
@@ -429,7 +325,6 @@ export default function HomeScreen({ navigation }: Props) {
   useEffect(
     () => () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-      if (idleRefreshRef.current) clearTimeout(idleRefreshRef.current);
     },
     [],
   );
@@ -439,26 +334,27 @@ export default function HomeScreen({ navigation }: Props) {
       setItems(cached);
       setLoading(false); // có cache → hiện ngay (stale-while-revalidate), fetch mới chạy nền
     }
-    // Video tải nền riêng — không chặn nội dung chính. Có cache hiện ngay,
-    // crawl mới xong thì cập nhật qua onFresh.
-    fetchVideos(setVideos)
-      .then(setVideos)
-      .catch(() => {});
-    // Cache vừa ghi (< 1 phút) → reload KHÔNG fetch lại 18 feed (reload nhanh,
-    // không cạnh tranh mạng với video crawl). Cache cũ/trống mới fetch mạng.
+    // Cache vừa ghi (< 1 phút) → KHÔNG fetch lại 44 feed
     if (await isFeedsCacheFresh()) {
       if (!cached.length) setItems([]);
       return;
     }
-    // Feed xong đến đâu hiện đến đó, không chờ feed chậm nhất
-    let shown = cached.length > 0;
-    const data = await fetchAllFeeds((partial) => {
-      if (!shown && partial.length) {
-        shown = true;
-        setLoading(false);
-      }
-      setItems(partial);
-    });
+    if (!cached.length) {
+      // COLD: màn hình đang skeleton → stream partial, hiện sớm từng phần
+      const data = await fetchAllFeeds((partial) => {
+        if (partial.length) {
+          setLoading(false);
+        }
+        setItems(partial);
+      });
+      if (data.length) setItems(data);
+      return;
+    }
+    // WARM: nội dung cache đang hiện → fetch nền IM LẶNG, chỉ setItems MỘT
+    // lần khi fetch xong. Trước đây mỗi partial (350ms) đều setItems → content
+    // tự xáo/tái render liên tục ~8s (nhìn như app "tự reload") và tap bị nuốt
+    // tới khi load xong.
+    const data = await fetchAllFeeds();
     if (data.length) setItems(data);
   }, []);
 
@@ -469,59 +365,16 @@ export default function HomeScreen({ navigation }: Props) {
         toValue: 1,
         duration: 350,
         easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
       Animated.timing(categoryAnim, {
         toValue: 1,
         duration: 400,
         easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
     ]).start();
   }, [load]);
-
-  // ── Tương tác người dùng ──
-  // Nếu user đang scroll/lướt/chạm thì TẠM HOÃN auto-refresh data (video nổi bật,
-  // feed) để không giật/đổi content giữa lúc đang dùng. Hết tương tác ~10s thì
-  // interval chạy lại bình thường (vẫn giữ cơ chế fetch vài phút theo xu hướng).
-  const IDLE_THRESHOLD_MS = 10 * 1000;
-  const lastInteractRef = useRef(0);
-  const idleRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scheduleIdleRefresh = useCallback(() => {
-    if (idleRefreshRef.current) clearTimeout(idleRefreshRef.current);
-    idleRefreshRef.current = setTimeout(() => {
-      fetchVideos(setVideos).catch(() => {});
-    }, IDLE_THRESHOLD_MS);
-  }, []);
-  const markInteract = useCallback(() => {
-    lastInteractRef.current = Date.now();
-    // user vừa thôi tương tác 10s → fetch video mới ngay (nước đến chân mới nhảy)
-    scheduleIdleRefresh();
-  }, [scheduleIdleRefresh]);
-  const shouldSkipAutoRefresh = useCallback(
-    () => Date.now() - lastInteractRef.current < IDLE_THRESHOLD_MS,
-    [],
-  );
-
-  // Video nổi bật theo xu hướng mới nhất — tự refresh mỗi 3 phút khi ở Home,
-  // nhưng bỏ qua nếu user đang tương tác.
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (shouldSkipAutoRefresh()) return;
-      fetchVideos(setVideos).catch(() => {});
-    }, 3 * 60 * 1000);
-    return () => clearInterval(t);
-  }, [shouldSkipAutoRefresh]);
-
-  // Mở app / quay lại từ nền → crawl video mới ngay (featured xoay vòng theo bucket)
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        fetchVideos(setVideos).catch(() => {});
-      }
-    });
-    return () => sub.remove();
-  }, []);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -548,9 +401,15 @@ export default function HomeScreen({ navigation }: Props) {
     [navigation],
   );
 
-  const [videoModal, setVideoModal] = useState<VideoItem | null>(null);
-  const [videoExpanded, setVideoExpanded] = useState(false);
-  const goVideo = useCallback((v: VideoItem) => setVideoModal(v), []);
+
+  // Dropdown nguồn build từ item THẬT đang có (không từ FEEDS tĩnh) — nguồn
+  // nào feed chết/hết bài sẽ tự biến mất, feed sống lại thì tự hiện lại.
+  // Luôn giữ selectedSource trong list dù đang rỗng (tránh mất lựa chọn khi reload).
+  const sources = useMemo(() => {
+    const withItems = new Set(items.map((i) => i.source).filter(Boolean));
+    if (selectedSource !== "Tất cả") withItems.add(selectedSource);
+    return ["Tất cả", ...withItems];
+  }, [items, selectedSource]);
 
   const filtered = useMemo(() => {
     let result = items;
@@ -602,8 +461,10 @@ export default function HomeScreen({ navigation }: Props) {
   const heroAutoRef = useRef(false);
   const lastManualRef = useRef(0);
 
+  // Đợi load xong mới tự chạy: interval 45ms/4s chạy giữa bão parse lúc cold-start
+  // tranh JS thread với tap (nguyên nhân khựng cảm nhận thêm).
   useEffect(() => {
-    if (heroes.length < 2 || reduceMotion || E2E) return;
+    if (loading || heroes.length < 2 || reduceMotion || E2E) return;
     const heroW = getHeroWidth(insets);
     const t = setInterval(() => {
       if (Date.now() - lastManualRef.current < 4000) return;
@@ -620,7 +481,7 @@ export default function HomeScreen({ navigation }: Props) {
       }, 600);
     }, 4000);
     return () => clearInterval(t);
-  }, [heroes.length, reduceMotion, insets]);
+  }, [loading, heroes.length, reduceMotion, insets]);
 
   const goHero = useCallback(
     (delta: number) => {
@@ -651,7 +512,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [marqueeCopyW, setMarqueeCopyW] = useState(0);
 
   useEffect(() => {
-    if (heroes.length < 2 || reduceMotion || marqueeCopyW <= 0 || E2E) return;
+    if (loading || heroes.length < 2 || reduceMotion || marqueeCopyW <= 0 || E2E) return;
     const t = setInterval(() => {
       if (!marqueeAutoRef.current) return;
       let x = marqueeXRef.current + 3; // ~66px/s (3px mỗi 45ms) — đỡ gánh JS thread
@@ -660,7 +521,7 @@ export default function HomeScreen({ navigation }: Props) {
       marqueeScrollRef.current?.scrollTo({ x, animated: false });
     }, 45);
     return () => clearInterval(t);
-  }, [heroes.length, reduceMotion, marqueeCopyW]);
+  }, [loading, heroes.length, reduceMotion, marqueeCopyW]);
 
   useEffect(
     () => () => {
@@ -682,11 +543,6 @@ export default function HomeScreen({ navigation }: Props) {
   const marqueeScroll = useCallback((e: any) => {
     marqueeXRef.current = e.nativeEvent.contentOffset.x;
   }, []);
-
-  const sortedVideos = useMemo(() => {
-    const feat = videos.filter((v) => v.zone === "Video nổi bật");
-    return feat.concat(videos.filter((v) => v.zone !== "Video nổi bật"));
-  }, [videos]);
 
   const handleCategoryPress = useCallback((category: string) => {
     setSelectedCategory(category);
@@ -711,21 +567,19 @@ export default function HomeScreen({ navigation }: Props) {
       );
       if (text.trim() === "016527") {
         if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        const unlocked = (await AsyncStorage.getItem(KEYS.aiUnlocked)) === "1";
-        if (unlocked) {
-          await AsyncStorage.removeItem(KEYS.aiUnlocked);
-          showAlert({
-            type: "success",
-            message: "Đã ẩn cấu hình AI trong Cài đặt",
-          });
+        // Toggle sync qua ref — không await getItem (tránh race condition giữa
+        // onChangeText + async yield khiến lần 2 luôn thấy "chưa mở khóa").
+        if (aiUnlockedRef.current) {
+          aiUnlockedRef.current = false;
+          AsyncStorage.removeItem(KEYS.aiUnlocked).catch(() => {});
+          showAlert({ type: "success", message: "Đã ẩn cấu hình AI trong Cài đặt" });
         } else {
-          await AsyncStorage.setItem(KEYS.aiUnlocked, "1");
-          showAlert({
-            type: "success",
-            message: "Đã mở khóa cấu hình AI trong Cài đặt",
-          });
+          aiUnlockedRef.current = true;
+          AsyncStorage.setItem(KEYS.aiUnlocked, "1").catch(() => {});
+          showAlert({ type: "success", message: "Đã mở khóa cấu hình AI trong Cài đặt" });
         }
         searchInputRef.current?.clear();
+        setSearchText("");
         searchTextRef.current = "";
         setHasSearchText(false);
         setDebouncedQuery("");
@@ -741,6 +595,7 @@ export default function HomeScreen({ navigation }: Props) {
         setTimeout(() => searchInputRef.current?.focus(), 100);
       } else {
         searchInputRef.current?.clear();
+        setSearchText("");
         searchTextRef.current = "";
         setHasSearchText(false);
         setDebouncedQuery("");
@@ -786,7 +641,12 @@ export default function HomeScreen({ navigation }: Props) {
       if (link) {
         if (prefetchCountRef.current >= 3) return; // tối đa 3 bài prefetch
         prefetchCountRef.current++;
-        prefetchArticleContent(link, v.item);
+        // Prefetch cách nhau 600ms — 3 bài fetch + parse HTML cùng lúc đúng
+        // 1.2s sau launch là nguyên nhân khựng ~2s; giãn ra để không dồn cục.
+        // +2000ms gốc: nhường trọn 2s đầu sau launch cho tap (parse HTML bài báo
+        // nặng), sau đó vẫn cách nhau 600ms để không dồn cục.
+        const delay = 2000 + prefetchCountRef.current * 600;
+        setTimeout(() => prefetchArticleContent(link, v.item), delay);
       }
     }
   }).current;
@@ -875,43 +735,6 @@ export default function HomeScreen({ navigation }: Props) {
           </>
         )}
 
-        {/* SECTION: VIDEO NỔI BẬT — hero + grid 2 cột, không scroll ngang */}
-        {sortedVideos.length > 0 && (
-          <View style={styles.videoSection}>
-            <View style={styles.sectionRow}>
-              <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
-              <View style={styles.sectionVideoIcon}>
-                <Ionicons name="videocam" size={12} color="#FFF" />
-              </View>
-              <Text style={[styles.sectionTitle, { color: C.hot }]}>VIDEO NỔI BẬT</Text>
-              <View style={styles.sectionLine} />
-              {sortedVideos.length > 6 && (
-                <TouchableOpacity
-                  style={styles.videoToggle}
-                  onPress={() => setVideoExpanded((e) => !e)}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: videoExpanded }}
-                  accessibilityLabel={
-                    videoExpanded ? "Thu gọn video" : "Xem thêm video"
-                  }
-                >
-                  <Ionicons
-                    name={videoExpanded ? "chevron-up" : "chevron-down"}
-                    size={16}
-                    color={C.hot}
-                  />
-                </TouchableOpacity>
-              )}
-            </View>
-            <VideoGrid
-              videos={sortedVideos}
-              onPress={goVideo}
-              expanded={videoExpanded}
-            />
-          </View>
-        )}
-
         {/* SECTION: LATEST */}
         <View style={styles.sectionRow}>
           <View style={[styles.sectionBar, { backgroundColor: C.accent }]} />
@@ -923,16 +746,13 @@ export default function HomeScreen({ navigation }: Props) {
       </View>
     ),
     [
-      sortedVideos,
       heroes,
       trending,
       heroIdx,
-      goVideo,
       goHero,
       heroRenderItem,
       handleHeroScroll,
       goArticle,
-      videoExpanded,
       styles,
     ],
   );
@@ -940,7 +760,6 @@ export default function HomeScreen({ navigation }: Props) {
   return (
     <Animated.View
       style={[styles.root, { opacity: headerAnim }]}
-      onTouchStart={markInteract}
     >
       {/* HEADER — masthead */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
@@ -1007,6 +826,9 @@ export default function HomeScreen({ navigation }: Props) {
             {hasSearchText && (
               <TouchableOpacity
                 onPress={() => {
+                  // Hủy timer debounce đang treo — không nó sẽ set lại query cũ
+                  // 600ms sau khi đã Xóa (danh sách tự lọc lại "kỳ diệu")
+                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
                   searchInputRef.current?.clear();
                   setSearchText("");
                   setHasSearchText(false);
@@ -1063,6 +885,7 @@ export default function HomeScreen({ navigation }: Props) {
           <SourceDropdown
             value={selectedSource}
             onChange={handleSourcePress}
+            options={sources}
             styles={styles}
           />
         </View>
@@ -1124,7 +947,6 @@ export default function HomeScreen({ navigation }: Props) {
           ListHeaderComponent={listHeader}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
-          onScroll={markInteract}
           scrollEventThrottle={100}
           nestedScrollEnabled
           ListEmptyComponent={
@@ -1175,9 +997,6 @@ export default function HomeScreen({ navigation }: Props) {
         />
       )}
 
-      {videoModal && (
-        <VideoModal video={videoModal} onClose={() => setVideoModal(null)} />
-      )}
     </Animated.View>
   );
 }
@@ -1360,15 +1179,6 @@ const makeStyles = (
     },
     sectionBar: { width: 4, height: 16, borderRadius: 2, marginRight: 8 },
     sectionTitle: { fontSize: 13, fontWeight: "800", letterSpacing: 0.6 },
-    sectionVideoIcon: {
-      width: 20,
-      height: 20,
-      borderRadius: 4,
-      backgroundColor: Color.hot,
-      alignItems: "center",
-      justifyContent: "center",
-      marginRight: 8,
-    },
     sectionTrendIcon: {
       width: 20,
       height: 20,
@@ -1377,17 +1187,6 @@ const makeStyles = (
       alignItems: "center",
       justifyContent: "center",
       marginRight: 8,
-    },
-    videoToggle: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      backgroundColor: Color.surfaceAlt,
-      borderWidth: 1,
-      borderColor: Color.border,
-      alignItems: "center",
-      justifyContent: "center",
-      marginLeft: 6,
     },
     sectionLine: {
       flex: 1,
@@ -1414,12 +1213,25 @@ const makeStyles = (
         default: { boxShadow: "0 2px 6px rgba(15, 23, 42, 0.08)" },
       }),
     },
-    trendSmallImg: {
+    trendSmallImgWrap: {
       width: "100%",
       height: 84,
       backgroundColor: Color.skeleton,
     },
+    trendSmallImg: { width: "100%", height: "100%" },
     trendSmallImgPh: { alignItems: "center", justifyContent: "center" },
+    videoBadge: {
+      position: "absolute",
+      left: 5,
+      bottom: 5,
+      width: 20,
+      height: 20,
+      borderRadius: 6,
+      backgroundColor: "rgba(0,0,0,0.65)",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingLeft: 1,
+    },
     trendSmallBody: { padding: 8 },
     trendSmallMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 3 },
     trendSmallSrcBadge: {
@@ -1444,12 +1256,6 @@ const makeStyles = (
       fontWeight: "700",
       color: Color.text,
       lineHeight: 16,
-    },
-
-    /* ── Video nổi bật — list dọc ── */
-    videoSection: {
-      backgroundColor: Color.card,
-      marginTop: 2,
     },
 
     /* ── Source dropdown ── */

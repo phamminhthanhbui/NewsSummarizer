@@ -95,29 +95,6 @@ export const FEED_ITEMS = [
   },
 ];
 
-export const VIDEO_ITEMS = [
-  {
-    title: 'Video hiện trường vụ cháy chung cư',
-    link: 'https://example.com/video-1',
-    thumb: 'https://placehold.co/320x180/111111/FFFFFF?text=Video+1',
-    duration: '02:15',
-    pubDate: new Date().toISOString(),
-    zone: 'Video nổi bật',
-    source: 'VNExpress',
-    stream: 'https://example.com/stream/video-1/master.m3u8',
-  },
-  {
-    title: 'Phỏng vấn huấn luyện viên sau trận đấu',
-    link: 'https://example.com/video-2',
-    thumb: 'https://placehold.co/320x180/222222/FFFFFF?text=Video+2',
-    duration: '05:40',
-    pubDate: new Date().toISOString(),
-    zone: 'Video',
-    source: 'Kenh14',
-    // không có stream → popup hiện thumb + nút mở tại nguồn
-  },
-];
-
 export const JINA_MARKDOWN = `Title: Bài báo mẫu
 URL Source: https://example.com/bai-1
 Markdown Content:
@@ -153,6 +130,8 @@ export async function mockNetwork(page: Page) {
   // RSS qua proxy: /api/fetch?url=... — app gán source/category theo feed được yêu
   // cầu, nên mock phải trả item khác nhau theo category của feed (URL RSS chứa
   // keyword). Nếu không, dedup theo link sẽ dồn mọi item về feed đầu tiên.
+  // feedSeq: số thứ tự ổn định cho mỗi URL feed (lần đầu thấy = size mới).
+  const feedSeq = new Map<string, number>();
   await page.route('**/api/fetch?url=**', async (route) => {
     const reqUrl = decodeURIComponent(route.request().url());
     // Keyword trong URL RSS → category của feed
@@ -170,7 +149,21 @@ export async function mockNetwork(page: Page) {
     if (!items.length) items = FEED_ITEMS.filter((i) => i.category === 'Việt Nam');
     if (!items.length) items = [FEED_ITEMS[0]];
 
-    const xml = `<?xml version="1.0"?><rss><channel>${items.map((i) => `
+    // MỖI FEED NHẬN MỘT ITEM RIÊNG: trước đây mọi feed cùng category trả cùng
+    // item (cùng link) → finalize() dedup theo link dồn về feed đầu, dropdown
+    // nguồn (build từ item thật) thiếu báo; đổi link thôi thì title vẫn trùng
+    // nhiều bản → getByText strict-mode fail. Cấp mỗi feed URL một số thứ tự
+    // tăng dần (theo page) → xoay vòng item trong list category: mỗi feed một
+    // item riêng link+title, thứ tự ổn định giữa các request của cùng feed.
+    // Featured (noi-bat) giữ nguyên: hero/ticker test lấy đúng title item0.
+    const rssUrl = reqUrl.split('url=')[1] || '';
+    const feedNo = feedSeq.get(rssUrl) ?? feedSeq.size;
+    feedSeq.set(rssUrl, feedNo);
+    const pick = items[feedNo % items.length];
+    const perFeed = /noi-bat/i.test(reqUrl)
+      ? items
+      : [{ ...pick, link: `${pick.link}?f=${feedNo}` }];
+    const xml = `<?xml version="1.0"?><rss><channel>${perFeed.map((i) => `
       <item>
         <title><![CDATA[${i.title}]]></title>
         <link>${i.link}</link>
@@ -181,11 +174,6 @@ export async function mockNetwork(page: Page) {
     </channel></rss>`;
     await route.fulfill({ status: 200, contentType: 'application/rss+xml', body: xml });
   });
-
-  // Video crawl: /api/videos
-  await page.route('**/api/videos', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ videos: VIDEO_ITEMS }) }),
-  );
 
   // Nội dung bài viết: /api/jina?url=...
   await page.route('**/api/jina**', (route) =>

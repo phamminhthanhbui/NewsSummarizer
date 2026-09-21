@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Animated, StyleSheet } from 'react-native';
+import { View, Animated, StyleSheet, Platform } from 'react-native';
 import { Color, Radius, useTheme } from '../constants/theme';
 
 export default function SkeletonCard() {
@@ -8,10 +8,12 @@ export default function SkeletonCard() {
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     // useNativeDriver: chạy UI thread — skeleton không giật khi JS thread bận tải feed
+    // (web không có native animated module → chỉ bật native driver trên native)
+    const native = Platform.OS !== 'web';
     const a = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: native }),
+        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: native }),
       ]),
     );
     a.start();

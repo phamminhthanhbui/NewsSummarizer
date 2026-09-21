@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
 import { Color, Font, Radius, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
+import { isVideoPageUrl } from '../services/summarize';
 import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
@@ -14,6 +15,7 @@ function ArticleCardCompact({ item, onPress }: Props) {
   const C = useTheme();
   const s = makeStyles(C);
   const srcColor = SOURCE_COLORS[item.source] || C.hot;
+  const isVideo = isVideoPageUrl(item.link);
 
   return (
     <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.85}>
@@ -24,6 +26,11 @@ function ArticleCardCompact({ item, onPress }: Props) {
           <Ionicons name="image-outline" size={24} color={C.textMuted} />
         </View>
       )}
+      {isVideo ? (
+        <View style={s.videoBadge} accessibilityLabel="Video">
+          <Ionicons name="play" size={9} color="#FFF" />
+        </View>
+      ) : null}
       <View style={s.body}>
         <View style={s.meta}>
           <View style={[s.srcBadge, { backgroundColor: srcColor + '1A' }]}>
@@ -56,8 +63,22 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
       default: { boxShadow: '0 2px 6px rgba(15, 23, 42, 0.08)' },
     }),
   },
-  img: { width: 120, backgroundColor: Color.skeleton, alignSelf: 'stretch' },
+  img: { width: 120, alignSelf: 'stretch', backgroundColor: Color.skeleton },
   imgPh: { alignItems: 'center', justifyContent: 'center' },
+  // Badge video nằm dưới-trái ảnh (vùng ảnh là cột trái tự co giãn theo hàng).
+  // Không bọc thêm layer đề phòng % height không resolve khi flex-stretch.
+  videoBadge: {
+    position: 'absolute',
+    left: 5,
+    bottom: 5,
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 1,
+  },
   body: { flex: 1, padding: 10, justifyContent: 'center' },
   meta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   srcBadge: {

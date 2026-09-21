@@ -120,7 +120,7 @@ function AppTabs({ navRef }: { navRef: any }) {
   return (
     <NavigationContainer ref={navRef}>
       <Tab.Navigator
-        screenOptions={{
+        screenOptions={({ route }: any) => ({
           headerShown: false,
           tabBarInactiveTintColor: C.textMuted,
           tabBarStyle: {
@@ -142,8 +142,9 @@ function AppTabs({ navRef }: { navRef: any }) {
             fontSize: Font.tiny - 2,
             fontWeight: "600",
           },
-        }}
+        })}
       >
+
         <Tab.Screen
           name="HomeTab"
           component={HomeStackScreen}

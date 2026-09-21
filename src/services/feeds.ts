@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { FeedItem } from '../types';
 import { KEYS, LIMITS } from '../services/storage';
 import { proxiedFetchText } from '../utils/proxy';
+import { runCpuTask } from '../utils/parseQueue';
 
 // Màu thương hiệu của từng tờ báo — badge nguồn trên card dùng màu này
 export const SOURCE_COLORS: Record<string, string> = {
@@ -26,9 +27,18 @@ export const SOURCE_COLORS: Record<string, string> = {
   'GenK': '#00A651',
   'Cafebiz': '#F0642A',
   'BongDaPlus': '#E30613',
-  'Kenh14': '#FB512A',
   'HelloBacSi': '#00A99D',
   'Soha': '#F26522',
+  'Znews': '#E4182A',
+  'Kiến Thức': '#0072BC',
+  'Ngoisao': '#D81939',
+  'Saostar': '#E0105E',
+  'Kenh14': '#FB512A',
+  'Nhân Dân': '#B0281E',
+  'VTV': '#0091DA',
+  'VietnamPlus': '#B3202A',
+  'Công Luận': '#E91E63',
+  'Giáo dục Thời đại': '#0E7C4D',
 };
 
 // name = tên tờ báo (publisher) — "Chọn nguồn tin" lọc theo tờ báo, không theo kênh con.
@@ -84,9 +94,15 @@ export const FEEDS = [
   // Sức khỏe
   { name: 'VNExpress', url: 'https://vnexpress.net/rss/suc-khoe.rss', category: 'Sức khỏe' },
   { name: 'Tuổi Trẻ', url: 'https://tuoitre.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
-  { name: 'HelloBacSi', url: 'https://hellobacsi.com/rss.xml', category: 'Sức khỏe' },
   { name: 'Dân Trí', url: 'https://dantri.com.vn/rss/suc-khoe.rss', category: 'Sức khỏe' },
   { name: 'Sức khỏe & Đời sống', url: 'https://suckhoedoisong.vn/rss/home.rss', category: 'Sức khỏe' },
+
+  // Bổ sung tổng hợp (verify RSS sống)
+  { name: 'Nhân Dân', url: 'https://nhandan.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'VTV', url: 'https://vtv.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'VietnamPlus', url: 'https://www.vietnamplus.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Công Luận', url: 'https://congluan.vn/rss/home.rss', category: 'Việt Nam' },
+  { name: 'Giáo dục Thời đại', url: 'https://giaoducthoidai.vn/rss/home.rss', category: 'Việt Nam' },
 ];
 
 // Feed "tin nổi bật" riêng — KHÔNG nằm trong FEEDS (không hiện trong list thường,
@@ -128,21 +144,45 @@ function extractImage(block: string): string | undefined {
   return media ? decode(media[1]) : undefined;
 }
 
-function parseXml(xml: string): FeedItem[] {
+// Parse 1 block <item> → FeedItem (tách khỏi parseXml để chạy theo đợt nhỏ)
+function parseItemBlock(block: string): FeedItem | null {
+  const title = stripHtml((block.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '');
+  const link = ((block.match(/<link[^>]*>([\s\S]*?)<\/link>/i) || [])[1] || '')
+    .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1').trim();
+  const pubDate = (block.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i) || [])[1] || '';
+  const descRaw = (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) || [])[1] || '';
+  const description = stripHtml(descRaw).slice(0, LIMITS.descriptionMax);
+  const image = extractImage(block);
+  return title && link ? { title, link, description, pubDate, image, source: '' } : null;
+}
+
+// Parse XML theo ĐỢT NHỎ qua hàng đợi CPU. Một feed ~20-80 item — parse cả feed
+// trong 1 job (regex full-scan từng item) tạo ra job 50-300ms chặn nguyên khối
+// → tap lúc cold-start không phản hồi dù queue đã yield giữa các job. Tách block
+// <item> trước (1 scan rẻ, vài ms), rồi parse từng đợt 12 item: mỗi đợt ~1-2 frame.
+const PARSE_BATCH = 12;
+
+async function parseXmlChunked(xml: string): Promise<FeedItem[]> {
   const items: FeedItem[] = [];
   const itemRe = /<item>[\s\S]*?<\/item>/gi;
-  let m;
+  let m: RegExpExecArray | null;
+  let batch: string[] = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const work = batch;
+    batch = [];
+    const out = await runCpuTask(() => {
+      const r: FeedItem[] = [];
+      for (const b of work) { const it = parseItemBlock(b); if (it) r.push(it); }
+      return r;
+    });
+    items.push(...out);
+  };
   while ((m = itemRe.exec(xml)) !== null) {
-    const block = m[0];
-    const title = stripHtml((block.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '');
-    const link = ((block.match(/<link[^>]*>([\s\S]*?)<\/link>/i) || [])[1] || '')
-      .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1').trim();
-    const pubDate = (block.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i) || [])[1] || '';
-    const descRaw = (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) || [])[1] || '';
-    const description = stripHtml(descRaw).slice(0, LIMITS.descriptionMax);
-    const image = extractImage(block);
-    if (title && link) items.push({ title, link, description, pubDate, image, source: '' });
+    batch.push(m[0]);
+    if (batch.length >= PARSE_BATCH) await flush();
   }
+  await flush();
   return items;
 }
 
@@ -155,13 +195,15 @@ export async function fetchFeed(url: string): Promise<FeedItem[]> {
       // proxiedFetchText failover qua các base (cùng origin → IP Metro → loopback),
       // nhớ base sống để lần sau khỏi thử lại. Không proxy nào tới được → [] (cache cũ vẫn hiện).
       const xml = await proxiedFetchText(url, 8000);
-      return xml ? parseXml(xml) : [];
+      return xml ? await parseXmlChunked(xml) : [];
     }
     // Native: gọi thẳng nguồn RSS (không CORS)
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) return [];
     const xml = await res.text();
-    return parseXml(xml);
+    // Parse qua hàng đợi CPU theo đợt nhỏ — các response về theo đợt không đè JS thread
+    // (tap phản hồi ngay cả khi 44 feed đang về cùng lúc).
+    return parseXmlChunked(xml);
   } catch {
     return [];
   } finally {
@@ -175,12 +217,13 @@ const FEED_CACHE_MAX = 300;
 // Reload/reopen trong vòng này thì KHÔNG fetch lại 18 feed — hiện cache ngay.
 // Tin mới chỉ cần vài phút; tránh mỗi lần reload bắn 18 request RSS cạnh tranh
 // với video crawl + prefetch (nguyên nhân reload lâu).
-const FEED_CACHE_SKIP_RELOAD_MS = 60 * 1000;
+const FEED_CACHE_SKIP_RELOAD_MS = 30 * 1000;
 
 export async function readFeedsCache(): Promise<FeedItem[]> {
   try {
     const raw = await AsyncStorage.getItem(KEYS.feedsCache);
-    return raw ? JSON.parse(raw) : [];
+    // JSON.parse ~300 item qua hàng đợi CPU — lúc launch không chặn frame đầu
+    return raw ? await runCpuTask(() => JSON.parse(raw) as FeedItem[]) : [];
   } catch {
     return [];
   }
@@ -199,21 +242,28 @@ export async function isFeedsCacheFresh(): Promise<boolean> {
 }
 
 function writeFeedsCache(items: FeedItem[]) {
-  AsyncStorage.setItem(KEYS.feedsCache, JSON.stringify(items.slice(0, FEED_CACHE_MAX))).catch(() => {});
-  AsyncStorage.setItem(KEYS.feedsCacheTime, String(Date.now())).catch(() => {});
+  // JSON.stringify ~300 item (200-500KB) qua hàng đợi CPU — chạy đồng bộ sẽ
+  // chặn đúng frame lúc "load xong" khi user vừa bấm chờ từ nãy
+  void runCpuTask(() => {
+    AsyncStorage.setItem(KEYS.feedsCache, JSON.stringify(items.slice(0, FEED_CACHE_MAX))).catch(() => {});
+    AsyncStorage.setItem(KEYS.feedsCacheTime, String(Date.now())).catch(() => {});
+  });
 }
 
 // Sắp xếp theo ngày mới nhất & gộp bài trùng link. Dùng cho cả kết quả cuối
 // lẫn snapshot từng phần (onProgress) để màn hình hiện bài ngay khi feed đầu tiên xong.
 function finalize(results: FeedItem[], featured: FeedItem[]): FeedItem[] {
-  const all = results.slice().sort((a, b) => {
-    const da = new Date(a.pubDate).getTime();
-    const db = new Date(b.pubDate).getTime();
-    if (isNaN(da) && isNaN(db)) return 0;
-    if (isNaN(da)) return 1;
-    if (isNaN(db)) return -1;
-    return db - da;
-  });
+  // Parse pubDate 1 LẦN mỗi item trước khi sort — trước đây new Date() nằm trong
+  // comparator (O(n log n) lần parse lại từ đầu) chạy 20+ lần khi emit partial.
+  const all = results
+    .map((i) => ({ i, d: new Date(i.pubDate).getTime() }))
+    .sort((a, b) => {
+      if (isNaN(a.d) && isNaN(b.d)) return 0;
+      if (isNaN(a.d)) return 1;
+      if (isNaN(b.d)) return -1;
+      return b.d - a.d;
+    })
+    .map((x) => x.i);
 
   // Deduplicate by link (keep first occurrence = latest). Bài thường trùng link với
   // bài trong feed nổi bật → gắn cờ featured vào bản giữ lại để carousel nhận ra.
@@ -233,7 +283,9 @@ function finalize(results: FeedItem[], featured: FeedItem[]): FeedItem[] {
 // nghẽn: tap không phản hồi lúc mới mở app). Feed nổi bật chạy TRƯỚC để carousel
 // hiện sớm. onProgress được gộp (throttle) để màn hình không re-render liên tục.
 const FEED_POOL_SIZE = 8;
-const PROGRESS_MIN_MS = 150;
+// 700ms (từ 350ms) — mỗi emit làm HomeScreen re-render toàn bộ list + sort lại
+// toàn bộ accumulator; cold-start storm tranh JS thread với tap. Thưa hơn nữa.
+const PROGRESS_MIN_MS = 700;
 
 async function runPool<T>(tasks: (() => Promise<T>)[], size: number, deadlineMs = 0): Promise<T[]> {
   const results: T[] = new Array(tasks.length);
@@ -299,9 +351,9 @@ export async function fetchAllFeeds(onProgress?: (items: FeedItem[]) => void): P
     ...featuredJobs.map((j) => () => runJob(j, true)),
     ...regularJobs.map((j) => () => runJob(j, false)),
   ];
-  // Deadline 8s: reload không chờ feed chậm nhất (8 pool × 8s/feed = tối đa ~24s
-  // trước đây) — trả phần đã có, feed chậm bỏ qua (lần sau reload sẽ lấy).
-  await runPool(jobs, FEED_POOL_SIZE, 8000);
+  // Deadline 12s: 8s quá ngắn cho 44 feed qua proxy (VietnamNet hay timeout →
+  // cache thiếu tin mới). 12s đủ cho 2 vòng pool×probe.
+  await runPool(jobs, FEED_POOL_SIZE, 12000);
   if (emitTimer) clearTimeout(emitTimer);
 
   const final = finalize(accRegular, accFeatured);

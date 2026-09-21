@@ -24,10 +24,12 @@ test.describe('Feed', () => {
   });
 
   test('cache feeds được ghi vào storage sau khi load', async ({ page }) => {
-    await page.waitForTimeout(500);
-    const raw = await getStorage(page, KEYS.feedsCache);
-    expect(raw).toBeTruthy();
-    const cached = JSON.parse(raw!);
+    // Cache write qua runCpuTask queue (yield 32ms/job sau ~50 job parse) →
+    // rơi vào storage ~2s SAU khi loading biến mất. Poll thay vì sleep cứng.
+    await expect
+      .poll(async () => (await getStorage(page, KEYS.feedsCache)) ?? '', { timeout: 10_000 })
+      .toBeTruthy();
+    const cached = JSON.parse((await getStorage(page, KEYS.feedsCache))!);
     expect(Array.isArray(cached)).toBe(true);
     expect(cached.length).toBeGreaterThan(0);
     expect(cached[0]).toHaveProperty('title');
@@ -38,7 +40,6 @@ test.describe('Feed', () => {
     const raw = await getStorage(page, KEYS.feedsCache);
     expect(raw).toBeTruthy();
     await page.route('**/api/fetch**', (r) => r.abort());
-    await page.route('**/api/videos', (r) => r.abort());
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForFeedLoaded(page);
     await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
@@ -114,9 +115,10 @@ test.describe('Tìm kiếm', () => {
   });
 
   test('bấm icon tìm kiếm lần nữa đóng ô tìm kiếm', async ({ page }) => {
-    await page.getByLabel('Tìm kiếm').click();
+    // exact: label input là "Nhập từ khóa TÌM KIẾM" — substring match dính 2 phần tử
+    await page.getByLabel('Tìm kiếm', { exact: true }).click();
     await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toBeVisible();
-    await page.getByLabel('Tìm kiếm').click();
+    await page.getByLabel('Tìm kiếm', { exact: true }).click();
     await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveCount(0);
   });
 });
@@ -132,30 +134,17 @@ test.describe('Carousel + TIN NÓNG', () => {
   });
 });
 
-test.describe('Video', () => {
-  test('section VIDEO hiện card, bấm mở popup', async ({ page }) => {
-    await expect(page.getByText('VIDEO NỔI BẬT', { exact: true })).toBeVisible();
-    await page.getByText('Video hiện trường vụ cháy chung cư').click();
-    await expect(page.getByLabel('Đóng video')).toBeVisible();
-    // chi tiết player/không-nút-mở-tại-nguồn: features-regression.spec
-  });
-
-  test('popup: nút Đóng đóng popup', async ({ page }) => {
-    await page.getByText('Video hiện trường vụ cháy chung cư').click();
-    await page.getByLabel('Đóng', { exact: true }).click();
-    await expect(page.getByText('Mở tại nguồn')).toHaveCount(0);
-  });
-
-  test('video không stream: popup hiện ghi chú phát tại nguồn', async ({ page }) => {
-    await page.getByText('Phỏng vấn huấn luyện viên sau trận đấu').click();
-    await expect(page.getByText('Video phát tại nguồn (CDN chặn phát trực tiếp)')).toBeVisible();
-  });
-});
-
 test.describe('Empty state', () => {
   test('mọi feed fail: hiện empty + nút Xem tất cả không crash', async ({ page }) => {
     await page.route('**/api/fetch**', (r) => r.fulfill({ status: 500, body: '' }));
-    await page.route('**/api/videos', (r) => r.fulfill({ status: 500, body: '' }));
+    // Xóa cache feeds từ lần load đầu của test — stale-while-revalidate hợp lệ
+    // của app sẽ hiện cache cũ thay vì empty nếu còn. Cache write đi qua
+    // runCpuTask queue (trễ ~2s sau loading biến mất) nên phải đợi write xong
+    // RỒI clear, không clear ngay (write pending sẽ lấp lại).
+    await expect(async () => {
+      expect(await getStorage(page, KEYS.feedsCache)).toBeTruthy();
+    }).toPass({ timeout: 10_000 });
+    await page.evaluate(() => localStorage.clear());
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForFeedLoaded(page);
     await expect(page.getByText('Không có bài báo')).toBeVisible();

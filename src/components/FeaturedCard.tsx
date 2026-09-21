@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem } from '../types';
 import { Color, Font, useTheme } from '../constants/theme';
 import { SOURCE_COLORS } from '../services/feeds';
+import { isVideoPageUrl } from '../services/summarize';
 import { timeAgo } from '../utils/timeAgo';
 
 interface Props { item: FeedItem; onPress: (item: FeedItem) => void; }
@@ -16,6 +17,7 @@ function FeaturedCard({ item, onPress }: Props) {
   const C = useTheme();
   const s = makeStyles(C); // styles động theo dark mode
   const srcColor = SOURCE_COLORS[item.source] || C.hot;
+  const isVideo = isVideoPageUrl(item.link);
 
   return (
     <TouchableOpacity style={s.card} onPress={() => onPress(item)} activeOpacity={0.9} accessibilityRole="button">
@@ -26,6 +28,11 @@ function FeaturedCard({ item, onPress }: Props) {
           <Ionicons name="image-outline" size={48} color={C.textMuted} />
         </View>
       )}
+      {isVideo ? (
+        <View style={s.videoBadge} accessibilityLabel="Video">
+          <Ionicons name="play" size={11} color="#FFF" />
+        </View>
+      ) : null}
       {/* Trên trong suốt (để thấy rõ ảnh), dưới đen đậm (chữ đọc được) */}
       <LinearGradient
         style={s.scrim}
@@ -77,6 +84,18 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   card: { width: '100%', height: 250, overflow: 'hidden' },
   img: { width: '100%', height: '100%' },
   imgPh: { backgroundColor: Color.skeleton, alignItems: 'center', justifyContent: 'center' },
+  videoBadge: {
+    position: 'absolute',
+    left: 12,
+    bottom: 100,
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 2,
+  },
   scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   overlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 16, paddingTop: 56 },
   badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },

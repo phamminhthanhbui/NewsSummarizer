@@ -13,13 +13,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('Mã bí mật — mở khóa', () => {
-  test('nhập mã: alert mở khóa, input xóa, modal đóng, cờ ghi vào storage', async ({ page }) => {
+  test('nhập mã: alert mở khóa, input xóa, cờ ghi vào storage', async ({ page }) => {
     await openSearch(page);
     const msg = await enterSecretCode(page);
     expect(msg).toBe('Đã mở khóa cấu hình AI trong Cài đặt');
 
-    // Modal tìm kiếm đóng, input không còn text
-    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveCount(0);
+    // Search là thanh inline trong header (không còn modal): sau mã, input
+    // bị clear (value rỗng) nhưng thanh vẫn mở — behavior mới cố ý.
+    await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveValue('');
     expect(await getStorage(page, KEYS.aiUnlocked)).toBe('1');
   });
 
@@ -108,8 +109,7 @@ test.describe('Regression: không "không có dữ liệu" sau khi nhập mã', 
     await page.waitForTimeout(1200);
     await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible();
     await expect(page.getByText('Không có bài báo')).toHaveCount(0);
-    await expect(page.getByText('Không có bài báo')).toHaveCount(0);
-    await expect(page.getByText('Giá vàng trong nước lập đỉnh mới')).toBeVisible();
+    await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
   });
 });
 
@@ -121,9 +121,11 @@ test.describe('Không phải mã — không toggle', () => {
     await expect(page.getByPlaceholder('Tìm tiêu đề, nội dung...')).toHaveValue('01652');
     expect(await getStorage(page, KEYS.aiUnlocked)).toBeNull();
 
-    // Nhập từ khóa thật sự vẫn lọc được
+    // Nhập từ khóa thật sự vẫn lọc được — UI mới không còn nhãn "Kết quả: N bài",
+    // kiểm tra list còn đúng bài khớp và bài không khớp biến mất
     await typeSearch(page, 'vàng');
-    await expect(page.getByText(/Kết quả: 1 bài/)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Trí tuệ nhân tạo thay đổi ngành giáo dục').first()).toHaveCount(0);
   });
 
   test('mã có khoảng trắng thừa vẫn được chấp nhận (trim)', async ({ page }) => {

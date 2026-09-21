@@ -1,13 +1,8 @@
-// E2E: các case regression phát sinh từ review — cache jina, video featured v2
-// (strip/expand/modal stream), ticker NÓNG marquee nhân đôi, ĐỌC NHIỀU NHẤT theo
-// filter, ảnh fail load không crash.
-//
-// Lưu ý: logic "newest-first + seed" của video nằm ở SERVER (/api/videos —
-// videoCrawler crawl + pickNewestFeatured). Mock /api/videos trả list tĩnh nên
-// e2e chỉ assert hành vi CLIENT: slice 6/12, toggle expand, modal stream.
+// E2E: các case regression phát sinh từ review — cache jina, ticker NÓNG
+// marquee nhân đôi, ĐỌC NHIỀU NHẤT theo filter, ảnh fail load không crash.
 import { test, expect, type Page } from '@playwright/test';
 import {
-  FEED_ITEMS, VIDEO_ITEMS, JINA_MARKDOWN, SUMMARY_TEXT, mockNetwork, waitForFeedLoaded,
+  FEED_ITEMS, JINA_MARKDOWN, SUMMARY_TEXT, mockNetwork, waitForFeedLoaded,
 } from './helpers';
 
 const FIRST = FEED_ITEMS[0];
@@ -23,17 +18,6 @@ function mockJina(page: Page, md: string) {
     route.fulfill({ status: 200, contentType: 'text/markdown', body: md }),
   );
 }
-
-const vid = (i: number) => `https://placehold.co/320x180/ABCDEF/111111?text=Vid${i}`;
-const vidItem = (i: number) => ({
-  title: `Video thể thao số ${i}`,
-  link: `https://example.com/video-${i}`,
-  thumb: vid(i),
-  duration: `0${i % 10}:1${i % 10}`,
-  zone: 'Video nổi bật',
-  source: 'VNExpress',
-  stream: i % 2 === 0 ? `https://example.com/stream/video-${i}.mp4` : '',
-});
 
 test.beforeEach(async ({ page }) => {
   await mockNetwork(page);
@@ -66,57 +50,6 @@ test.describe('Cache nội dung bài (jina)', () => {
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(2000);
     expect(jinaCalls).toBe(afterFirst);
-  });
-});
-
-test.describe('Video nổi bật v2 — strip/expand', () => {
-  test('collapsed: strip chỉ hiện 6 video đầu, phần dư bị cắt', async ({ page }) => {
-    await page.route('**/api/videos', (route) =>
-      route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ videos: Array.from({ length: 9 }, (_, i) => vidItem(i + 1)) }),
-      }),
-    );
-    await page.goto('/');
-    await waitForFeedLoaded(page);
-
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]')).toHaveCount(6);
-    await expect(page.getByText('Video thể thao số 1')).toBeVisible();
-    await expect(page.getByText('Video thể thao số 7')).toHaveCount(0);
-    await expect(page.getByText('Video thể thao số 9')).toHaveCount(0);
-  });
-
-  test('nút "Xem thêm video": mở lưới đủ 14; "Thu gọn video" về 6', async ({ page }) => {
-    await page.route('**/api/videos', (route) =>
-      route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ videos: Array.from({ length: 14 }, (_, i) => vidItem(i + 1)) }),
-      }),
-    );
-    await page.goto('/');
-    await waitForFeedLoaded(page);
-
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]')).toHaveCount(6);
-
-    await page.getByLabel('Xem thêm video').click();
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]')).toHaveCount(14);
-    await expect(page.getByText('Video thể thao số 14')).toBeVisible();
-
-    await page.getByLabel('Thu gọn video').click();
-    await expect(page.locator('img[src*="placehold.co"][src*="Vid"]')).toHaveCount(6);
-  });
-
-  test('video CÓ stream: modal phát trực tiếp, không hiện nút "Mở video tại nguồn"', async ({ page }) => {
-    // VIDEO_ITEMS[0] có stream m3u8 (đã mock **/*.m3u8 trong helpers)
-    await page.getByText(VIDEO_ITEMS[0].title).first().click();
-    // Modal mở: tiêu đề video xuất hiện lần 2 (card + modal) và player mount
-    await expect(page.getByText(VIDEO_ITEMS[0].title).nth(1)).toBeVisible({ timeout: 10_000 });
-    // Có stream → KHÔNG hiện nút mở tại nguồn (case không-stream đã có ở home.spec)
-    await expect(page.getByLabel('Mở video tại nguồn')).toHaveCount(0);
-    await expect(page.getByText(VIDEO_ITEMS[0].zone, { exact: true }).first()).toBeVisible();
-    // (Đóng modal đã cover ở home.spec 'popup: nút Đóng đóng popup')
   });
 });
 
@@ -172,11 +105,13 @@ test.describe('ĐỌC NHIỀU NHẤT theo filter', () => {
     await waitForFeedLoaded(page);
     await page.getByText('Sức khỏe', { exact: true }).first().click();
 
-    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 15_000 });
-    // 3 bài ngoài top-5 (SK6..SK8) nằm trong ĐỌC NHIỀU NHẤT
-    await expect(page.getByText('Sức khỏe cập nhật số 6')).toBeVisible();
-    await expect(page.getByText('Sức khỏe cập nhật số 7')).toBeVisible();
-    await expect(page.getByText('Sức khỏe cập nhật số 8')).toBeVisible();
+    // exact: tiêu đề mock SK chứa "...filter đọc nhiều" (chứa 'ĐỌC NHIỀU NHẤT'
+    // như substring) → không exact sẽ dính cả 3 card trending
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT', { exact: true })).toBeVisible({ timeout: 15_000 });
+    // .first: tiêu đề có thể hiện ở cả trending card + hero/list trong viewport
+    await expect(page.getByText('Sức khỏe cập nhật số 6').first()).toBeVisible();
+    await expect(page.getByText('Sức khỏe cập nhật số 7').first()).toBeVisible();
+    await expect(page.getByText('Sức khỏe cập nhật số 8').first()).toBeVisible();
   });
 
   test('category rỗng: section ĐỌC NHIỀU NHẤT ẩn theo filter', async ({ page }) => {
@@ -193,7 +128,9 @@ test.describe('ĐỌC NHIỀU NHẤT theo filter', () => {
 test.describe('Ảnh fail load không crash', () => {
   test('ảnh bị chặn network: block unmount sạch, app vẫn dùng được', async ({ page }) => {
     // blocked.example.net bị catch-all abort → onError → SafeImg unmount
-    await mockJina(page, `![Ảnh load được](https://placehold.co/600x400/00AA00/FFFFFF?text=OkImg)
+    // URL ảnh PHẢI có đuôi file (.png) — isEditorialImage chặn URL không đuôi
+    // (chống <a> giả ![Image N](bai.html) của Jina) nên mock phải giống ảnh thật.
+    await mockJina(page, `![Ảnh load được](https://placehold.co/600x400/00AA00/FFFFFF.png?text=OkImg)
 
 Đoạn văn sau ảnh load được, xác nhận bố cục không vỡ khi một ảnh khác bị lỗi.
 

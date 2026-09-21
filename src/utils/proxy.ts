@@ -115,7 +115,14 @@ async function tryGetText(
     const res = await fetch(`${base}/api/fetch?url=${encodeURIComponent(targetUrl)}`, {
       signal: controller.signal,
     });
-    if (!res.ok) { markDead(base); return null; }
+    if (!res.ok) {
+      // Proxy TRẢ LỜI = proxy còn sống; non-ok chỉ là lỗi NỘI DUNG upstream
+      // (báo chặn 403, bài 404, /api/fetch timeout 504...). Trước đây mọi non-ok
+      // đều markDead → đầu độc base khỏe: 1 URL fetch lỗi cấm cả base 3 phút →
+      // request sau rơi vào IP LAN cũ (firewall drop) → timeout dây dưa.
+      markAlive(base);
+      return null;
+    }
     markAlive(base);
     return await res.text();
   } catch {

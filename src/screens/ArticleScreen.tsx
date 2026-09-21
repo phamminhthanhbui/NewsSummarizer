@@ -11,6 +11,9 @@ import {
   Share,
   Modal,
   Platform,
+  Animated,
+  Easing,
+  Pressable,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -22,7 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS } from '../services/storage';
-import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory } from '../services/summarize';
+import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, fetchArticleTextFast, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory, isVideoPageUrl } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import ArticleCard from '../components/ArticleCard';
@@ -40,11 +43,18 @@ export default function ArticleScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
   const C = useTheme();
   const styles = makeStyles(C); // styles động theo dark mode
+  // Trang video (video.xxx.vn / /video/...): thân là clip, không có bài văn để tóm
+  const isVideoPage = isVideoPageUrl(item.link);
 
   const [blocks, setBlocks] = useState<ArticleBlock[]>([]);
   const [content, setContent] = useState('');
   const [summary, setSummary] = useState('');
-  const [summarizing, setSummarizing] = useState(false);
+  // true từ đầu: nút "Nghe" disable cho tới khi chuỗi tóm tắt thật sự kết thúc
+  // (cache hit / pend về / final), không phải khi mới có placeholder mô tả
+  const [summarizing, setSummarizing] = useState(true);
+  // Đếm số lần summary đổi — làm key word-span. Không có thì ReactReconciler
+  // reuse span cũ theo index → mất highlight mỗi token stream về.
+  const summaryKeyRef = useRef(0);
   const [error, setError] = useState('');
   // Summary hiện tại do fallback extractive tạo (không có AI/mất mạng)
   const [offline, setOffline] = useState(false);
@@ -55,6 +65,10 @@ export default function ArticleScreen({ navigation, route }: any) {
   // thì không cho continuation bật lại trạng thái bài cũ
   const cancelledRef = useRef(false);
   const [imageModal, setImageModal] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
+  // Modal xem ảnh: spinner khi đang tải, animation scale+fade lúc mở
+  const [imgLoading, setImgLoading] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const imgAnim = useRef(new Animated.Value(0)).current;
 
   // useCallback: giữ identity ổn định để SafeImg(memo) không re-render theo highlight tick
   // Modal mở bản NÉT NHẤT trong các variant cùng file (SGGP trả /w680/ trong bài
@@ -72,9 +86,23 @@ export default function ArticleScreen({ navigation, route }: any) {
         if (w > bestW) { best = b.url; bestW = w; }
       }
     }
+    setImgLoading(true);
+    setImgError(false);
     setImageModal({ visible: true, url: best });
   }, [blocks]);
   const closeImageModal = () => setImageModal({ visible: false, url: '' });
+
+  // Scale + fade vào mỗi lần mở modal (Modal unmount khi đóng nên luôn chạy từ 0)
+  useEffect(() => {
+    if (!imageModal.visible) return;
+    imgAnim.setValue(0);
+    Animated.timing(imgAnim, {
+      toValue: 1,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }, [imageModal.visible, imgAnim]);
 
   // Auto-fetch article + summarize + load related + saved state
   useEffect(() => {
@@ -92,6 +120,17 @@ export default function ArticleScreen({ navigation, route }: any) {
       // Lưu summary vào History (cache để lần sau mở lại là tức thì) — writer
       //chung, dedupe theo URL (bản mới nhất thắng).
       const saveToHistory = (summary: string) => saveSummaryToHistory(item, summary);
+
+      // Trang VIDEO (video.xxx.vn, /video/...): nội dung là clip, không có bài
+      // văn — AI tóm tắt vô nghĩa. Chỉ tải blocks (đã nhận diện video + stream),
+      // render player; bỏ qua mọi chuỗi summarize/upgrade.
+      if (isVideoPageUrl(item.link)) {
+        const b = (await fetchArticleContent(item.link).catch(() => [] as ArticleBlock[])) || [];
+        setBlocks(b);
+        setContent(blocksToText(b));
+        setSummarizing(false);
+        return;
+      }
 
       // Chạy song song không chặn nhau: tóm nhanh từ mô tả + tải toàn bài để render
       const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
@@ -121,6 +160,7 @@ export default function ArticleScreen({ navigation, route }: any) {
       const cached = history.find((h) => h.url === item.link);
       if (cached && !isStaleSummary(cached.summary)) {
         setSummary(cached.summary);
+        setSummarizing(false);
         const blocks = await blocksTask;
         setBlocks(blocks);
         setContent(blocksToText(blocks));
@@ -131,20 +171,10 @@ export default function ArticleScreen({ navigation, route }: any) {
         await AsyncStorage.setItem(KEYS.history, JSON.stringify(cleaned));
       }
 
-      // HIỆN NGAY mô tả RSS làm placeholder tóm tắt (0ms) — AI về sau thay thế.
-      // Đảm bảo không có summary nào để "tóm nhanh" trên màn hình khi vừa mở.
-      if (!peekPendingSummary(item.link) && item.description) {
-        setSummary(item.description.trim());
-      }
-
-      // TÓM NHANH trước từ mô tả (không chờ Jina) + STREAM token → chữ bắt đầu
-      // xuất hiện sau ~1s thay vì chờ model sinh xong cả đoạn (2-5s).
-      // Lỗi ở đây KHÔNG báo ngay: còn full-text + fallback phía sau.
       let lastErr = '';
-      setSummarizing(true);
       // Pre-summarize nền (Home prefetch) — KHÔNG await chặn fast path: nó về
-      // tới đâu dùng tới đó (bản full-text, chất lượng cao hơn), flag chặnfast
-      // path/upgrade đè lại sau.
+      // tới đâu dùng tới đó (bản full-text, chất lượng cao hơn), flag chặn
+      // fast/upgrade đè lại sau.
       let fullArrived = false;
       let pendText: string | null = null;
       const pend = peekPendingSummary(item.link);
@@ -161,30 +191,88 @@ export default function ArticleScreen({ navigation, route }: any) {
         }).catch(() => { /* thất bại → fast/upgrade thường sẽ lo */ });
       }
 
-      const fast = await summarizeArticle(item.description, item.category, (partial) => {
-        if (!fullArrived && partial) setSummary(partial);
-      }).catch((e: Error) => { lastErr = e.message || ''; return null; });
-      setSummarizing(false);
-      if (fast && !fullArrived) { setSummary(fast); setError(''); setOffline(false); }
-
-      // Toàn bài về → hiện bài gốc + NÂNG CẤP summary (stream) bằng bản đầy đủ
-      const articleBlocks = await blocksTask;
-      setBlocks(articleBlocks);
-      const fullText = blocksToText(articleBlocks);
-      setContent(fullText);
-
-      let finalSummary = fullArrived ? pendText : fast;
-      if (!fullArrived && fullText.length > item.description.length) {
-        const full = await summarizeArticle(fullText, item.category, (partial) => {
-          if (partial) setSummary(partial);
-        }).catch(() => null);
-        if (full) { finalSummary = full; setOffline(false); }
+      // HIỆN NGAY mô tả RSS làm placeholder tóm tắt (0ms) — AI về sau thay thế.
+      if (!pend && item.description) {
+        setSummary(item.description.trim());
       }
+
+      // TÓM NHANH từ mô tả — chạy SONG SONG với tải toàn bài, KHÔNG await chặn
+      // chuỗi nâng cấp (chuỗi fast→await→full cũ cộng thêm ~2-4s tổng thời gian).
+      // Request nhỏ (~vài trăm ký tự) nên chạy cạnh pend/fast khác cũng chẳng
+      // đáng kể; đổi lại chữ AI-quality xuất hiện sau ~2-3s thay vì mô tả thô.
+      const descSrc = (item.description || '').trim();
+      const fastTask: Promise<string | null> = descSrc.length < 80
+        ? Promise.resolve(null)
+        : summarizeArticle(descSrc, item.category, (partial) => {
+            if (!fullArrived && partial) setSummary(partial);
+          }).catch((e: Error) => { lastErr = e.message || ''; return null; });
+
+      // Bài gốc + text đầy đủ do Jina trả: render đủ caption/media nhưng r.jina.ai
+      // mất 10-20s. KHÔNG chờ Jina để nâng cấp summary — nguồn text bóc thẳng từ
+      // HTML trang báo (~1-2s, vốn đã fetch cho ảnh) thường sẵn sàng trước;
+      // Jina về tới đâu cập nhật phần bài đọc tới đó.
+      blocksTask.then((b) => {
+        if (b.length) setBlocks(b);
+        const t = blocksToText(b);
+        if (t) setContent(t);
+      });
+      const htmlTextP = fetchArticleTextFast(item.link);
+      const srcReady: Promise<string> = new Promise<string>((resolve) => {
+        let done = false;
+        // 400 ký tự = ngưỡng "có nội dung thật" (nav/breadcrumb ngắn hơn nhiều)
+        const take = (t: string) => {
+          if (!done && t && t.trim().length >= 400) { done = true; resolve(t.trim()); }
+        };
+        htmlTextP.then((t) => take(t), () => {});
+        blocksTask.then((b) => take(blocksToText(b)), () => {});
+        // cả hai nguồn xong mà không đủ dài → dùng bản dài nhất (có thể rỗng)
+        Promise.all([htmlTextP.catch(() => ''), blocksTask.then(blocksToText)]).then(([a, b]) => {
+          if (!done) { done = true; resolve((b.length >= a.length ? b : a).trim()); }
+        });
+      });
+
+      // NÂNG CẤP summary bằng bản full-text (stream)
+      let upgradeFull: string | null = null;
+      let upgradeSrc = '';
+      if (!fullArrived) {
+        if (pend) {
+          // Home đã gọi LLM full-text cho đúng bài này → CHỜ bản đó (cap 25s)
+          // thay vì gọi trùng lần 2 — 2 request song song cùng bài chỉ làm
+          // chậm lẫn nhau.
+          upgradeFull = await Promise.race([
+            pend.catch(() => null as string | null),
+            new Promise<null>((r) => setTimeout(r, 25000)),
+          ]);
+          if (upgradeFull && (upgradeFull.trim().length < 20 || isStaleSummary(upgradeFull))) upgradeFull = null;
+        }
+        if (!upgradeFull) {
+          upgradeSrc = await srcReady;
+          if (upgradeSrc.length >= 400 && upgradeSrc.length > descSrc.length) {
+            upgradeFull = await summarizeArticle(upgradeSrc, item.category, (partial) => {
+              if (!fullArrived && partial) setSummary(partial);
+            }).catch(() => null);
+            if (upgradeFull) setOffline(false);
+          }
+        }
+      }
+
+      const fast = await fastTask;
+      let finalSummary = upgradeFull || pendText || fast;
       // AI chết hoàn toàn → fallback extractive (chọn-câu, không cần mạng):
-      // app vẫn luôn có tóm tắt hiển thị thay vì ô lỗi.
-      if (!finalSummary && articleBlocks.length) {
-        const ex = buildExtractiveSummary(item.title, articleBlocks);
-        if (ex) { finalSummary = ex; setOffline(true); }
+      // app vẫn luôn có tóm tắt hiển thị thay vì ô lỗi. Jina chưa về thì tóm
+      // bằng chính nguồn text nhanh đã tải.
+      if (!finalSummary) {
+        const jinaBlocks = await Promise.race([
+          blocksTask,
+          new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+        ]);
+        const exBlocks: ArticleBlock[] = jinaBlocks && jinaBlocks.length
+          ? jinaBlocks
+          : upgradeSrc ? [{ type: 'text', text: upgradeSrc }] : [];
+        if (exBlocks.length) {
+          const ex = buildExtractiveSummary(item.title, exBlocks);
+          if (ex) { finalSummary = ex; setOffline(true); }
+        }
       }
       if (finalSummary) {
         setSummary(finalSummary);
@@ -193,7 +281,8 @@ export default function ArticleScreen({ navigation, route }: any) {
       } else if (lastErr) {
         setError(lastErr);
       }
-    })();
+      setSummarizing(false);
+    })().catch(() => setSummarizing(false));
   }, [item.link]);
 
   // Caption DÀI → AI rút gọn nền (1 request batch, cache theo URL — xem
@@ -212,8 +301,17 @@ export default function ArticleScreen({ navigation, route }: any) {
   }, [blocks]);
 
   const summarize = async () => {
+    // Đang đọc mà bấm tóm tắt lại → tắt giọng trước, kẻo voice cũ + bản tóm
+    // tắt mới đọc đè lên nhau
+    speakGenRef.current++;
+    cancelledRef.current = true;
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    stopSystem();
+    setSpeaking(false);
     setError('');
     setSummarizing(true);
+    resumeRef.current = null;
+    resumeSummaryRef.current = '';
     try {
       const src = content || item.description;
       // stream: chữ refresh cũng hiện dần thay vì chờ xong cả câu
@@ -259,22 +357,33 @@ export default function ArticleScreen({ navigation, route }: any) {
     const { offsets, paras } = buildWordMap(summary);
     const f2p: number[] = [];
     paras.forEach((pw, pi) => pw.forEach((w) => { f2p[w.flat] = pi; }));
+    summaryKeyRef.current++; // summary đổi → word-span phải remount (xem renderSummaryNodes)
     return { wordOffsets: offsets, paraWords: paras, flatToPara: f2p };
   }, [summary]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Thế hệ phiên đọc: stop/resume tăng gen → loop cũ chết hẳn, không ghi đè
+  // UI của phiên mới (bug cũ: loop zombie của phiên trước làm mờ highlight +
+  // xóa resumeRef giữa chừng)
+  const speakGenRef = useRef(0);
   // Hiệu chỉnh tốc độ đọc thực RIÊNG CHO TỪNG rate (ms/ký tự), cập nhật EMA sau
   // MỖI cụm câu trong lúc đọc → highlight tự bám lại giọng trong vòng vài câu
   // khi user tăng/giảm tốc. Rate TTS không tuyến tính nên không quy đổi chéo.
   const sysCalibRef = useRef<Record<string, number>>({});
-  // Chunk index + word index cho resume: stop → lưu lại, nút Nghe lại → tiếp tục
-  // từ đó thay vì đọc lại từ đầu.
-  const resumeRef = useRef<{ chunkIdx: number; wordIdx: number } | null>(null);
+  // Chunk index + offset ký tự TRONG chunk cho resume: stop → lưu lại, bấm
+  // Nghe lần sau → slice đúng chỗ dừng đọc tiếp (kể cả giữa câu), không đọc
+  // lại từ đầu.
+  const resumeRef = useRef<{ chunkIdx: number; charPos: number } | null>(null);
+  // Resume chỉ hợp lệ khi summary không đổi kể từ lúc stop (summary nâng cấp
+  // full-text làm TtsChunk cũ vô nghĩa)
+  const resumeSummaryRef = useRef('');
 
   // Reset highlight khi summary đổi
   useEffect(() => {
     setHighlightWordIndex(-1);
     setHighlightParaIndex(-1);
+    resumeRef.current = null;
+    resumeSummaryRef.current = '';
   }, [summary]);
 
   // Giọng đọc: chia tóm tắt thành cụm câu, đọc lần lượt. Highlight neo theo
@@ -286,7 +395,9 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   const toggleSpeak = async () => {
     if (speaking) {
-      // Dừng → lưu vị trí hiện tại để resume
+      // Dừng → increased gen giết loop cũ (kể cả loop đang await giữa chunk),
+      // lưu vị trí hiện tại để resume
+      speakGenRef.current++;
       cancelledRef.current = true;
       clearSpeakTimer();
       stopSystem();
@@ -294,11 +405,19 @@ export default function ArticleScreen({ navigation, route }: any) {
       // Giữ highlight nguyên (không reset về -1) để biết đã đọc tới đâu
       return;
     }
-    if (!summary || !paraWords.length) return;
+    if (!summary || !paraWords.length || summarizing) return;
     cancelledRef.current = false;
     clearVoiceHung();
+    const gen = ++speakGenRef.current;
     setSpeaking(true);
-    if (!resumeRef.current) {
+    // Resume chỉ hợp lệ khi summary không đổi từ lúc stop
+    if (resumeRef.current && resumeSummaryRef.current !== summary) resumeRef.current = null;
+    const startChunk = resumeRef.current?.chunkIdx ?? 0;
+    const startChar = resumeRef.current?.charPos ?? 0;
+    resumeRef.current = null;
+    resumeSummaryRef.current = summary;
+    const resuming = startChunk > 0 || startChar > 0;
+    if (!resuming) {
       // Lần đầu: highlight từ đầu
       setHighlightWordIndex(0);
       setHighlightParaIndex(0);
@@ -308,6 +427,11 @@ export default function ArticleScreen({ navigation, route }: any) {
       const pitch = parseFloat((await AsyncStorage.getItem(KEYS.pitch)) || '') || 1.0;
       const chunks = buildTtsChunks(paraWords);
       if (!chunks.length) throw new Error('Không có nội dung để đọc');
+      if (startChunk >= chunks.length) { // resume sau khi đã đọc tới cuối
+        resumeSummaryRef.current = '';
+        setSpeaking(false);
+        return;
+      }
 
       const rateKey = rate.toFixed(1);
       let msPerChar = sysCalibRef.current[rateKey] ?? 90 / Math.max(rate, 0.01);
@@ -318,15 +442,16 @@ export default function ArticleScreen({ navigation, route }: any) {
         if (pi !== undefined) setHighlightParaIndex(pi);
       };
 
-      // Resume: bắt đầu từ chunk đã lưu, không phải từ đầu
-      const startChunk = resumeRef.current?.chunkIdx ?? 0;
-      resumeRef.current = null;
-
       for (let ci = startChunk; ci < chunks.length; ci++) {
-        if (cancelledRef.current) break;
+        if (cancelledRef.current || speakGenRef.current !== gen) break;
         const chunk = chunks[ci];
         const t0 = Date.now();
-        let anchorChar = 0; // vị trí ký tự từ boundary cuối (chính xác hơn wordIndex)
+        // Resume giữa câu: giọng đọc slice từ charPos → audio tiếp đúng chỗ dừng,
+        // mọi charIndex của chunk này quy về tuyệt đối bằng base + rel
+        const isResumeChunk = ci === startChunk && startChar > 0;
+        const base = isResumeChunk ? Math.min(startChar, chunk.text.length - 1) : 0;
+        const speakText = base > 0 ? chunk.text.slice(base) : chunk.text;
+        let anchorChar = base; // vị trí ký tự từ boundary cuối (tương đối chunk.text)
         let anchorTime = 0;
 
         const applyWordAtChar = (charPos: number) => {
@@ -337,20 +462,15 @@ export default function ArticleScreen({ navigation, route }: any) {
           }
           applyFlat(chunk.flats[Math.max(0, Math.min(i, chunk.flats.length - 1))]);
         };
-
-        // Nếu resume, tính offset từ highlightWordIndex hiện tại
-        if (ci === startChunk && startChunk > 0) {
-          // Ước lượng vị trí ký tự từ word index (để resume không bị nhảy)
-          const w = highlightWordIndex;
-          // Tìm word index trong chunk.flats — nếu không có, dùng 0
-          const flatIdx = chunk.flats.indexOf(w);
-          if (flatIdx >= 0 && flatIdx < chunk.starts.length) anchorChar = chunk.starts[flatIdx];
-        }
+        const mark = (pos: number) => {
+          resumeRef.current = { chunkIdx: ci, charPos: Math.max(0, Math.min(pos, chunk.text.length - 1)) };
+        };
 
         applyWordAtChar(anchorChar);
+        mark(anchorChar);
         clearSpeakTimer();
         intervalRef.current = setInterval(() => {
-          if (cancelledRef.current || !anchorTime) return;
+          if (cancelledRef.current || speakGenRef.current !== gen || !anchorTime) return;
           const projectedChar = anchorChar + Math.round((Date.now() - anchorTime) / Math.max(msPerChar, 20));
           // Giới hạn: không vượt quá độ dài chunk để tránh nhảy quá xa
           const clamped = Math.min(projectedChar, chunk.text.length);
@@ -359,25 +479,20 @@ export default function ArticleScreen({ navigation, route }: any) {
 
         let tSpeak = 0;
         try {
-          // Lưu vị trí hiện tại để resume nếu stop giữa chừng
-          resumeRef.current = { chunkIdx: ci, wordIdx: 0 };
-          await speakSystem(chunk.text, {
+          await speakSystem(speakText, {
             pitch,
             rate,
             onStart: () => {
               tSpeak = Date.now();
               anchorTime = tSpeak;
-              if (ci === startChunk && startChunk > 0) {
-                // Resume: anchorTime đã set, highlight giữ nguyên từ lúc stop
-              } else {
-                applyWordAtChar(0);
-              }
+              if (base === 0) applyWordAtChar(0);
             },
             onBoundary: (ev) => {
               if (typeof ev?.charIndex !== 'number') return;
-              anchorChar = ev.charIndex;
+              anchorChar = base + ev.charIndex;
               anchorTime = Date.now();
-              applyWordAtChar(ev.charIndex);
+              applyWordAtChar(anchorChar);
+              mark(anchorChar); // stop giữa câu → resume đúng từ đang đọc
             },
           });
         } catch (e) {
@@ -385,27 +500,31 @@ export default function ArticleScreen({ navigation, route }: any) {
           throw e instanceof Error ? e : new Error('Không đọc được giọng Việt trên thiết bị này');
         }
         clearSpeakTimer();
-        if (cancelledRef.current) break;
+        // Stop/phiên mới giữa chunk → speakSystem resolve sớm: KHÔNG đánh dấu
+        // chunk xong, nếu không resume sẽ bỏ qua cả câu đang đọc dở
+        if (cancelledRef.current || speakGenRef.current !== gen) break;
+        // Chunk đọc trọn vẹn → nếu stop từ đây, resume từ ĐẦU CHUNK KẾ
+        resumeRef.current = ci + 1 < chunks.length ? { chunkIdx: ci + 1, charPos: 0 } : null;
         // Đo tốc độ đọc THỰC của cụm
         const dur = tSpeak ? Date.now() - tSpeak : Date.now() - t0;
-        if (dur > 600 && chunk.text.length > 12) {
+        if (dur > 600 && speakText.length > 12) {
           const lo = 45 / Math.max(rate, 0.05);
           const hi = 170 / Math.max(rate, 0.05);
-          const measured = Math.min(hi, Math.max(lo, dur / chunk.text.length));
+          const measured = Math.min(hi, Math.max(lo, dur / speakText.length));
           msPerChar = msPerChar * 0.55 + measured * 0.45;
           sysCalibRef.current[rateKey] = msPerChar;
         }
       }
-      if (!cancelledRef.current) {
+      if (!cancelledRef.current && speakGenRef.current === gen) {
         setSpeaking(false);
         setHighlightWordIndex(-1);
         setHighlightParaIndex(-1);
         resumeRef.current = null; // đọc xong hết → xóa resume
-      } else {
-        // Bị stop → lưu vị trí để resume
-        // resumeRef đã được set trong speakSystem/onBoundary
+        resumeSummaryRef.current = '';
       }
+      // stopped giữa chừng → resumeRef đã lưu vị trí chính xác, không làm gì thêm
     } catch (e) {
+      if (speakGenRef.current !== gen) return; // stop/race — không phải lỗi thật
       setError(e instanceof Error ? e.message : 'Không đọc được');
       cancelledRef.current = true;
       stopSystem();
@@ -413,12 +532,15 @@ export default function ArticleScreen({ navigation, route }: any) {
       setSpeaking(false);
       setHighlightWordIndex(-1);
       setHighlightParaIndex(-1);
+      resumeRef.current = null;
+      resumeSummaryRef.current = '';
     }
   };
 
   // Dừng đọc khi rời màn hình. Bottom-tabs KHÔNG unmount khi chuyển tab
   // (unmountOnBlur mặc định false) nên phải nghe event 'blur', không chỉ unmount.
   const stopSpeaking = () => {
+    speakGenRef.current++; // giết loop + chặn catch của phiên cũ
     cancelledRef.current = true; // chặn continuation của speakSystem đang chờ
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     stopSystem();
@@ -430,11 +552,16 @@ export default function ArticleScreen({ navigation, route }: any) {
   useEffect(() => {
     const unsub = navigation.addListener('blur', stopSpeaking);
     return () => { unsub(); stopSpeaking(); };
-  }, []);
+    // stopSpeaking được tạo lại mỗi render — đăng ký lại theo item.link (stale
+    // closure không sao vì nó chỉ đọc ref + setter)
+  }, [item.link]);
 
   // Read time estimate (chars → minutes); degrades to stub until content loads
   const READ_WPM = 250;
   const readTime = Math.max(1, Math.ceil((content || item.description).length / READ_WPM));
+
+  // Trang video: khối video duy nhất (nếu đã tải về) — render player thay AI tóm tắt
+  const videoBlock = isVideoPage ? blocks.find((b) => b.type === 'video') : null;
 
   // Render 1 media block: ảnh/video — caption ưu tiên bản AI rút gọn (cache
   // trong summarize.ts; captionRev bump khi bản mới về để re-render).
@@ -521,6 +648,10 @@ export default function ArticleScreen({ navigation, route }: any) {
     if (paraWords.length > 0) {
       // Word-level karaoke highlighting PER PARAGRAPH + interleaved media
       // (cả web lẫn native — highlightWordIndex được applyProgress cập nhật chung)
+      // sp = số thứ tự của bản summary hiện tại: summary đổi (stream/nâng cấp)
+      // làm key word khác đi → span REMOUNT, nếu không React reuse span cũ theo
+      // index khiến highlight biến mất giữa lúc đang đọc
+      const sp = summaryKeyRef.current;
       const renderPara = (pi: number) => {
         const words = paraWords[pi];
         if (!words) return null; // guard: index lệch (không xảy ra khi wordMap là useMemo, nhưng chặn crash)
@@ -537,16 +668,16 @@ export default function ArticleScreen({ navigation, route }: any) {
               firstVisible = false;
               return (
                 <Text
-                  key={'w' + pi + '_' + wi}
+                  key={'w' + sp + '_' + pi + '_' + wi}
                   style={[w.flat === highlightWordIndex && { backgroundColor: C.hotSoft, borderRadius: 3, fontWeight: '700', color: C.hot }]}
                 >{spacer}{w.text}</Text>
               );
             })}
           </Text>
         );
-        if (!bullet) return <React.Fragment key={'wp' + pi}>{text}</React.Fragment>;
+        if (!bullet) return <React.Fragment key={'wp' + sp + '_' + pi}>{text}</React.Fragment>;
         return (
-          <View key={'b' + pi} style={styles.bulletRow}>
+          <View key={'b' + sp + '_' + pi} style={styles.bulletRow}>
             <View style={styles.bulletDot} />
             <View style={styles.bulletBody}>{text}</View>
           </View>
@@ -639,8 +770,8 @@ export default function ArticleScreen({ navigation, route }: any) {
               end={{ x: 1, y: 0 }}
               style={styles.aiBadge}
             >
-              <Ionicons name="sparkles" size={13} color="#FFF" />
-              <Text style={styles.summaryLabel}>AI TÓM TẮT</Text>
+              <Ionicons name={isVideoPage ? 'videocam' : 'sparkles'} size={13} color="#FFF" />
+              <Text style={styles.summaryLabel}>{isVideoPage ? 'VIDEO' : 'AI TÓM TẮT'}</Text>
             </LinearGradient>
             {offline ? (
               <View style={styles.offlineChip}>
@@ -648,20 +779,22 @@ export default function ArticleScreen({ navigation, route }: any) {
                 <Text style={styles.offlineChipText}>OFFLINE</Text>
               </View>
             ) : null}
-            {summary ? (
+            {!isVideoPage && paraWords.length > 0 && (
               <TouchableOpacity
                 onPress={toggleSpeak}
-                style={[styles.speakBtn, speaking && styles.speakBtnOn]}
+                disabled={summarizing}
+                accessibilityState={{ disabled: summarizing }}
+                style={[styles.speakBtn, speaking && styles.speakBtnOn, summarizing && styles.speakBtnDisabled]}
                 activeOpacity={0.7}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityLabel={speaking ? 'Dừng đọc' : 'Nghe tóm tắt'}
+                accessibilityLabel={speaking ? 'Dừng đọc' : summarizing ? 'Đang tóm tắt, chưa đọc được' : 'Nghe tóm tắt'}
               >
                 <Ionicons name={speaking ? 'stop' : 'volume-high'} size={16} color={speaking ? '#FFF' : C.hot} />
                 <Text style={[styles.speakBtnText, speaking && styles.speakBtnTextOn]}>
                   {speaking ? 'Dừng' : 'Nghe'}
                 </Text>
               </TouchableOpacity>
-            ) : null}
+            )}
           </View>
 
           {/* Thanh tiến trình đọc — chạy theo word đang được đọc */}
@@ -678,7 +811,19 @@ export default function ArticleScreen({ navigation, route }: any) {
             </View>
           ) : null}
 
-          {summarizing ? (
+          {isVideoPage ? (
+            <View style={styles.summaryBody}>
+              {videoBlock ? (
+                <BlockVideo key="block-video" block={videoBlock} />
+              ) : item.image ? (
+                <Image source={{ uri: item.image }} style={styles.cardImg} resizeMode="cover" />
+              ) : (
+                <View style={styles.summaryErr}>
+                  <Text style={styles.summaryErrText}>Đang tải video…</Text>
+                </View>
+              )}
+            </View>
+          ) : summarizing && !summary ? (
             <View style={styles.summaryLoading}>
               <ActivityIndicator color={C.hot} size="small" />
               <Text style={styles.summaryLoadingText}>Đang tóm tắt...</Text>
@@ -693,10 +838,19 @@ export default function ArticleScreen({ navigation, route }: any) {
           ) : (
             <View style={styles.summaryBody}>
               {renderSummaryNodes()}
-              <TouchableOpacity style={styles.copyInline} onPress={copySummary} activeOpacity={0.7}>
-                <Ionicons name="copy-outline" size={14} color={C.hot} />
-                <Text style={styles.copyInlineText}>Copy tóm tắt</Text>
-              </TouchableOpacity>
+              {summarizing ? (
+                // Trạng thái "chưa tóm tắt xong" đặt DƯỚI thân bài — để cạnh
+                // badge thì nó đẩy nút Nghe (marginLeft:auto) tràn ra ngoài
+                <View style={styles.summarizingFoot}>
+                  <ActivityIndicator size="small" color={C.textMuted} />
+                  <Text style={styles.summarizingFootText}>Đang hoàn thiện tóm tắt…</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.copyInline} onPress={copySummary} activeOpacity={0.7}>
+                  <Ionicons name="copy-outline" size={14} color={C.hot} />
+                  <Text style={styles.copyInlineText}>Copy tóm tắt</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -730,25 +884,78 @@ export default function ArticleScreen({ navigation, route }: any) {
       </ScrollView>
 
       {/* Full-screen Image Modal */}
-      <Modal visible={imageModal.visible} transparent animationType="fade">
+      <Modal
+        visible={imageModal.visible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeImageModal}
+      >
         <View style={styles.imageModalOverlay}>
-          {/* Close button - top right */}
-          <TouchableOpacity
-            style={styles.imageModalCloseBtn}
-            onPress={closeImageModal}
-            accessibilityLabel="Đóng hình ảnh"
-            hitSlop={{ top: 20, left: 20, right: 20, bottom: 20 }}
+          {/* Backdrop — bấm ra ngoài ảnh là đóng */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeImageModal} accessibilityLabel="Đóng hình ảnh" />
+          {/* Header: nguồn + nút đóng kính mờ trên gradient mờ dần */}
+          <LinearGradient
+            colors={['rgba(0,0,0,0.75)', 'rgba(0,0,0,0)']}
+            style={[styles.imageModalHeader, { paddingTop: insets.top + 8 }]}
           >
-            <Ionicons name="close-sharp" size={28} color="#FFF" />
-          </TouchableOpacity>
-          {/* Image content */}
-          <View style={styles.imageModalContent}>
-            <Image
-              source={{ uri: imageModal.url }}
-              style={styles.imageModalImg}
-              resizeMode="contain"
-            />
-          </View>
+            <Text style={styles.imageModalSource} numberOfLines={1}>{item.source}</Text>
+            <TouchableOpacity
+              style={styles.imageModalCloseBtn}
+              onPress={closeImageModal}
+              accessibilityLabel="Đóng hình ảnh"
+              hitSlop={{ top: 10, left: 10, right: 10, bottom: 10 }}
+            >
+              <Ionicons name="close" size={20} color="#FFF" />
+            </TouchableOpacity>
+          </LinearGradient>
+          {/* Ảnh thẻ bo góc — scale + fade vào */}
+          <Animated.View
+            style={[styles.imageModalContent, { opacity: imgAnim, transform: [{ scale: imgAnim }] }]}
+          >
+            <View style={styles.imageModalCard}>
+              <Image
+                source={{ uri: imageModal.url }}
+                style={styles.imageModalImg}
+                resizeMode="contain"
+                onLoadEnd={() => setImgLoading(false)}
+                onError={() => { setImgLoading(false); setImgError(true); }}
+              />
+              {imgLoading && !imgError && (
+                <View style={styles.imageModalSpinner}>
+                  <ActivityIndicator size="large" color="#FFF" />
+                </View>
+              )}
+              {imgError && (
+                <View style={styles.imageModalSpinner}>
+                  <Ionicons name="cloud-offline-outline" size={36} color="rgba(255,255,255,0.65)" />
+                  <Text style={styles.imageModalErrorText}>Không tải được ảnh</Text>
+                </View>
+              )}
+            </View>
+          </Animated.View>
+          {/* Footer: hành động trên gradient mờ dần */}
+          <LinearGradient
+            colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)']}
+            style={[styles.imageModalFooter, { paddingBottom: insets.bottom + 14 }]}
+          >
+            <TouchableOpacity
+              style={styles.imageModalAction}
+              onPress={() => Linking.openURL(imageModal.url).catch(() => {})}
+              accessibilityLabel="Mở ảnh gốc"
+            >
+              <Ionicons name="open-outline" size={19} color="#FFF" />
+              <Text style={styles.imageModalActionText}>Mở ảnh</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.imageModalAction}
+              onPress={() => Share.share({ message: imageModal.url })}
+              accessibilityLabel="Chia sẻ ảnh"
+            >
+              <Ionicons name="share-social-outline" size={19} color="#FFF" />
+              <Text style={styles.imageModalActionText}>Chia sẻ</Text>
+            </TouchableOpacity>
+          </LinearGradient>
         </View>
       </Modal>
 
@@ -766,11 +973,16 @@ export default function ArticleScreen({ navigation, route }: any) {
 
         <TouchableOpacity
           style={[styles.fabRound, summarizing && styles.fabRoundOn]}
-          onPress={summarize}
+          onPress={isVideoPage ? () => Linking.openURL(item.link) : summarize}
           activeOpacity={0.7}
-          disabled={summarizing}
+          disabled={summarizing && !isVideoPage}
+          accessibilityLabel={isVideoPage ? 'Mở video tại nguồn' : undefined}
         >
-          <Ionicons name={summarizing ? 'sync' : 'refresh'} size={21} color={C.primary} />
+          <Ionicons
+            name={isVideoPage ? 'open-outline' : summarizing ? 'sync' : 'refresh'}
+            size={21}
+            color={C.primary}
+          />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -823,10 +1035,16 @@ function FileVideo({ url }: { url: string }) {
 
 function ExpoFileVideo({ url }: { url: string }) {
   const player = useVideoPlayer(url, (p) => { p.loop = false; });
-  return <VideoView style={styles.videoThumb} player={player} nativeControls contentFit="cover" />;
+  // 16:9 theo width thật (tránh h cứng 200 crop video dọc) — đo qua onLayout
+  const [w, setW] = useState(0);
+  return (
+    <View onLayout={(e) => setW(e.nativeEvent.layout.width)} style={styles.videoThumbWrap}>
+      <VideoView style={{ width: '100%', height: w ? Math.round((w * 9) / 16) : 200 }} player={player} nativeControls contentFit="contain" />
+    </View>
+  );
 }
 
-// Cùng cách phát như WebVideoPlayer trong VideoModal (hls.js + /api/hls)
+// HLS web: hls.js + /api/hls (Chrome không chơi HLS native)
 function WebHlsVideo({ url }: { url: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
@@ -848,7 +1066,7 @@ function WebHlsVideo({ url }: { url: string }) {
       ref={ref}
       controls
       playsInline
-      style={{ width: '100%', height: 200, backgroundColor: '#000' }}
+      style={{ width: '100%', aspectRatio: '16 / 9', backgroundColor: '#000' }}
     />
   );
 }
@@ -920,6 +1138,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   summaryLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap', // màn rất hẹp → badge/chips xuống dòng, không nuốt nút Nghe
+    rowGap: 6,
     gap: 8,
     marginHorizontal: 14,
     marginTop: 12,
@@ -965,6 +1185,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     marginLeft: 'auto',
   },
   speakBtnOn: { backgroundColor: Color.hot, borderColor: Color.hot },
+  // Chưa summarize xong → nút Nghe_DISABLED (vẫn thấy vị trí nút, không mất layout)
+  speakBtnDisabled: { opacity: 0.45 },
   speakBtnText: { fontSize: Font.tiny, fontWeight: '700', color: Color.hot },
   speakBtnTextOn: { color: '#FFF' },
   // Thanh tiến trình đọc (hiện khi đang Nghe) — mảnh, nằm ngay dưới hàng badge
@@ -981,6 +1203,10 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   summaryBody: { marginHorizontal: 14 },
   summaryLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginHorizontal: 14, marginBottom: 14 },
   summaryLoadingText: { fontSize: Font.body, color: Color.textMuted },
+  // Hàng trạng thái "đang hoàn thiện" DƯỚI thân bài — đứng cạnh badge trên
+  // hàng summaryLabelRow sẽ chen mất chỗ của nút Nghe
+  summarizingFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -6, marginBottom: 14 },
+  summarizingFootText: { fontSize: Font.caption, color: Color.textMuted, fontStyle: 'italic' },
   summaryErr: {
     backgroundColor: Color.dangerSoft,
     padding: 12,
@@ -1065,6 +1291,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     alignItems: 'center',
   },
   videoThumb: { width: '100%', height: 200, backgroundColor: Color.skeleton },
+  videoThumbWrap: { width: '100%', backgroundColor: Color.skeleton },
   videoPlayRow: { flexDirection: 'row', alignItems: 'center', gap: 6, margin: 9 },
   videoPlay: {
     fontSize: Font.caption,
@@ -1133,31 +1360,93 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   // Image Modal
   imageModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.96)',
+  },
+  imageModalHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingBottom: 28,
+    zIndex: 10,
+  },
+  imageModalSource: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   imageModalCloseBtn: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    zIndex: 10,
-    padding: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.28)',
   },
   imageModalContent: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'center',
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    paddingHorizontal: 20,
-    backgroundColor: 'rgba(0,0,0,0.1)',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  imageModalCard: {
+    width: '100%',
+    height: '74%',
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.15)',
   },
   imageModalImg: {
     width: '100%',
-    height: '85%',
-    resizeMode: 'contain',
+    height: '100%',
+  },
+  imageModalSpinner: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageModalErrorText: {
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 14,
+    marginTop: 10,
+  },
+  imageModalFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    paddingTop: 36,
+    paddingHorizontal: 16,
+  },
+  imageModalAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    height: 40,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  imageModalActionText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
 

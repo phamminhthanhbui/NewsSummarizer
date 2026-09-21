@@ -64,7 +64,7 @@ export default function SavedScreen({ navigation }: Props) {
     navigation.navigate('HomeTab', { screen: 'Article', params: { item } });
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="savedScreen">
       {/* Header — tiêu đề + vạch màu, nút xoá dạng pill tint */}
       <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <View style={styles.headerLeft}>

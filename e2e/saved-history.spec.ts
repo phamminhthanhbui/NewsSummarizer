@@ -1,5 +1,7 @@
 // E2E: tab Đã lưu + Lịch sử — seed storage, render, xóa từng bài, xóa tất cả,
 // mở bài từ list, dọn record rỗng trong history.
+// Locators scope bằng testID của screen: Home tab vẫn mounted phía sau (React
+// Navigation giữ tab) nên getByText không scope sẽ match cả text ẩn của Home.
 import { test, expect } from '@playwright/test';
 import {
   FEED_ITEMS, KEYS, mockNetwork, seedStorage, getStorage, gotoTab, waitForFeedLoaded,
@@ -26,9 +28,10 @@ test.describe('Đã lưu', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Đã lưu');
-    await expect(page.getByText(A.title)).toBeVisible();
-    await expect(page.getByText(B.title)).toBeVisible();
-    await expect(page.getByText('Xoá tất cả')).toBeVisible();
+    const saved = page.getByTestId('savedScreen');
+    await expect(saved.getByText(A.title)).toBeVisible();
+    await expect(saved.getByText(B.title)).toBeVisible();
+    await expect(saved.getByText('Xoá tất cả')).toBeVisible();
   });
 
   test('xóa 1 bài: storage cập nhật, bài còn lại giữ', async ({ page }) => {
@@ -36,10 +39,11 @@ test.describe('Đã lưu', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Đã lưu');
-    await page.getByLabel('Bỏ lưu bài').first().click();
+    const saved = page.getByTestId('savedScreen');
+    await saved.getByLabel('Bỏ lưu bài').first().click();
 
-    await expect(page.getByText(A.title)).toHaveCount(0);
-    await expect(page.getByText(B.title)).toBeVisible();
+    await expect(saved.getByText(A.title)).toHaveCount(0);
+    await expect(saved.getByText(B.title)).toBeVisible();
     const raw = await getStorage(page, KEYS.saved);
     expect(JSON.parse(raw!).map((i: any) => i.link)).toEqual([B.link]);
   });
@@ -49,8 +53,9 @@ test.describe('Đã lưu', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Đã lưu');
-    await page.getByText('Xoá tất cả').click();
-    await expect(page.getByText('Chưa có bài đã lưu')).toBeVisible();
+    const saved = page.getByTestId('savedScreen');
+    await saved.getByText('Xoá tất cả').click();
+    await expect(saved.getByText('Chưa có bài đã lưu')).toBeVisible();
     expect(await getStorage(page, KEYS.saved)).toBeNull();
   });
 
@@ -59,7 +64,7 @@ test.describe('Đã lưu', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Đã lưu');
-    await page.getByText(A.title).click();
+    await page.getByTestId('savedScreen').getByText(A.title).click();
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
   });
 });
@@ -83,9 +88,10 @@ test.describe('Lịch sử tóm tắt', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Lịch sử');
-    await expect(page.getByText(A.title)).toBeVisible();
-    await expect(page.getByText('Tóm tắt một của bài A.')).toBeVisible();
-    await expect(page.getByText(B.title)).toBeVisible();
+    const hist = page.getByTestId('historyScreen');
+    await expect(hist.getByText(A.title)).toBeVisible();
+    await expect(hist.getByText('Tóm tắt một của bài A.')).toBeVisible();
+    await expect(hist.getByText(B.title)).toBeVisible();
   });
 
   test('record summary rỗng bị dọn khỏi storage khi focus tab', async ({ page }) => {
@@ -94,8 +100,9 @@ test.describe('Lịch sử tóm tắt', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Lịch sử');
+    const hist = page.getByTestId('historyScreen');
 
-    await expect(page.getByText('Rỗng')).toHaveCount(0);
+    await expect(hist.getByText('Rỗng')).toHaveCount(0);
     await expect(async () => {
       const raw = await getStorage(page, KEYS.history);
       expect(JSON.parse(raw!).length).toBe(2);
@@ -107,8 +114,9 @@ test.describe('Lịch sử tóm tắt', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Lịch sử');
-    await page.getByText('Xoá tất cả').click();
-    await expect(page.getByText('Chưa có lịch sử tóm tắt')).toBeVisible();
+    const hist = page.getByTestId('historyScreen');
+    await hist.getByText('Xoá tất cả').click();
+    await expect(hist.getByText('Chưa có lịch sử tóm tắt')).toBeVisible();
     expect(await getStorage(page, KEYS.history)).toBeNull();
   });
 
@@ -117,7 +125,7 @@ test.describe('Lịch sử tóm tắt', () => {
     await page.goto('/');
     await waitForFeedLoaded(page);
     await gotoTab(page, 'Lịch sử');
-    await page.getByText(A.title).click();
+    await page.getByTestId('historyScreen').getByText(A.title).click();
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
   });
 });

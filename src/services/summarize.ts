@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxiedFetchText } from '../utils/proxy';
+import { runCpuTask } from '../utils/parseQueue';
 import type { FeedItem, SummaryRecord } from '../types';
 
 export type LLMProvider = 'bai' | 'nvidia';
@@ -31,17 +32,13 @@ export const PROVIDERS: ProviderConfig[] = [
     label: 'b.AI (mặc định)',
     baseUrl: 'https://api.b.ai/v1',
     models: [
-      { id: 'deepseek-v4-flash-vision-exp', label: 'DeepSeek V4 Flash Vision (nhanh, miễn phí, mặc định)', power: 4 },
-      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (nhanh, miễn phí)', power: 4 },
-      { id: 'hy3', label: 'Tencent Hunyuan Hy3 (miễn phí)', power: 5 },
+      { id: 'hy3', label: 'Tencent Hunyuan Hy3 (miễn phí, mặc định)', power: 5 },
+      { id: 'mimo-v2.5', label: 'Xiaomi MiMo v2.5 (miễn phí)', power: 3 },
       { id: 'qwen3.8-flash', label: 'Qwen 3.8 Flash (miễn phí)', power: 4 },
-      // ĐÃ LOẠI (kiểm tra thực tế 29/8/2026, bảng giá b.AI):
-      // - deepseek-v4-pro: giá 1.32 → HTTP 403 "Deposit required" (MẤT PHÍ).
-      // - glm-5.3-flash: giá 0 (free) nhưng 400 khi app gửi thinking:{type:'disabled'}
-      //   (model bắt buộc reasoning) → không dùng được.
-      // - mimo-v2.5: giá 0 (free) nhưng luôn timeout (>90s) → không dùng được.
-      // Các model khác (gpt-5.x, claude, gemini, glm-5.x, qwen3.8-max/27b,
-      // minimax, kimi, mimo-v2.5-pro...) đều có giá > 0 → MẤT PHÍ, không thêm.
+      // ĐÃ LOẠI: deepseek-v4-flash/-vision (chuyển sang tính phí → 400 "credit
+      // insufficient"), glm-5.3-flash (400 với thinking:disabled), mọi model khác
+      // trên bảng giá b.AI có giá > 0.
+      // Lưu ý: mimo-v2.5 từng timeout >90s khi probe 29/8 → fallback tự đổi model.
     ],
     needsKey: true,
     keyStorageKey: 'baiKey',
@@ -279,6 +276,7 @@ export async function summarizeWithProvider(
   customBaseUrl?: string,
   category?: string,
   onToken?: (partial: string) => void,
+  attemptTimeoutMs?: number,
 ): Promise<string> {
   const hint = (category && CATEGORY_PROMPT_HINTS[category]) || '';
   const prompt = `Bạn là biên tập viên tin tức. Tóm tắt bài báo dưới đây bằng tiếng Việt, trả về ĐÚNG cấu trúc sau — không tiêu đề, không giải thích, không markdown:
@@ -287,14 +285,16 @@ Dòng 1: TL;DR — MỘT câu do BẠN TỰ VIẾT nêu trọng tâm bài (dư�
 Tiếp theo: 3-4 dòng, mỗi dòng MỘT ý chính do BẠN TỔNG HỢP, bám trọng tâm (tiêu đề + đoạn đầu). Mỗi ý 1 câu văn xuôi. KHÔNG liệt kê từng chi tiết phụ, KHÔNG copy nguyên văn câu dài từ bài.
 Cuối cùng: 2-3 dòng bắt đầu bằng "• " liệt kê DỮ KIỆN cụ thể (số liệu, tên riêng, thời gian, địa điểm). Chỉ lấy thông tin CÓ TRONG bài.
 
-${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin; KHÔNG đưa metadata (chuyên mục, ngày giờ đăng, tên tòa soạn, ghi chú ảnh "Ảnh: ..."); các dòng cách nhau bằng dòng trống.`;
+${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin; KHÔNG đưa metadata (chuyên mục, ngày giờ đăng, tên tòa soạn, ghi chú ảnh "Ảnh: ..."); các dòng cách nhau bằng dòng trống. Toàn bộ output PHẢI là tiếng Việt thuần — không dùng từ Trung Quốc/Nhật/Hàn; nếu thiếu từ thì diễn đạt lại bằng tiếng Việt.`;
 
   const cfg = getProviderConfig(provider);
   if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
   // Cắt input quá dài → model tập trung vào phần đầu (thường chứa ý chính),
-  // giảm chi phí/latency và hạn chế bản tóm tắt lan man.
-  const MAX_INPUT_CHARS = 4000;
+  // giảm chi phí/latency và hạn chế bản tóm tắt lan man. 2560 ký tự đủ phủ
+  // ~95% tin VnExpress/Tuổi Trẻ; cắt tiếp 4000→2560 rút thời gian prefill +
+  // hạ độ trễ chữ đầu tiên (bài dài là nguồn chậm chính của summarize).
+  const MAX_INPUT_CHARS = 2560;
   const inputText = articleText.length > MAX_INPUT_CHARS
     ? articleText.slice(0, MAX_INPUT_CHARS) + '\n…(phần sau đã cắt)'
     : articleText;
@@ -304,7 +304,7 @@ ${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ ng
   // ("TL;DR:")/markdown residue lên màn hình giữa chừng.
   const emit = onToken ? (acc: string) => onToken(normalizeStructuredSummary(acc)) : undefined;
   if (emit) body.stream = true; // web+server proxy hỗ trợ SSE passthrough
-  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, undefined, emit);
+  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, attemptTimeoutMs, emit);
 
   // Cả 2 provider đều OpenAI-compatible → content trong choices[0].message.content
   const raw = data.choices?.[0]?.message?.content || '';
@@ -314,8 +314,12 @@ ${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ ng
 // Làm sạch output model về đúng format chuẩn:
 // bỏ label ("TL;DR:", "Tóm tắt:"...), markdown residue, dòng trùng;
 // thống nhất bullet về "• "; giới hạn ≤7 dòng chính + ≤4 dữ kiện.
+// Ký tự CJK lọt từ model (GLM/Qwen thỉnh thoảng trượt ngôn ngữ) → cảnh báo log.
 export function normalizeStructuredSummary(raw: string): string {
   let lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.some((l) => /[一-鿿぀-ヿ가-힯]/.test(l))) {
+    console.warn('[summarize] LLM output contains CJK characters — model slipped language');
+  }
   lines = lines
     .map((l) => l
       .replace(/^#{1,4}\s*/, '')
@@ -449,6 +453,11 @@ export async function summarizeArticle(articleText: string, category?: string, o
   const candidates = buildFallbackCandidates(provider, storedModel || undefined);
 
   let lastError: Error = new Error('Tất cả model/provider đều không khả dụng, thử lại sau');
+  // Request NHỎ trên native (input <700 ký tự = "tóm nhanh từ mô tả", output
+  // ~100-200 token): model nào >20s chưa trả = chết → candidate kế. Web qua
+  // proxy /api/llm buffer tới khi LLM xong (15-40s) → KHÔNG cap, kẻo giết oan
+  // base đang sống (lỗi đã gặp).
+  const fastCapMs = Platform.OS !== 'web' && articleText.length < 700 ? 20000 : undefined;
   for (const c of candidates) {
     const cfg = getProviderConfig(c.provider);
     if (!cfg) continue;
@@ -458,7 +467,7 @@ export async function summarizeArticle(articleText: string, category?: string, o
     if (!apiKey && cfg.needsKey) continue; // không có key → bỏ qua candidate này
 
     try {
-      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category, onToken);
+      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category, onToken, fastCapMs);
       // model có thể trả 200 nhưng rỗng (vd reasoning bị tắt thinking) → xem là lỗi, thử model tiếp.
       if (summary && summary.trim().length >= 20) return summary;
       lastError = new Error(`Model ${c.model} (${c.provider}) trả nội dung rỗng`);
@@ -596,8 +605,10 @@ const AD_HOST_TOKENS = [
   'smartadserver', 'moatads', 'scorecardresearch', 'amazon-adsystem',
   'revcontent', 'mgid', 'teads', 'sharethrough', 'casalemedia', 'bidswitch',
   // VN
-  'admicro', 'vcmedia', 'zingads', 'eclick.', 'adasia', 'avplayer.com',
-  'gliastudios', 'adnetwork', 'adserver', 'adsys.',
+  'admicro', 'vcmedia', 'zingads', 'e-click', 'eclick', 'adasia', 'avplayer.com',
+  'gliastudios', 'adnetwork', 'adserver', 'adsys.', 'vlitag', 'adccheme',
+  // Native ads shoppable (Kenh14/Cafebiz nhúng sản phẩm Shopee/Sendo/Lazada)
+  'shopee', 'sendo', 'lazada', 'lazcdn',
 ];
 
 function isAdHost(url: string): boolean {
@@ -637,6 +648,18 @@ const NON_EDITORIAL_FILENAME_PATTERNS = [
 // Fake video: .gif.mp4, .webp.mp4 = animated images, not real videos
 const FAKE_VIDEO_PATTERN = /\.(gif|webp)\.mp4(\?|#|$)/i;
 
+// Kích thước banner QC chuẩn (IAB + size phổ biến ở báo VN). Xuất hiện trong
+// query w&h hoặc tên file NNNxNNN → gần như chắc chắn là banner, không phải
+// ảnh nội dung (ảnh bài thật: 16:9, 4:3, 3:2… hoặc h=0 auto của VnExpress).
+const STANDARD_AD_SIZES = new Set([
+  '300x250', '336x280', '250x250', '200x200', '300x100', '300x90', '300x50',
+  '320x50', '320x100', '468x60', '234x60', '728x90', '970x90', '970x250',
+  '160x600', '120x600', '300x600', '980x90', '980x120', '1000x120', '1010x120',
+]);
+// Thư mục QC trong path — chỉ match SEGMENT (…/ads/…) để không giết nhầm file
+// nội dung chỉ trùng chữ ở giữa tên ("photo-download.jpg" phải sống sót).
+const AD_PATH_RE = /(?:^|\/)(?:ads?|adv|advert|banner|banners|quangcao|quang-cao|qc)\//i;
+
 // Chỉ giữ ảnh NỘI DUNG thật của bài; bỏ mọi thứ là UI của trang báo:
 // - svg/gif (icon, loading), đường path /restruct/ /graphics/ /icons/
 // - thumbnail nhỏ (sidebar "tin liên quan", "đọc nhiều") của bài báo khác (w nhỏ)
@@ -671,6 +694,9 @@ function isEditorialImage(url: string): boolean {
     if (wParam && hParam) {
       const w = +wParam[1], h = +hParam[1];
       if (w > 0 && h > 0 && w <= 100 && h <= 100) return false;
+      // Banner QC rất ngang (640x180, 970x170, 728x120…) — ảnh bài thật hiếm khi
+      // h/w <= 0.3; h=0 (VnExpress auto) phải nhường qua rule dưới.
+      if (w >= 300 && h > 0 && h / w <= 0.3) return false;
     }
     // Thumbnail nhỏ: w < 400 và h=0 (hoặc không h) → ảnh thumb gallery/tin liên
     // quan (VnExpress ảnh nội dung thật = w=1020+&h=0; w=220&h=0&q=80 là thumb).
@@ -682,6 +708,14 @@ function isEditorialImage(url: string): boolean {
     // rất dài, không có tham số kích thước như ảnh CDN thật.
     const qIdx = url.indexOf('?');
     if (qIdx >= 0 && url.length - qIdx > 150 && !/[?&](w|width|h|height)=/i.test(url)) return false;
+    // Banner QC chuẩn IAB: w&h khớp size banner (300x250, 728x90, 970x250…) hoặc
+    // tên file chứa NNNxNNN. Ảnh nội dung không bao giờ đúng kích thước banner.
+    const dimQ = url.match(/[?&](?:w|width)=(\d{2,4})[&](?:h|height)=(\d{2,4})/i);
+    if (dimQ && STANDARD_AD_SIZES.has(`${dimQ[1]}x${dimQ[2]}`)) return false;
+    const dimFile = url.match(/(\d{2,4})x(\d{2,4})\.(?:jpe?g|png|webp)(?:\?|#|$)/i);
+    if (dimFile && STANDARD_AD_SIZES.has(`${dimFile[1]}x${dimFile[2]}`)) return false;
+    // Thư mục QC trong path: /ads/, /banner/, /quangcao/… (segment-exact).
+    if (AD_PATH_RE.test(url)) return false;
     // Filter UI icon filenames common in VN news sites
     if (/(ava_inter|ggr[_-]x2|x[_-]x2|mail[_-]x2|banmuon|ting|cacnguon|laptoptn|banmuonmb)/i.test(url)) return false;
     // Filter social/share icons
@@ -745,6 +779,12 @@ function stripSiteWidgets(s: string): string {
 // pageUrl (nếu có) giúp phân biệt ảnh nội dung bọc link về CHÍNH bài (gallery
 // self-link của Báo CP/CAND…) với thumbnail related bọc link bài khác.
 
+export function parseArticleBlocksAsync(raw: string, pageUrl = ''): Promise<ArticleBlock[]> {
+  // Parse markdown Jina (~100KB, hàng chục regex full-scan) QUA HÀNG ĐỢI CPU —
+  // chạy đồng bộ sẽ chặn JS thread đúng lúc mở bài/prefetch lúc mới launch.
+  return runCpuTask(() => parseArticleBlocks(raw, pageUrl));
+}
+
 export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   const s = stripSiteWidgets(stripJinaHeader(raw));
   const blocks: ArticleBlock[] = [];
@@ -752,7 +792,7 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   // Mốc cắt: bắt đầu mục "Bài viết liên quan" / "Tin cùng chuyên mục" / "Đọc thêm"
   // / "Có thể bạn quan tâm" / "Related"… Jina hay để nguyên mục này cuối markdown,
   // kéo theo text + ảnh/video của BÀI KHÁC lẫn vào blocks.
-  const RELATED_RE = /^[\s#>]*(?:\*{1,3}|_{1,3})?\s*\[?(?:Bài\s*viết\s*liên\s*quan|Tin\s*liên\s*quan|Tin\s*cùng\s*chuyên\s*mục|Tin\s*nổi\s*bật|Đọc\s*thêm|Xem\s*thêm|Có\s*thể\s*bạn\s*quan\s*tâm|Tin\s*đọc\s*nhiều|Đọc\s*nhiều|Xem\s*nhiều|Bạn\s*có\s*thể\s*quan\s*tâm|Related\s*(?:articles|news|stories)|Read\s*more|More\s*from|Tin\s*khác|Bài\s*viết\s*cùng\s*chủ\s*đề|Tin\s*tức|Tin\s*mới|Mới\s*nhất)(?:\]?\s*\([^)]*\))?\s*(?:\*{1,3}|_{1,3})?\s*[:：\-–—]*$/im;
+  const RELATED_RE = /^[\s#>]*(?:\*{1,3}|_{1,3})?\s*\[?(?:Bài\s*viết\s*liên\s*quan|Bài\s*liên\s*quan|Tin\s*liên\s*quan|Nội\s*dung\s*liên\s*quan|Chủ\s*đề\s*liên\s*quan|Tin\s*cùng\s*chuyên\s*mục|Cùng\s*chuyên\s*mục|Bài\s*viết\s*cùng\s*chủ\s*đề|Tin\s*nổi\s*bật|Đọc\s*thêm|Xem\s*thêm|Có\s*thể\s*bạn\s*quan\s*tâm|Có\s*thể\s*bạn\s*muốn\s*xem|Bạn\s*có\s*thể\s*quan\s*tâm|Đừng\s*bỏ\s*lỡ|Gợi\s*ý\s*cho\s*bạn|Đề\s*xuất|Tin\s*đọc\s*nhiều|Đọc\s*nhiều|Xem\s*nhiều|Xem\s*nhiều\s*nhất|Tin\s*đáng\s*chú\s*ý|Đáng\s*chú\s*ý|Tin\s*khác|Các\s*tin\s*khác|Tin\s*tức|Tin\s*mới|Tin\s*mới\s*nhất|Mới\s*nhất|Related(?:\s*(?:articles|news|stories))?|Recommended|Also\s*read|Trending|Read\s*more|More\s*from)(?:\]?\s*\([^)]*\))?\s*(?:\*{1,3}|_{1,3})?\s*[:：\-–—]*$/im;
   const findRelatedStart = (text: string): number => {
     const m = text.match(RELATED_RE);
     return m ? (m.index ?? -1) : -1;
@@ -813,7 +853,13 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   }
   // Chỉ bắt link/video có pattern YouTube, Vimeo, hoặc đuôi file video - bỏ qua link bài báo khác
   const vidRe = /\[[^\]]*\]\((https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^)]+\.(?:mp4|webm|mov|ogv))[^)]*)\)|(https?:\/\/(?:youtu\.be|youtube\.com|vimeo\.com|[^\s)\]]+\.(?:mp4|webm|mov|ogv)))/gi;
+  // Mốc "tin liên quan" tính TRÊN TOÀN chuỗi: video link PHÍA SAU mốc là video
+  // của BÀI KHÁC (carousel tin liên quan nhúng link YouTube/mp4) → bỏ hết.
+  // Trước đây vòng quét video chạy trên toàn s, không tôn trọng mốc cắt →
+  // video bài khác lọt vào tóm tắt.
+  const relCut = findRelatedStart(s);
   while ((m = vidRe.exec(s)) !== null) {
+    if (relCut >= 0 && m.index > relCut) continue;
     const url = m[1] || m[2];
     if (!url) continue;
     const baseKey = baseUrlKey(url);
@@ -1009,7 +1055,8 @@ function extractContentRegion(html: string): string {
   const start = openM && openM.index !== undefined ? openM.index : 0;
   let end = html.length;
   for (const re of [
-    /<div[^>]+class=["'][^"']*(?:comment|binh[-_]luan|related|tin[-_]lien[-_]quan|box[-_]category|list[-_]news|footer|wrap[-_]ad|tag[-_]list|author)/i,
+    /<div[^>]+class=["'][^"']*(?:comment|binh[-_]luan|related|tin[-_]lien[-_]quan|liên\s*quan|box[-_]category|list[-_]news|footer|wrap[-_]ad|tag[-_]list|author|box[-_]news|box[-_]doc|doc[-_]nhieu|xem[-_]them|read[-_]more|more[-_]news|recommend|sidebar|widget|watch[-_]next|up[-_]next|carousel|slider[-_]news|same[-_]category|top[-_]news|tin[-_]noi[-_]bat|trending)/i,
+    /<(?:section|aside|ul)[^>]+(?:id|class)=["'][^"']*(?:related|tin[-_]lien[-_]quan|recommend|read[-_]more|more[-_]news|box[-_]news|footer)/i,
     /<footer[\s>]/i,
   ]) {
     const m = html.match(re);
@@ -1036,9 +1083,30 @@ function articlePathDiffers(href: string, pageUrl: string): boolean {
   return !!a && !!b && a !== b;
 }
 
+// Cache promise HTML thô theo URL — fetchMediaFromHtml + fetchArticleTextFast
+// dùng CHUNG một lần fetch HTML (đỡ request trùng, ảnh về cùng tốc độ với text)
+const rawHtmlCache = new Map<string, Promise<string>>();
+export function fetchRawHtmlCached(pageUrl: string): Promise<string> {
+  let p = rawHtmlCache.get(pageUrl);
+  if (!p) {
+    p = fetchRawHtml(pageUrl);
+    rawHtmlCache.set(pageUrl, p);
+    if (rawHtmlCache.size > 96) {
+      const oldest = rawHtmlCache.keys().next().value as string | undefined;
+      if (oldest) rawHtmlCache.delete(oldest);
+    }
+  }
+  return p;
+}
+
 async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
-  const html = await fetchRawHtml(pageUrl);
+  const html = await fetchRawHtmlCached(pageUrl);
   if (!html) return [];
+  // Quét HTML lớn (0.3-1MB) QUA HÀNG ĐỢI CPU: parseArticleBlocks/fetchMediaFromHtml
+  // lúc prefetch (1.2s sau khi content hiện) là nguyên nhân "khựng ~2s" lúc mới
+  // launch. runCpuTask tuần tự hoá + nhả thread giữa các job; vòng scan bên dưới
+  // còn nhả thread từng ~12ms để touch luôn có kẽ xử lý.
+  return runCpuTask(async () => {
   const region = stripSiteWidgets(extractContentRegion(html));
 
   const out: ArticleBlock[] = [];
@@ -1073,13 +1141,30 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
   ].map((r) => `(?:${r.source})`).join('|'), 'gi');
 
   let m: RegExpExecArray | null;
+  let lastYield = Date.now();
   while ((m = mediaRe.exec(region)) !== null) {
+    // Regex quét full-HTML có thể chạy hàng trăm ms → nhả thread 1 tick
+    // mỗi ~12ms để touch/press luôn có kẽ xử lý
+    const now = Date.now();
+    if (now - lastYield > 12) {
+      lastYield = now;
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
     const raw = [m[1], m[2], m[3], m[4], m[5]].find(Boolean);
     if (!raw) continue;
     let u = decodeHtml(raw);
     if (u.startsWith('//')) u = 'https:' + u;
     const isImg = m[1] !== undefined;
     if (!isImg) {
+      // Video "tin liên quan" thường bọc trong <a href=bài khác> (widget xem
+      // thêm) → kiểm tra link bọc giống ảnh: href trỏ bài KHÁC → bỏ.
+      const vbefore = region.slice(Math.max(0, m.index - 800), m.index);
+      const vopenA = vbefore.lastIndexOf('<a ');
+      if (vopenA > vbefore.lastIndexOf('</a>')) {
+        const vhrefM = vbefore.slice(vopenA).match(/\bhref=["']([^"']*)["']/i);
+        const vhref = vhrefM ? decodeHtml(vhrefM[1]).trim() : '';
+        if (vhref && !/^(?:javascript|data):/i.test(vhref) && articlePathDiffers(vhref, pageUrl)) continue;
+      }
       push(m.index, classifyVideo(u));
     } else {
       // Lazyload: <img src="data:image/gif…" data-src/data-original="URL xịn">
@@ -1148,6 +1233,7 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
     if (out.length >= MAX_HTML_MEDIA) break;
   }
   return out;
+  });
 }
 
 // Chỉ lấy media (ảnh/video) từ HTML bài gốc — NHANH, không chờ Jina. Dùng để
@@ -1163,6 +1249,39 @@ export async function fetchArticleMedia(url: string): Promise<ArticleBlock[]> {
   const p = fetchMediaFromHtml(url).catch(() => [] as ArticleBlock[]);
   mediaHtmlCache.set(url, p);
   return p;
+}
+
+// TEXT bài viết bóc thẳng từ HTML trang báo — NGUỒN NHANH cho summarize.
+// Jina (r.jina.ai render headless) mất 10-20s mới trả markdown đầy đủ; trong
+// khi HTML gốc (server-side render của các báo VN) về ~1-2s và app vốn đã
+// fetch nó để lấy ảnh. Dùng cho bước "nâng cấp summary full-text" để không
+// phải chờ Jina; Jina vẫn về sau để render bài + caption/media chuẩn.
+export async function fetchArticleTextFast(url: string): Promise<string> {
+  const html = await fetchRawHtmlCached(url).catch(() => '');
+  if (!html) return '';
+  const region = stripSiteWidgets(extractContentRegion(html));
+  if (region.length < 500) return '';
+  const text = await runCpuTask(() => htmlRegionToText(region));
+  return text.length >= LIMITS.articleMinLength ? text : '';
+}
+
+function htmlRegionToText(region: string): string {
+  let s = region
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<(title|svg|iframe|form|select|button)[\s\S]*?<\/\1>/gi, ' ')
+    // tag block → dòng mới để câu không dính liền nhau
+    .replace(/<\/(?:p|div|li|h[1-6]|blockquote|br|tr|figcaption)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+  s = decodeHtml(s)
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n ?/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  // bài thật thường vài nghìn ký tự; giữ trần 12k — đủ ý chính, bớt rác prefill
+  return s.length > 12000 ? s.slice(0, 12000) : s;
 }
 
 // Hỏi proxy lấy stream HLS nhúng trong trang. Không có proxy / lỗi / không
@@ -1192,12 +1311,20 @@ const CONTENT_CACHE_MAX = 24;
 
 export function prefetchArticleContent(url: string, item?: FeedItem): void {
   if (!url || contentCache.has(url)) return;
+  // Trang video: không có bài văn để tóm — prefetch không có ích, bỏ (không tốn LLM).
+  if (isVideoPageUrl(url)) return;
   // E2E: mockNetwork toàn bộ, prefetch chỉ làm nhiễu cache (lưu kết quả giả mặc
   // định trước khi test kịp override route) → bỏ qua.
   if ((typeof window !== 'undefined' && (window as any).__E2E__)) return;
   if (contentCache.size >= CONTENT_CACHE_MAX) {
     const oldest = contentCache.keys().next().value as string | undefined;
     if (oldest) contentCache.delete(oldest);
+  }
+  // Start pre-summarize với text nhanh bóc từ HTML bài gốc (~1-2s) — trước đây
+  // pend bị Jina (10-20s) chắn trước nên mở bài sớm chẳng được gì. HTML này
+  // dùng chung cache với lượt fetch media → KHÔNG thêm request mạng.
+  if (item) {
+    void fetchArticleTextFast(url).then((t) => preSummarizeSrc(item, t)).catch(() => {});
   }
   // Fail → tự xóa khỏi cache để lần sau retry, không kẹt [] vĩnh viễn
   const p = loadArticleContent(url)
@@ -1207,6 +1334,10 @@ export function prefetchArticleContent(url: string, item?: FeedItem): void {
     })
     .catch((e) => { contentCache.delete(url); throw e; });
   contentCache.set(url, p);
+  // Prefetch chạy nền, KHÔNG ai await p → rejection thành "Uncaught (in promise)"
+  // với bài rác/video ("Bài báo quá ngắn..."). Nhánh catch no-op đánh dấu p đã
+  // được handle; người mở bài thật vẫn nhận lỗi qua fetchArticleContent(p).
+  p.catch(() => {});
 }
 
 // ----- Tóm tắt trước (pre-summarize) nền -----
@@ -1272,9 +1403,14 @@ function startSummaryFor(item: FeedItem, src: string): Promise<string> {
 }
 
 function preSummarize(item: FeedItem, blocks: ArticleBlock[]): void {
+  preSummarizeSrc(item, blocksToText(blocks) || item.description || '');
+}
+
+// src = text bài (HTML nhanh từ prefetch, hoặc full-text Jina). Guard dedupe
+// theo link: lượt HTML chạy trước → lượt Jina sau tự bỏ (history đã có bản tốt).
+function preSummarizeSrc(item: FeedItem, src: string): void {
   if (typeof window !== 'undefined' && (window as any).__E2E__) return;
   if (summaryInflight.has(item.link)) return;
-  const src = blocksToText(blocks) || item.description || '';
   if (src.length < 200) return; // bài quá ngắn/rác → mặc màn hình mở bài tự xử
   void (async () => {
     try {
@@ -1321,7 +1457,14 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
       const res = await fetch(`${base}/api/jina?url=${encodeURIComponent(url)}`, {
         signal: AbortSignal.timeout(25000),
       });
-      if (!res.ok) { markProxyDead(base); continue; }
+      if (!res.ok) {
+        // Proxy TRẢ LỜI = còn sống; non-ok là lỗi upstream (Jina 4xx/502 "failed
+        // after retries"). markDead ở đây đầu độc base khỏe → request sau rơi vào
+        // IP LAN cũ → timeout dây dưa. Vẫn continue để thử base kế (Jina có thể
+        // chết tạm), nhưng không cấm base này.
+        markProxyAlive(base);
+        continue;
+      }
       markProxyAlive(base);
       raw = await res.text();
       break;
@@ -1335,7 +1478,7 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
     if (!res.ok) throw new Error(`Không thể đọc bài báo (HTTP ${res.status})`);
     raw = await res.text();
   }
-  const blocks = parseArticleBlocks(raw, url);
+  const blocks = await parseArticleBlocksAsync(raw, url);
   // Trang video: player JS giấu stream khỏi Jina → bóc m3u8 từ HTML, chèn lên
   // đầu (video chính là lead của trang dạng này). Chỉ gọi khi chưa thấy video.
   if (!blocks.some((b) => b.type === 'video') && isVideoPageUrl(url)) {

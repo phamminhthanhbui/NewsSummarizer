@@ -92,7 +92,9 @@ test.describe('Tóm tắt AI', () => {
     await openFirstArticle(page);
     await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
     await floatBarButtons(page).refresh.click();
-    await expect(page.getByText('Đang tóm tắt...')).toBeVisible({ timeout: 5_000 });
+    // UI mới: summary cũ KHÔNG biến mất khi refresh — chỉ hiện footer "Đang
+    // hoàn thiện tóm tắt…" ở cuối (tên test: "summary vẫn hiện")
+    await expect(page.getByText('Đang hoàn thiện tóm tắt…')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
   });
 });

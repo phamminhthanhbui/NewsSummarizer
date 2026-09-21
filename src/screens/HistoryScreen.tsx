@@ -51,7 +51,7 @@ export default function HistoryScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="historyScreen">
       {/* Header — tiêu đề + vạch màu, nút xoá dạng pill tint */}
       <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <View style={styles.headerLeft}>

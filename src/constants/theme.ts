@@ -1,6 +1,7 @@
 // Design tokens — palette + type scale + radius
 // primary/danger lấy đúng từ 7 màu chủ đạo (THEME_COLORS): cam Kenh14 + đỏ thời sự
 import { useSyncExternalStore } from 'react';
+import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Palette interface — Color/DarkColor cùng shape, đổi giá trị thoải mái không vướng literal type
@@ -83,9 +84,11 @@ export const DarkColor: Palette = {
 export type ThemeMode = 'light' | 'dark';
 const THEME_KEY = '@theme_mode';
 
-let themeMode: ThemeMode = 'light';
+let themeMode: ThemeMode = Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
 const themeListeners = new Set<() => void>();
 
+// Giá trị đầu lấy từ system (đồng bộ) → đa số trường hợp frame đầu đã đúng
+// màu. AsyncStorage chỉ ghi đè khi user chọn mode KHÁC system trong Settings.
 AsyncStorage.getItem(THEME_KEY).then((val) => {
   if (val === 'dark' || val === 'light') setThemeMode(val);
 });
