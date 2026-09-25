@@ -60,6 +60,9 @@ test.describe('Tóm tắt AI', () => {
       const raw = await getStorage(page, KEYS.history);
       expect(raw && JSON.parse(raw).length).toBeGreaterThan(0);
     }).toPass({ timeout: 20_000 });
+    // History ghi ngay khi bản fast chốt — bản nâng cấp full-text vẫn chạy nền
+    // (call #2, đúng thiết kế). Chờ nó settled rồi mới đếm để bắt phần "gọi trùng".
+    await page.waitForTimeout(4000);
     const callsFirst = llmCalls;
     expect(callsFirst).toBeGreaterThan(0);
 

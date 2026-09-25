@@ -172,116 +172,84 @@ export default function ArticleScreen({ navigation, route }: any) {
       }
 
       let lastErr = '';
-      // Pre-summarize nền (Home prefetch) — KHÔNG await chặn fast path: nó về
-      // tới đâu dùng tới đó (bản full-text, chất lượng cao hơn), flag chặn
-      // fast/upgrade đè lại sau.
-      let fullArrived = false;
-      let pendText: string | null = null;
-      const pend = peekPendingSummary(item.link);
-      if (pend) {
-        pend.then((s) => {
-          if (s && s.trim().length >= 20 && !isStaleSummary(s)) {
-            fullArrived = true;
-            pendText = s;
-            setSummary(s);
-            setSummarizing(false);
-            setError('');
-            setOffline(false);
-          }
-        }).catch(() => { /* thất bại → fast/upgrade thường sẽ lo */ });
-      }
-
-      // HIỆN NGAY mô tả RSS làm placeholder tóm tắt (0ms) — AI về sau thay thế.
-      if (!pend && item.description) {
-        setSummary(item.description.trim());
-      }
-
-      // TÓM NHANH từ mô tả — chạy SONG SONG với tải toàn bài, KHÔNG await chặn
-      // chuỗi nâng cấp (chuỗi fast→await→full cũ cộng thêm ~2-4s tổng thời gian).
-      // Request nhỏ (~vài trăm ký tự) nên chạy cạnh pend/fast khác cũng chẳng
-      // đáng kể; đổi lại chữ AI-quality xuất hiện sau ~2-3s thay vì mô tả thô.
-      const descSrc = (item.description || '').trim();
-      const fastTask: Promise<string | null> = descSrc.length < 80
-        ? Promise.resolve(null)
-        : summarizeArticle(descSrc, item.category, (partial) => {
-            if (!fullArrived && partial) setSummary(partial);
-          }).catch((e: Error) => { lastErr = e.message || ''; return null; });
-
-      // Bài gốc + text đầy đủ do Jina trả: render đủ caption/media nhưng r.jina.ai
-      // mất 10-20s. KHÔNG chờ Jina để nâng cấp summary — nguồn text bóc thẳng từ
-      // HTML trang báo (~1-2s, vốn đã fetch cho ảnh) thường sẵn sàng trước;
-      // Jina về tới đâu cập nhật phần bài đọc tới đó.
+      // Bài gốc + text đầy đủ do Jina trả: chỉ để RENDER phần đọc (blocks/content),
+      // không quay lại đổi summary nữa — thiết kế "summary đổi 1 lần duy nhất".
       blocksTask.then((b) => {
         if (b.length) setBlocks(b);
         const t = blocksToText(b);
         if (t) setContent(t);
       });
-      const htmlTextP = fetchArticleTextFast(item.link);
-      const srcReady: Promise<string> = new Promise<string>((resolve) => {
-        let done = false;
-        // 400 ký tự = ngưỡng "có nội dung thật" (nav/breadcrumb ngắn hơn nhiều)
-        const take = (t: string) => {
-          if (!done && t && t.trim().length >= 400) { done = true; resolve(t.trim()); }
-        };
-        htmlTextP.then((t) => take(t), () => {});
-        blocksTask.then((b) => take(blocksToText(b)), () => {});
-        // cả hai nguồn xong mà không đủ dài → dùng bản dài nhất (có thể rỗng)
-        Promise.all([htmlTextP.catch(() => ''), blocksTask.then(blocksToText)]).then(([a, b]) => {
-          if (!done) { done = true; resolve((b.length >= a.length ? b : a).trim()); }
-        });
-      });
 
-      // NÂNG CẤP summary bằng bản full-text (stream)
-      let upgradeFull: string | null = null;
-      let upgradeSrc = '';
-      if (!fullArrived) {
-        if (pend) {
-          // Home đã gọi LLM full-text cho đúng bài này → CHỜ bản đó (cap 25s)
-          // thay vì gọi trùng lần 2 — 2 request song song cùng bài chỉ làm
-          // chậm lẫn nhau.
-          upgradeFull = await Promise.race([
-            pend.catch(() => null as string | null),
-            new Promise<null>((r) => setTimeout(r, 25000)),
-          ]);
-          if (upgradeFull && (upgradeFull.trim().length < 20 || isStaleSummary(upgradeFull))) upgradeFull = null;
-        }
-        if (!upgradeFull) {
-          upgradeSrc = await srcReady;
-          if (upgradeSrc.length >= 400 && upgradeSrc.length > descSrc.length) {
-            upgradeFull = await summarizeArticle(upgradeSrc, item.category, (partial) => {
-              if (!fullArrived && partial) setSummary(partial);
-            }).catch(() => null);
-            if (upgradeFull) setOffline(false);
-          }
-        }
+      // SUMMARY KHÔNG stream token lên UI (đó là "đổi nội dung 3-4 lần" user thấy —
+      // thực chất là hàng chục setSummary/chunk). Đổi tối đa 2 lần, mỗi lần một
+      // câu hoàn chỉnh: pend (Home đã tóm full-text) → 1 lần là chốt. Không pend
+      // → AI từ mô tả RSS (~2-3s, lần 1) → nâng cấp full-text MỘT PHÁT khi toàn
+      // văn về (lần 2).
+      const descSrc = (item.description || '').trim();
+      const pend = peekPendingSummary(item.link);
+      let finalSummary = '';
+      let pendUsed = false;
+      if (pend) {
+        finalSummary = (await Promise.race([
+          pend.catch(() => null as string | null),
+          new Promise<null>((r) => setTimeout(r, 20000)),
+        ])) || '';
+        if (finalSummary.trim().length >= 20 && !isStaleSummary(finalSummary)) pendUsed = true;
+        else finalSummary = '';
       }
-
-      const fast = await fastTask;
-      let finalSummary = upgradeFull || pendText || fast;
-      // AI chết hoàn toàn → fallback extractive (chọn-câu, không cần mạng):
-      // app vẫn luôn có tóm tắt hiển thị thay vì ô lỗi. Jina chưa về thì tóm
-      // bằng chính nguồn text nhanh đã tải.
+      if (!finalSummary && descSrc.length >= 80) {
+        finalSummary = await summarizeArticle(descSrc, item.category)
+          .catch((e: Error) => { lastErr = e.message || ''; return null; }) || '';
+      }
+      if (!finalSummary && descSrc) finalSummary = descSrc; // mô tả ngắn/tóm AI lỗi → hiện luôn
       if (!finalSummary) {
+        // AI chết + không có mô tả → extractive (chọn-câu, không cần mạng).
         const jinaBlocks = await Promise.race([
           blocksTask,
           new Promise<null>((r) => setTimeout(() => r(null), 1500)),
         ]);
-        const exBlocks: ArticleBlock[] = jinaBlocks && jinaBlocks.length
-          ? jinaBlocks
-          : upgradeSrc ? [{ type: 'text', text: upgradeSrc }] : [];
-        if (exBlocks.length) {
-          const ex = buildExtractiveSummary(item.title, exBlocks);
+        if (jinaBlocks && jinaBlocks.length) {
+          const ex = buildExtractiveSummary(item.title, jinaBlocks);
           if (ex) { finalSummary = ex; setOffline(true); }
         }
       }
       if (finalSummary) {
         setSummary(finalSummary);
         setError('');
-        if (!fullArrived) await saveToHistory(finalSummary); // nền đã tự ghi history
+        await saveToHistory(finalSummary);
       } else if (lastErr) {
         setError(lastErr);
       }
       setSummarizing(false);
+
+      // NÂNG CẤP full-text — đổi ĐÚNG 1 lần, một phát (không gõ chữ dần).
+      // Nguồn text: HTML nhanh (~1-2s) hoặc Jina (~10-20s), ai về đủ dài trước.
+      if (!pendUsed) {
+        const srcReady: Promise<string> = new Promise<string>((resolve) => {
+          let done = false;
+          const take = (t: string) => {
+            if (!done && t && t.trim().length >= 400) { done = true; resolve(t.trim()); }
+          };
+          fetchArticleTextFast(item.link).then((t) => take(t), () => {});
+          blocksTask.then((b) => take(blocksToText(b)), () => {});
+          // không nguồn nào đủ dài → dùng bản dài nhất (có thể rỗng)
+          Promise.all([
+            fetchArticleTextFast(item.link).catch(() => ''),
+            blocksTask.then(blocksToText),
+          ]).then(([a, b]) => {
+            if (!done) { done = true; resolve((b.length >= a.length ? b : a).trim()); }
+          });
+        });
+        const upgradeSrc = await srcReady;
+        if (upgradeSrc.length >= 400 && upgradeSrc.length > descSrc.length) {
+          const full = await summarizeArticle(upgradeSrc, item.category).catch(() => null);
+          if (full && full.trim().length >= 20 && !isStaleSummary(full)) {
+            setSummary(full);
+            setOffline(false);
+            await saveToHistory(full);
+          }
+        }
+      }
     })().catch(() => setSummarizing(false));
   }, [item.link]);
 
@@ -314,8 +282,8 @@ export default function ArticleScreen({ navigation, route }: any) {
     resumeSummaryRef.current = '';
     try {
       const src = content || item.description;
-      // stream: chữ refresh cũng hiện dần thay vì chờ xong cả câu
-      const s = await summarizeArticle(src, item.category, (partial) => { if (partial) setSummary(partial); });
+      // Không stream — giữ nguyên bản cũ trên màn hình, đổi một phát khi bản mới xong.
+      const s = await summarizeArticle(src, item.category);
       setSummary(s);
       setOffline(false);
       await saveSummaryToHistory(item, s);
