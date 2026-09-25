@@ -82,6 +82,14 @@ const CATEGORY_ICONS: Record<
   "Sức khỏe": "medkit",
 };
 
+// Row trộn loại trong FlatList TIN MỚI NHẤT ở chế độ lướt: header chủ đề /
+// bài báo / nút "Xem thêm". FeedItem thường vẫn là một loại hợp lệ.
+type HomeRow =
+  | FeedItem
+  | { kind: "h"; cat: string }
+  | { kind: "more"; cat: string; hidden: number };
+const LIST_COLLAPSED = 3; // số bài mỗi chủ đề trước khi "Xem thêm"
+
 const today = () => {
   const d = new Date();
   const days = [
@@ -316,7 +324,7 @@ export default function HomeScreen({ navigation }: Props) {
   const unlockChainRef = useRef<Promise<void>>(Promise.resolve());
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
-  const flatListRef = useRef<FlatList<FeedItem>>(null);
+  const flatListRef = useRef<FlatList<HomeRow>>(null);
   // Bấm lại icon tab Trang chủ khi đang ở tab này → scroll về đầu trang
   useScrollToTop(flatListRef);
   const { showAlert } = useAlert();
@@ -447,6 +455,39 @@ export default function HomeScreen({ navigation }: Props) {
     }
     return shuffled.slice(0, 6);
   }, [rest]);
+  // ── Section hóa TIN MỚI NHẤT theo chủ đề ──
+  // Chỉ khi lướt tự do (không lọc nguồn/chủ đề, không tìm kiếm): mỗi chủ đề hiện
+  // LIST_COLLAPSED bài + "Xem thêm N tin" (mở rộng inline). Khi lọc, list đã ngắn
+  // → giữ phẳng như cũ. Một FlatList duy nhất, rows trộn loại — không thêm list comp.
+  const isBrowsing =
+    selectedCategory === "Tất cả" &&
+    selectedSource === "Tất cả" &&
+    !debouncedQuery.trim();
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(() => new Set());
+  const listData = useMemo<HomeRow[]>(() => {
+    if (!isBrowsing) return rest;
+    const byCat = new Map<string, FeedItem[]>();
+    for (const i of rest) {
+      const c = i.category || "Khác";
+      let arr = byCat.get(c);
+      if (!arr) byCat.set(c, (arr = []));
+      arr.push(i);
+    }
+    // thứ tự theo CATEGORIES của FEEDS, chủ đề lạ xếp sau
+    const order = [...new Set([...CATEGORIES.slice(1), ...byCat.keys()])];
+    const out: HomeRow[] = [];
+    for (const c of order) {
+      const arr = byCat.get(c);
+      if (!arr?.length) continue;
+      out.push({ kind: "h", cat: c });
+      const shown = expandedCats.has(c) ? arr : arr.slice(0, LIST_COLLAPSED);
+      out.push(...shown);
+      const hidden = arr.length - shown.length;
+      if (hidden > 0) out.push({ kind: "more", cat: c, hidden });
+    }
+    return out;
+  }, [rest, isBrowsing, expandedCats]);
+
   const [heroIdx, setHeroIdx] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
   const heroListRef = useRef<FlatList<FeedItem>>(null);
@@ -626,10 +667,42 @@ export default function HomeScreen({ navigation }: Props) {
   }, []);
 
   const renderItem = useCallback(
-    ({ item }: { item: FeedItem }) => (
-      <ArticleCardCompact item={item} onPress={goArticle} />
-    ),
-    [goArticle],
+    ({ item }: { item: HomeRow }) => {
+      if ("kind" in item) {
+        if (item.kind === "h") {
+          const color = CATEGORY_COLORS[item.cat] || C.accent;
+          return (
+            <View style={[styles.sectionRow, styles.catSectionRow]}>
+              <View style={[styles.sectionBar, { backgroundColor: color }]} />
+              <Text style={[styles.sectionTitle, { color }]}>
+                {item.cat.toUpperCase()}
+              </Text>
+              <View style={styles.sectionLine} />
+            </View>
+          );
+        }
+        return (
+          <TouchableOpacity
+            style={styles.seeMore}
+            activeOpacity={0.7}
+            onPress={() =>
+              setExpandedCats((prev) => {
+                const n = new Set(prev);
+                n.add(item.cat);
+                return n;
+              })
+            }
+          >
+            <Ionicons name="chevron-down-circle-outline" size={16} color={C.accent} />
+            <Text style={styles.seeMoreText}>
+              Xem thêm {item.hidden} tin {item.cat.toLowerCase()}
+            </Text>
+          </TouchableOpacity>
+        );
+      }
+      return <ArticleCardCompact item={item} onPress={goArticle} />;
+    },
+    [goArticle, styles, C],
   );
 
   // Prefetch content bài đang hiện rõ trên màn hình (>60%, tối thiểu 1.2s):
@@ -943,8 +1016,8 @@ export default function HomeScreen({ navigation }: Props) {
       ) : (
         <FlatList
           ref={flatListRef}
-          data={rest}
-          keyExtractor={(item) => item.link}
+          data={listData}
+          keyExtractor={(item) => ("link" in item ? item.link : `${item.kind}:${item.cat}`)}
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
           onViewableItemsChanged={onViewableItemsChanged}
@@ -1195,6 +1268,19 @@ const makeStyles = (
       height: 1,
       backgroundColor: Color.border,
       marginLeft: 10,
+    },
+    catSectionRow: { paddingTop: 26 },
+    seeMore: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 14,
+      gap: 6,
+    },
+    seeMoreText: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: Color.accent,
     },
 
     /* ── Đọc nhiều nhất — strip ngang gọn ── */
