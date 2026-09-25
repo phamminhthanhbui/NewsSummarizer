@@ -89,6 +89,20 @@ test.describe('Mã bí mật — khóa lại (toggle)', () => {
     await gotoTab(page, 'Cài đặt'); // useFocusEffect phải đọc lại cờ
     await expect(page.getByText('Nhà cung cấp AI')).toHaveCount(0);
   });
+  test('regression: toggle từ TRANG/PHIÊN khác có hiệu lực — đọc storage, không ref stale', async ({ page }) => {
+    // 2 tab cùng mở app (localStorage chung): tab 2 mount khi CHƯA mở khóa rồi
+    // mở khóa; tab 1 (mount từ trước, ref cũ) nhập mã phải ẨN lại, không "mở khóa" tiếp.
+    const page2 = await page.context().newPage();
+    await page2.goto('/');
+    await waitForFeedLoaded(page2);
+
+    await openSearch(page2);
+    expect(await enterSecretCode(page2)).toBe('Đã mở khóa cấu hình AI trong Cài đặt');
+
+    await openSearch(page); // tab 1 chưa hề reload, state mount cũ
+    expect(await enterSecretCode(page)).toBe('Đã ẩn cấu hình AI trong Cài đặt');
+    expect(await getStorage(page, KEYS.aiUnlocked)).toBeNull();
+  });
 });
 
 test.describe('Mặc định ẩn + bí mật', () => {

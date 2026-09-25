@@ -310,11 +310,10 @@ export default function HomeScreen({ navigation }: Props) {
   const searchInputRef = useRef<TextInput>(null);
   const searchTextRef = useRef("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const aiUnlockedRef = useRef(false);
-  // Đọc cờ unlock 1 lần khi mount — ref sync nên toggle không cần await
-  useEffect(() => {
-    AsyncStorage.getItem(KEYS.aiUnlocked).then((v) => { aiUnlockedRef.current = v === '1'; });
-  }, []);
+  // Toggle luôn đọc storage (nguồn sự thật) — ref cache 1-lần-lúc-mount bị stale
+  // khi tab/phiên khác bật/tắt cờ → nhập mã lần nào cũng "Đã mở khóa".
+  // Chain nối tiếp các lần toggle: 2 press liên tiếp không interleave (read-old-write).
+  const unlockChainRef = useRef<Promise<void>>(Promise.resolve());
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<FeedItem>>(null);
@@ -567,17 +566,20 @@ export default function HomeScreen({ navigation }: Props) {
       );
       if (text.trim() === "016527") {
         if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        // Toggle sync qua ref — không await getItem (tránh race condition giữa
-        // onChangeText + async yield khiến lần 2 luôn thấy "chưa mở khóa").
-        if (aiUnlockedRef.current) {
-          aiUnlockedRef.current = false;
-          AsyncStorage.removeItem(KEYS.aiUnlocked).catch(() => {});
-          showAlert({ type: "success", message: "Đã ẩn cấu hình AI trong Cài đặt" });
-        } else {
-          aiUnlockedRef.current = true;
-          AsyncStorage.setItem(KEYS.aiUnlocked, "1").catch(() => {});
-          showAlert({ type: "success", message: "Đã mở khóa cấu hình AI trong Cài đặt" });
-        }
+        // Đọc storage mỗi lần bấm — await ở đây an toàn vì chain dưới đây serialized:
+        // press #2 xếp hàng sau khi #1 ghi xong, không interleave read-old-write.
+        unlockChainRef.current = unlockChainRef.current
+          .catch(() => {})
+          .then(async () => {
+            const on = (await AsyncStorage.getItem(KEYS.aiUnlocked)) === "1";
+            if (on) await AsyncStorage.removeItem(KEYS.aiUnlocked);
+            else await AsyncStorage.setItem(KEYS.aiUnlocked, "1");
+            showAlert({
+              type: "success",
+              message: on ? "Đã ẩn cấu hình AI trong Cài đặt" : "Đã mở khóa cấu hình AI trong Cài đặt",
+            });
+          })
+          .catch(() => {});
         searchInputRef.current?.clear();
         setSearchText("");
         searchTextRef.current = "";
