@@ -38,9 +38,6 @@ export interface FocusModel {
   fiveW1H?: FiveW1H;       // khung 5W1H (nếu LLM trả)
 }
 
-// Provider nào hỗ trợ response_format json_object (OpenAI-compatible)
-const JSON_MODE_PROVIDERS = new Set<LLMProvider>(['openai', 'openrouter']);
-
 // ----- Prompt -----
 
 export function buildFocusPrompt(inputText: string, category?: string): string {
@@ -189,11 +186,9 @@ export async function extractFocus(
   const inputText = truncateSectionAware(articleText);
   const system = buildFocusPrompt(inputText, category);
   const user = `Bài báo:\n\n${inputText}`;
-  const jsonMode = JSON_MODE_PROVIDERS.has(provider);
-
-  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, system, user, 700, customBaseUrl, { jsonMode });
+  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, system, user, 700, customBaseUrl);
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
-  const raw = provider === 'anthropic' ? data.content?.[0]?.text || '' : data.choices?.[0]?.message?.content || '';
+  const raw = data.choices?.[0]?.message?.content || '';
   return normalizeFocusOutput(raw);
 }
 

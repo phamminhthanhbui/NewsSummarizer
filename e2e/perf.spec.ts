@@ -19,7 +19,7 @@ test.describe('Reload nhanh (cache fresh)', () => {
   test('reload với cache còn hạn: không gọi /api/fetch nào (cache-local, skip network)', async ({ page }) => {
     await seedStorage(page, {
       [KEYS.feedsCache]: JSON.stringify(FEED_ITEMS.slice(0, 3)),
-      [KEYS.feedsCacheTime]: String(Date.now() - 30_000),
+      [KEYS.feedsCacheTime]: String(Date.now() - 1_000),
     });
     let fetchCalls = 0;
     await page.route('**/api/fetch**', (route) => {

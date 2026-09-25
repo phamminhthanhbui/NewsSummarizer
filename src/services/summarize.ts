@@ -1,5 +1,4 @@
-// Multi-LLM provider support (OpenAI-compatible endpoints + Anthropic + Google)
-// ponytail: unified interface, minimal branching
+// NVIDIA NIM — OpenAI-compatible requests, streaming and model fallback.
 
 import { Platform } from 'react-native';
 import { KEYS } from './storage';
@@ -8,11 +7,10 @@ import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxied
 import { runCpuTask } from '../utils/parseQueue';
 import type { FeedItem, SummaryRecord } from '../types';
 
-export type LLMProvider = 'bai' | 'nvidia';
+export type LLMProvider = 'nvidia';
 
-// Mặc định b.AI — app chạy được ngay khi start, không cần vào Settings nhập key.
+// NVIDIA NIM — app chạy được ngay khi start, không cần vào Settings nhập key.
 // User nhập key khác trong Settings sẽ ghi đè (AsyncStorage ưu tiên hơn).
-export const DEFAULT_BAI_KEY = 'sk-7abfs6706vwm9zjxrso343uheyrrt4sk';
 export const DEFAULT_NVIDIA_KEY = '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';
 
 export interface ProviderConfig {
@@ -28,38 +26,35 @@ export interface ProviderConfig {
 
 export const PROVIDERS: ProviderConfig[] = [
   {
-    id: 'bai',
-    label: 'b.AI (mặc định)',
-    baseUrl: 'https://api.b.ai/v1',
-    models: [
-      { id: 'hy3', label: 'Tencent Hunyuan Hy3 (miễn phí, mặc định)', power: 5 },
-      { id: 'mimo-v2.5', label: 'Xiaomi MiMo v2.5 (miễn phí)', power: 3 },
-      { id: 'qwen3.8-flash', label: 'Qwen 3.8 Flash (miễn phí)', power: 4 },
-      // ĐÃ LOẠI: deepseek-v4-flash/-vision (chuyển sang tính phí → 400 "credit
-      // insufficient"), glm-5.3-flash (400 với thinking:disabled), mọi model khác
-      // trên bảng giá b.AI có giá > 0.
-      // Lưu ý: mimo-v2.5 từng timeout >90s khi probe 29/8 → fallback tự đổi model.
-    ],
-    needsKey: true,
-    keyStorageKey: 'baiKey',
-  },
-  {
     id: 'nvidia',
     label: 'NVIDIA NIM',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
+    // Thứ tự mảng = thứ tự hiển thị trong dropdown, và models[0] là model MẶC ĐỊNH
+    // (SettingsScreen lấy models[0].id). Còn chuỗi fallback thì xếp theo `power` giảm dần.
     models: [
-      { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)', power: 3 },
       { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)', power: 6 },
-      { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro (mạnh, miễn phí)', power: 5 },
-      { id: 'google/gemma-4-31b-it', label: 'Gemma 4 31B (mới, mạnh, miễn phí)', power: 5 },
-      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (mới, miễn phí)', power: 4 },
-      // ĐÃ LOẠI (kiểm tra thực tế 29/8/2026):
-      // - nvidia/llama-3.3-nemotron-super-49b-v1.5, meta/llama-3.3-70b-instruct,
-      //   google/gemma-3-12b-it, mistralai/mistral-large-2-instruct,
-      //   meta/llama-3.1-8b-instruct, mistralai/mistral-7b-instruct-v0.3 → 404/NOT_IN_LIST (NIM retire).
-      // - nvidia/nemotron-3-nano-30b-a3b, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+      { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (nhanh, miễn phí)', power: 5 },
+      { id: 'nvidia/ising-calibration-1.5-31b', label: 'Ising Calibration 31B (nhanh, miễn phí)', power: 4 },
+      { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)', power: 3 },
+      // ĐÃ LOẠI — đo thực tế 22/9/2026 bằng 6 vòng probe (luôn kèm 1 model đối chứng đã biết-tốt):
+      // - deepseek-ai/deepseek-v4-pro-0813, minimaxai/minimax-m3 → 410 Gone, NIM đã EOL.
+      // - google/gemma-4-31b-it, moonshotai/kimi-k3, mistralai/mistral-nemotron, z-ai/glm-5.3
+      //   → timeout 8-9/9 lần thử trong 4 phiên, kể cả lúc nền tảng đã hết nghẽn ⇒ hỏng thật.
+      // - openai/gpt-oss-20b, meta/muse-glimmer-30b, z-ai/glm-5.3-flash
+      //   → 200 nhưng content RỖNG, chỉ có reasoning_content; app chỉ đọc message.content
+      //     nên tóm tắt ra chuỗi rỗng (lỗi im lặng — nguy hiểm hơn lỗi ồn ào).
+      // - poolside/laguna-xs-2.1, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
       //   → 400 khi app gửi thinking:{type:'disabled'} (model bắt buộc có reasoning).
+      // - writer/palmyra-*, 01-ai/yi-large, và nhiều model cũ (llama-3.1/3.3, gemma-2b/3-*,
+      //   mistral-*, mixtral, phi-3.5-moe, granite-3.0-8b, sea-lion-7b, jamba, dbrx, zamba2,
+      //   kimi-k2.6, llama3-chatqa, nemotron-4-340b, nemotron-nano-3-30b)
+      //   → 404 "Not found for account" (tài khoản không có quyền).
       // - nvidia/nemotron-3-ultra-550b-a55b → 200 nhưng là model enterprise, rủi ro tốn phí → loại.
+      //
+      // LƯU Ý KHI KIỂM TRA LẠI: NIM free tier nghẽn theo từng đợt (503 "Service temporarily
+      // overloaded", timeout hàng loạt). Probe PHẢI chạy tuần tự và PHẢI kèm 1 model đối chứng
+      // đã biết-tốt — nếu chính đối chứng fail thì đang nghẽn, đừng kết luận model hỏng.
+      // Chỉ tin các lỗi tất định: 410 (EOL), 404 (không có quyền), 400 (sai request shape).
     ],
     needsKey: true,
     keyStorageKey: 'apiKey',
@@ -78,7 +73,7 @@ export function getModelsForProvider(provider: LLMProvider): { id: string; label
 export const NIM_MODELS = getModelsForProvider('nvidia');
 
 // Dựng request theo từng provider (endpoint + kiểu auth khác nhau)
-function buildLlmRequest(
+export function buildLlmRequest(
   provider: LLMProvider,
   apiKey: string,
   model: string,
@@ -93,7 +88,7 @@ function buildLlmRequest(
   const baseUrl = cfg.baseUrl;
   if (!baseUrl) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
 
-  // Cả 2 provider (b.AI, NVIDIA) đều là OpenAI-compatible /chat/completions
+  // NVIDIA NIM là OpenAI-compatible /chat/completions
   const url = `${baseUrl}/chat/completions`;
   const headers = {
     'Content-Type': 'application/json',
@@ -108,9 +103,9 @@ function buildLlmRequest(
     max_tokens: maxTokens,
     temperature: 0.3,
   };
-  // Cả 2 provider đều có model reasoning — tắt thinking để trả summary trực tiếp
-  // (không tiêu token/độ trễ vào chuỗi suy luận, content luôn có nội dung).
-  // b.AI yêu cầu đúng kiểu {type:'disabled'}; NVIDIA chấp nhận và bỏ qua nếu không hỗ trợ.
+  // NVIDIA có model reasoning — tắt thinking để trả summary trực tiếp (không tiêu
+  // token/độ trễ vào chuỗi suy luận, content luôn có nội dung). Model không hỗ trợ
+  // thì NIM bỏ qua field này.
   body.thinking = { type: 'disabled' };
   return { url, headers, body };
 }
@@ -119,7 +114,7 @@ function buildLlmRequest(
 // Failover qua các candidate base (cùng origin → IP Metro → loopback), mỗi base một
 // attempt với header-timeout riêng: base chết (IP cũ/firewall) không chặn base sau.
 // timeoutMs chỉ dùng cho test kết nối; summarize không đặt (bài dài có thể chậm).
-async function sendLlmRequest(
+export async function sendLlmRequest(
   url: string,
   headers: Record<string, string>,
   body: any,
@@ -130,13 +125,9 @@ async function sendLlmRequest(
 ): Promise<any> {
   const isWeb = Platform.OS === 'web';
 
-  // Providers that support CORS natively on web (hiện cả 2 đều qua proxy để chắc chắn)
-  const supportsCorsNatively: string[] = [];
-  const useNativeCors = isWeb && supportsCorsNatively.includes(provider);
-
-  // Web + provider không có CORS → bắt buộc qua proxy. Danh sách base đã sắp
-  // sẵn theo sức khỏe (base sống đầu tiên); mảng rỗng = gọi thẳng.
-  const proxyBases = isWeb && !useNativeCors ? orderedProxyBases() : [''];
+  // NVIDIA trên web đi qua proxy; native gọi trực tiếp.
+  // Danh sách base đã sắp theo sức khỏe (base sống đầu tiên).
+  const proxyBases = isWeb ? orderedProxyBases() : [''];
   if (!proxyBases.length) {
     throw new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
   }
@@ -262,7 +253,7 @@ const CATEGORY_PROMPT_HINTS: Record<string, string> = {
   'Giải trí': 'Ưu tiên tên nghệ sĩ, tác phẩm và sự kiện chính.',
 };
 
-// Core: summarize via any OpenAI-compatible or Anthropic/Google endpoint.
+// Core: summarize via NVIDIA NIM.
 // Trả về summary CÓ CẤU TRÚC dạng văn bản thuần:
 //   dòng 1        = TL;DR (1 câu)
 //   các dòng giữa = ý chính (mỗi dòng 1 đoạn)
@@ -306,7 +297,7 @@ ${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ ng
   if (emit) body.stream = true; // web+server proxy hỗ trợ SSE passthrough
   const data = await sendLlmRequest(url, headers, body, provider, cfg.label, attemptTimeoutMs, emit);
 
-  // Cả 2 provider đều OpenAI-compatible → content trong choices[0].message.content
+  // NVIDIA OpenAI-compatible → content trong choices[0].message.content
   const raw = data.choices?.[0]?.message?.content || '';
   return normalizeStructuredSummary(raw);
 }
@@ -406,19 +397,13 @@ export async function testProviderConnection(
 }
 
 // High-level: fetch key + model from storage, then summarize
-// Provider mặc định của app: b.AI (chạy ngay khi start, key có sẵn, miễn phí).
-// Fallback model/provider luôn thử b.AI trước; NVIDIA chỉ dùng khi b.AI chết.
-export const DEFAULT_PROVIDER: LLMProvider = 'bai';
-
-// Thứ tự ưu tiên provider khi fallback (provider người dùng chọn luôn thử đầu).
-const PROVIDER_FALLBACK_ORDER: LLMProvider[] = ['bai', 'nvidia'];
+// Provider mặc định của app: NVIDIA NIM (chạy ngay khi start, key có sẵn, miễn phí).
+export const DEFAULT_PROVIDER: LLMProvider = 'nvidia';
 
 // Danh sách (provider, model) cần thử, theo thứ tự ưu tiên:
-// 1) model người dùng chọn (trong provider đã chọn)
-// 2) các model CÙNG provider, sắp mạnh→yếu (power giảm)
-// 3) provider KHÁC, mỗi provider thử model mạnh→yếu
-// Mục tiêu: model lỗi → đổi model khác (mạnh nhất trước); provider lỗi → đổi
-// provider khác (với model mạnh nhất của provider đó).
+// 1) model người dùng chọn
+// 2) các model còn lại, sắp mạnh→yếu (power giảm)
+// Mục tiêu: model lỗi → đổi model khác (mạnh nhất trước).
 function buildFallbackCandidates(preferredProvider: LLMProvider, preferredModel?: string): { provider: LLMProvider; model: string }[] {
   const out: { provider: LLMProvider; model: string }[] = [];
   const seen = new Set<string>();
@@ -435,13 +420,6 @@ function buildFallbackCandidates(preferredProvider: LLMProvider, preferredModel?
     const pref = preferredModel && models.some((m) => m.id === preferredModel) ? preferredModel : models[0]?.id;
     if (pref) push(preferredProvider, pref);
     for (const m of models) if (m.id !== pref) push(preferredProvider, m.id);
-  }
-
-  for (const p of PROVIDER_FALLBACK_ORDER) {
-    if (p === preferredProvider) continue;
-    const c = getProviderConfig(p);
-    if (!c) continue;
-    for (const m of [...c.models].sort((a, b) => (b.power ?? 0) - (a.power ?? 0))) push(p, m.id);
   }
   return out;
 }
@@ -462,9 +440,7 @@ export async function summarizeArticle(articleText: string, category?: string, o
     const cfg = getProviderConfig(c.provider);
     if (!cfg) continue;
     let apiKey = await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]);
-    if (!apiKey && c.provider === 'bai') apiKey = DEFAULT_BAI_KEY;
-    if (!apiKey && c.provider === 'nvidia') apiKey = DEFAULT_NVIDIA_KEY;
-    if (!apiKey && cfg.needsKey) continue; // không có key → bỏ qua candidate này
+    if (!apiKey) apiKey = DEFAULT_NVIDIA_KEY;
 
     try {
       const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category, onToken, fastCapMs);
@@ -1543,11 +1519,10 @@ export async function aiCondenseCaptions(
   if (!todo.length) return 0;
   todo.forEach((t) => captionAIpending.add(baseUrlKey(t.url)));
   try {
-    const provider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || DEFAULT_PROVIDER;
+    const provider = DEFAULT_PROVIDER;
     const cfg = getProviderConfig(provider);
     if (!cfg) return 0;
-    const apiKey = (await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]))
-      || (provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : DEFAULT_BAI_KEY);
+    const apiKey = (await AsyncStorage.getItem(KEYS[cfg.keyStorageKey])) || DEFAULT_NVIDIA_KEY;
     const storedModel = await AsyncStorage.getItem(KEYS.model);
     const model = (storedModel && cfg.models.some((m) => m.id === storedModel) ? storedModel : cfg.models[0]?.id) || '';
     const list = todo.map((t, i) => `${i + 1}. ${t.caption}`).join('\n');

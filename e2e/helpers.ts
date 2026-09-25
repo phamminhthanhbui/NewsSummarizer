@@ -15,7 +15,6 @@ export const SECRET_CODE = '016527';
 // ---- Storage keys (phải khớp src/services/storage.ts) ----
 export const KEYS = {
   provider: '@llm_provider',
-  baiKey: '@bai_key',
   apiKey: '@nim_key',
   openaiKey: '@openai_key',
   anthropicKey: '@anthropic_key',

@@ -75,50 +75,72 @@ test.describe('Giọng đọc', () => {
 });
 
 test.describe('Cấu hình AI', () => {
-  test('đổi provider: model + hint đổi theo, testResult cũ bị xóa', async ({ page }) => {
+  test('provider NVIDIA: model mặc định + hint key hiện sẵn', async ({ page }) => {
     await page.getByText('NVIDIA NIM', { exact: true }).click();
-    // Model mặc hình của NVIDIA hiện trong select field
-    await expect(page.getByText('Nemotron 3.5 Lightning 30B (nhanh, miễn phí)')).toBeVisible();
+    // Model mặc định của NVIDIA hiện trong select field
+    await expect(page.getByText('Nemotron 3 Super 120B (mạnh, miễn phí)')).toBeVisible();
     await expect(page.getByText(/build\.nvidia\.com/)).toBeVisible();
   });
 
   test('chọn model trong dropdown', async ({ page }) => {
-    // Mở dropdown (field đang hiện model mặc định của b.AI)
-    await page.getByText('DeepSeek V4 Flash Vision (nhanh, miễn phí, mặc định)').click();
-    await expect(page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true })).toBeVisible();
-    await page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true }).click();
+    // Mở dropdown (field đang hiện model mặc định của NVIDIA)
+    await page.getByText('Nemotron 3 Super 120B (mạnh, miễn phí)').click();
+    await page.getByText('DeepSeek V4.1 Flash (nhanh, miễn phí)', { exact: true }).click();
     // Dropdown đóng, field hiện model mới
-    await expect(page.getByText('DeepSeek V4 Pro (mạnh)')).toHaveCount(0);
-    await expect(page.getByText('DeepSeek V4 Flash (nhanh, miễn phí)', { exact: true })).toBeVisible();
+    await expect(page.getByText('Ising Calibration 31B (nhanh, miễn phí)')).toHaveCount(0);
+    await expect(page.getByText('DeepSeek V4.1 Flash (nhanh, miễn phí)', { exact: true })).toBeVisible();
   });
 
-  test('chỉ có 2 provider: b.AI + NVIDIA, không có Custom/Endpoint', async ({ page }) => {
+  test('chỉ có NVIDIA, không còn b.AI/Custom/Endpoint', async ({ page }) => {
     await expect(page.getByText('Endpoint tùy chỉnh')).toHaveCount(0);
-    await expect(page.getByText('b.AI (mặc định)', { exact: true })).toBeVisible();
     await expect(page.getByText('NVIDIA NIM', { exact: true })).toBeVisible();
+    await expect(page.getByText(/b\.AI/)).toHaveCount(0);
   });
 
   test('Lưu cài đặt ghi provider + key + model vào storage', async ({ page }) => {
-    await page.getByPlaceholder('sk-... / nvapi-...').fill('sk-test-key-123');
+    await page.getByPlaceholder('nvapi-...').fill('nvapi-test-key-123');
     await page.getByText('Lưu cài đặt').click();
     await expect(page.getByText('Đã lưu').first()).toBeVisible();
 
-    expect(await getStorage(page, KEYS.provider)).toBe('bai');
-    expect(await getStorage(page, KEYS.baiKey)).toBe('sk-test-key-123');
-    expect(await getStorage(page, KEYS.model)).toBe('deepseek-v4-flash-vision-exp');
+    expect(await getStorage(page, KEYS.provider)).toBe('nvidia');
+    expect(await getStorage(page, KEYS.apiKey)).toBe('nvapi-test-key-123');
+    expect(await getStorage(page, KEYS.model)).toBe('nvidia/nemotron-3-super-120b-a12b');
   });
 
   test('key đã lưu được đọc lại khi mở Settings', async ({ page }) => {
-    await seedStorage(page, { [KEYS.provider]: 'bai', [KEYS.baiKey]: 'sk-saved-key' });
+    await seedStorage(page, { [KEYS.provider]: 'nvidia', [KEYS.apiKey]: 'nvapi-saved-key' });
     await page.reload();
     await gotoTab(page, 'Cài đặt');
-    await expect(page.getByPlaceholder('sk-... / nvapi-...')).toHaveValue('sk-saved-key');
+    await expect(page.getByPlaceholder('nvapi-...')).toHaveValue('nvapi-saved-key');
+  });
+
+  test('cấu hình b.AI cũ dùng model và key NVIDIA khi kết nối', async ({ page }) => {
+    await seedStorage(page, {
+      [KEYS.provider]: 'bai', [KEYS.model]: 'hy3',
+      '@bai_key': 'sk-obsolete-key', [KEYS.apiKey]: 'nvapi-saved-key',
+    });
+    await page.reload();
+    await gotoTab(page, 'Cài đặt');
+    await expect(page.getByText('Nemotron 3 Super 120B (mạnh, miễn phí)')).toBeVisible();
+    await expect(page.getByPlaceholder('nvapi-...')).toHaveValue('nvapi-saved-key');
+    const request = page.waitForRequest((r) =>
+      r.url().endsWith('/api/llm') && r.postDataJSON()?.body?.messages?.some((m: { content: string }) => m.content === 'ping'),
+    );
+    await page.getByText('Kiểm tra kết nối').click();
+    const payload = (await request).postDataJSON();
+    expect(payload.url).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
+    expect(payload.headers.Authorization).toBe('Bearer nvapi-saved-key');
+    expect(payload.body.model).toBe('nvidia/nemotron-3-super-120b-a12b');
+    await expect(page.getByText('Kết nối NVIDIA NIM thành công')).toBeVisible();
+    await page.getByText('Lưu cài đặt').click();
+    await expect(page.getByText('Đã lưu').first()).toBeVisible();
+    expect(await getStorage(page, KEYS.provider)).toBe('nvidia');
   });
 
   test('Kiểm tra kết nối: thành công (mock LLM 200)', async ({ page }) => {
-    await page.getByPlaceholder('sk-... / nvapi-...').fill('sk-key');
+    await page.getByPlaceholder('nvapi-...').fill('nvapi-key');
     await page.getByText('Kiểm tra kết nối').click();
-    await expect(page.getByText('Kết nối b.AI (mặc định) thành công')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Kết nối NVIDIA NIM thành công')).toBeVisible({ timeout: 20_000 });
   });
 
   test('Kiểm tra kết nối: thất bại hiện lỗi', async ({ page }) => {
@@ -126,7 +148,7 @@ test.describe('Cấu hình AI', () => {
     await page.route('**/api/llm', (r) =>
       r.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { message: 'invalid api key' } }) }),
     );
-    await page.getByPlaceholder('sk-... / nvapi-...').fill('wrong-key');
+    await page.getByPlaceholder('nvapi-...').fill('wrong-key');
     await page.getByText('Kiểm tra kết nối').click();
     await expect(page.getByText(/invalid api key|Lỗi/).last()).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('Kết nối NVIDIA NIM thành công')).toHaveCount(0);

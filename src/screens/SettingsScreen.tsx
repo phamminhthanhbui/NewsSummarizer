@@ -13,7 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_BAI_KEY, DEFAULT_NVIDIA_KEY, DEFAULT_PROVIDER } from '../services/summarize';
+import { PROVIDERS, type LLMProvider, getModelsForProvider, testProviderConnection, DEFAULT_NVIDIA_KEY, DEFAULT_PROVIDER } from '../services/summarize';
 import { KEYS } from '../services/storage';
 import { speakSystem, stopSystem, clearVoiceHung } from '../services/edgeTts';
 import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEnabled as persistNotifEnabled, saveTimes as saveNotifTimes, sendTest as sendNotifTest, parseTime, isNotifSupported } from '../services/notifications';
@@ -21,7 +21,6 @@ import { useAlert } from '../components/AppAlert';
 import { Color, Font, Radius, Shadow, THEME_COLORS, getThemeMode, setThemeMode, useTheme } from '../constants/theme';
 
 const PROVIDER_ICONS: Record<LLMProvider, string> = {
-  bai: 'logo-github',
   nvidia: 'cube',
 };
 
@@ -75,7 +74,9 @@ export default function SettingsScreen() {
     });
     AsyncStorage.getItem(keyStorageKey).then((val) => val && setApiKey(val));
     AsyncStorage.getItem(KEYS.customBaseUrl).then((val) => val && setCustomBaseUrl(val));
-    AsyncStorage.getItem(KEYS.model).then((val) => val && setModel(val));
+    AsyncStorage.getItem(KEYS.model).then((val) => {
+      setModel(models.find((m) => m.id === val)?.id || models[0]?.id || '');
+    });
     AsyncStorage.getItem(KEYS.pitch).then((val) => setPitch(parseFloat(val || '') || 1.0));
     AsyncStorage.getItem(KEYS.rate).then((val) => setRate(parseFloat(val || '') || 1.0));
 
@@ -101,7 +102,7 @@ export default function SettingsScreen() {
     const m = models[0]?.id || '';
     setModel(m);
     // Storage trống thì điền key mặc định vào ô (chạy được ngay khi start)
-    AsyncStorage.getItem(keyStorageKey).then((val) => setApiKey(val || (provider === 'bai' ? DEFAULT_BAI_KEY : provider === 'nvidia' ? DEFAULT_NVIDIA_KEY : '')));
+    AsyncStorage.getItem(keyStorageKey).then((val) => setApiKey(val || DEFAULT_NVIDIA_KEY));
     if (showCustomUrl) {
       AsyncStorage.getItem(KEYS.customBaseUrl).then((val) => setCustomBaseUrl(val || ''));
     }
@@ -250,7 +251,7 @@ export default function SettingsScreen() {
               style={styles.input}
               value={apiKey}
               onChangeText={setApiKey}
-              placeholder="sk-... / nvapi-..."
+              placeholder="nvapi-..."
               placeholderTextColor={Color.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -259,7 +260,6 @@ export default function SettingsScreen() {
             />
             <Text style={styles.fieldHint}>
               {cfg?.id === 'nvidia' && 'Lấy key miễn phí tại build.nvidia.com → Any model → Get API Key (1,000 req/ngày)'}
-              {cfg?.id === 'bai' && 'Key b.AI — mặc định đã dùng key sẵn, nhập key riêng nếu muốn'}
             </Text>
 
             {/* Test kết nối — gọi thật với request nhỏ nhất */}
