@@ -20,7 +20,7 @@ test.describe('Feed', () => {
   test('header + bài báo hiển thị', async ({ page }) => {
     await expect(page.getByText('TIN TỨC', { exact: true })).toBeVisible();
     await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible();
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible();
   });
 
   test('cache feeds được ghi vào storage sau khi load', async ({ page }) => {

@@ -45,7 +45,7 @@ test.describe('Cache nội dung bài (jina)', () => {
 
     // Quay Home mở lại — contentCache in-memory hit, không gọi jina thêm
     await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
     await page.getByText(FIRST.title).first().click();
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(2000);
@@ -145,6 +145,6 @@ test.describe('Ảnh fail load không crash', () => {
     await expect(page.getByText('never-loads.jpg')).toHaveCount(0);
     // App không crash: vẫn điều hướng được
     await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
   });
 });

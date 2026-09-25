@@ -168,7 +168,7 @@ test.describe('Các nút khác', () => {
   test('nút back quay về Home', async ({ page }) => {
     await openFirstArticle(page);
     await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
   });
 
   test('bài viết liên quan hiển thị', async ({ page }) => {

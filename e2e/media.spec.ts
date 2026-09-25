@@ -276,7 +276,7 @@ Thân bài cho test cache caption, đủ dài để app parse và hiển thị t
     expect(condenseCalls).toBe(1);
 
     await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
     await page.getByText(FIRST.title).first().click();
     await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(SHORT_CAP)).toBeVisible();

@@ -136,7 +136,7 @@ test.describe('Regression: không "không có dữ liệu" sau khi nhập mã', 
     // Chờ > 600ms — nếu bug debounce còn, timer sẽ set debouncedQuery='016527'
     // sau khi reset → lọc ra 0 bài → hiện empty state "Không có bài báo"
     await page.waitForTimeout(1200);
-    await expect(page.getByText('TIN MỚI NHẤT')).toBeVisible();
+    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible();
     await expect(page.getByText('Không có bài báo')).toHaveCount(0);
     await expect(page.getByText('Giá vàng trong nước lập đỉnh mới').first()).toBeVisible();
   });

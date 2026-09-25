@@ -45,10 +45,10 @@ test.describe('Dark mode', () => {
     await gotoTab(page, 'Cài đặt');
     await expect(page.getByText('Đang bật')).toBeVisible();
 
-    // Tab Home cũng đổi màu: title section "TIN MỚI NHẤT" (màu accent giữ nguyên trong dark)
+    // Tab Home cũng đổi màu: title section "ĐỌC NHIỀU NHẤT" (màu hot giữ nguyên trong dark)
     await gotoTab(page, 'Trang chủ');
-    const color = await page.getByText('TIN MỚI NHẤT').evaluate((el) => getComputedStyle(el).color);
-    expect(color).toBe('rgb(37, 99, 235)');
+    const color = await page.getByText('ĐỌC NHIỀU NHẤT').evaluate((el) => getComputedStyle(el).color);
+    expect(color).toBe('rgb(251, 81, 42)');
   });
 });
 
