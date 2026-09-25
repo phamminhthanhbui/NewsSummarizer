@@ -810,17 +810,21 @@ export default function HomeScreen({ navigation }: Props) {
           </>
         )}
 
-        {/* SECTION: LATEST */}
-        <View style={styles.sectionRow}>
-          <View style={[styles.sectionBar, { backgroundColor: C.accent }]} />
-          <Text style={[styles.sectionTitle, { color: C.accent }]}>
-            TIN MỚI NHẤT
-          </Text>
-          <View style={styles.sectionLine} />
-        </View>
+        {/* SECTION: LATEST — khi lướt đã có header chủ đề từng khối nên bỏ hẳn
+            nhãn "TIN MỚI NHẤT" (2 header chồng nhau = rối); chỉ giữ khi list phẳng */}
+        {!isBrowsing && (
+          <View style={styles.sectionRow}>
+            <View style={[styles.sectionBar, { backgroundColor: C.accent }]} />
+            <Text style={[styles.sectionTitle, { color: C.accent }]}>
+              TIN MỚI NHẤT
+            </Text>
+            <View style={styles.sectionLine} />
+          </View>
+        )}
       </View>
     ),
     [
+      isBrowsing,
       heroes,
       trending,
       heroIdx,
