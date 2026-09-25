@@ -44,6 +44,21 @@ test.describe('Mã bí mật — mở khóa', () => {
 });
 
 test.describe('Mã bí mật — khóa lại (toggle)', () => {
+  test('regression: nhập 2 lần liên tiếp KHÔNG reload — lần 2 phải toggle ngược lại', async ({ page }) => {
+    // Bug cũ (trước aiUnlockedRef): await getItem giữa 2 lần nhập khiến lần 2
+    // luôn đọc thấy "chưa mở khóa" → không bao giờ ẩn lại được.
+    await openSearch(page);
+    expect(await enterSecretCode(page)).toBe('Đã mở khóa cấu hình AI trong Cài đặt');
+    expect(await getStorage(page, KEYS.aiUnlocked)).toBe('1');
+
+    // Gõ lại ngay trên cùng input (app vẫn sống, không reload, không seed lại)
+    expect(await enterSecretCode(page)).toBe('Đã ẩn cấu hình AI trong Cài đặt');
+    expect(await getStorage(page, KEYS.aiUnlocked)).toBeNull();
+
+    // Lần 3: mở lại được
+    expect(await enterSecretCode(page)).toBe('Đã mở khóa cấu hình AI trong Cài đặt');
+    expect(await getStorage(page, KEYS.aiUnlocked)).toBe('1');
+  });
   test('nhập mã lần hai: alert ẩn, cờ xóa, mục AI biến mất', async ({ page }) => {
     await seedStorage(page, { [KEYS.aiUnlocked]: '1' });
     await page.reload();
