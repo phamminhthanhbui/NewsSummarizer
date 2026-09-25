@@ -85,6 +85,45 @@ test.describe('Lọc theo nguồn (dropdown)', () => {
   });
 });
 
+test.describe('Section theo chủ đề (chế độ lướt)', () => {
+  test('TIN MỚI NHẤT chia header chủ đề, >3 bài có "Xem thêm"; bấm là mở rộng', async ({ page }) => {
+    // Seed cache feed lớn (cache-fresh → app dùng thẳng, không fetch): 9 bài
+    // Kinh doanh không ảnh (không vào hero) → section có 9-3=6 bài ẩn sau "Xem thêm".
+    const many = Array.from({ length: 9 }, (_, i) => ({
+      title: `Tin kinh doanh số ${i}`,
+      link: `https://example.com/kt-${i}`,
+      description: `Mô tả bài kinh doanh số ${i} đủ dài cho search.`,
+      pubDate: new Date().toISOString(),
+      source: 'VNExpress',
+      category: 'Kinh doanh',
+    }));
+    await seedStorage(page, {
+      [KEYS.feedsCache]: JSON.stringify([...FEED_ITEMS, ...many]),
+      [KEYS.feedsCacheTime]: String(Date.now() - 1_000),
+    });
+    await page.reload();
+    await waitForFeedLoaded(page);
+
+    await expect(page.getByText('KINH DOANH').first()).toBeVisible();
+    const more = page.getByText(/Xem thêm \d+ tin kinh doanh/);
+    await expect(more.first()).toBeVisible();
+    await expect(page.getByText('Tin kinh doanh số 8')).toHaveCount(0); // ẩn sau collapsed
+
+    await more.first().click();
+    await expect(page.getByText(/Xem thêm \d+ tin kinh doanh/)).toHaveCount(0);
+    await expect(page.getByText('Tin kinh doanh số 8')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('đang lọc chủ đề: list phẳng, không section', async ({ page }) => {
+    await page.getByRole('button', { name: 'Việt Nam' }).click();
+    // list phẳng: không header chủ đề in hoa, không nút Xem thêm
+    await expect(page.getByText(/Xem thêm \d+ tin/)).toHaveCount(0);
+    await expect(page.getByText('KINH DOANH', { exact: true })).toHaveCount(0);
+    // bài vẫn hiện
+    await expect(page.getByText('Quốc hội thảo luận dự luật ngân sách').first()).toBeVisible();
+  });
+});
+
 test.describe('Tìm kiếm', () => {
   test('lọc theo tiêu đề sau debounce 600ms', async ({ page }) => {
     await page.getByLabel('Tìm kiếm').click();
