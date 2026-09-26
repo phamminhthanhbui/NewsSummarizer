@@ -11,6 +11,7 @@
     "android",
     "ios",
     "src/services/wordMap.test.ts",
-    "src/services/ttsChunks.test.ts"
+    "src/services/ttsChunks.test.ts",
+    "src/services/trending.test.ts"
   ]
 }

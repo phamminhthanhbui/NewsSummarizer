@@ -27,7 +27,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { useScrollToTop } from "@react-navigation/native";
+import { useScrollToTop, useFocusEffect } from "@react-navigation/native";
 import {
   FEEDS,
   fetchAllFeeds,
@@ -38,7 +38,8 @@ import {
 import { useAlert } from "../components/AppAlert";
 import { prefetchArticleContent, isVideoPageUrl } from "../services/summarize";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { KEYS } from "../services/storage";
+import { KEYS, getReadCounts, type ReadCounts } from "../services/storage";
+import { rankTrending } from "../services/trending";
 import type { FeedItem } from "../types";
 import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
 import { timeAgo } from "../utils/timeAgo";
@@ -246,10 +247,12 @@ const SourceDropdown = React.memo(
 const TrendSmallCard = React.memo(
   ({
     item,
+    rank,
     onPress,
     styles,
   }: {
     item: FeedItem;
+    rank: number;
     onPress: (i: FeedItem) => void;
     styles: ReturnType<typeof makeStyles>;
   }) => {
@@ -260,6 +263,7 @@ const TrendSmallCard = React.memo(
     return (
       <TouchableOpacity
         style={styles.trendSmallCard}
+        testID="trendCard"
         onPress={() => onPress(item)}
         activeOpacity={0.85}
       >
@@ -272,24 +276,37 @@ const TrendSmallCard = React.memo(
             />
           ) : (
             <View style={[styles.trendSmallImg, styles.trendSmallImgPh]}>
-              <Ionicons name="image-outline" size={20} color={C.textMuted} />
+              <Ionicons name="image-outline" size={24} color={C.textMuted} />
             </View>
           )}
+          {/* Huy hiệu thứ hạng — section này là "đọc NHIỀU NHẤT" nên thứ tự mới
+              là thông tin chính; thiếu nó thì strip chỉ là "vài bài có ảnh". */}
+          <View style={styles.trendRank}>
+            <Text style={styles.trendRankText}>{rank}</Text>
+          </View>
           {isVideo ? (
             <View style={styles.videoBadge} accessibilityLabel="Video">
               <Ionicons name="play" size={9} color="#FFF" />
             </View>
           ) : null}
-        </View>
-        <View style={styles.trendSmallBody}>
-          <View style={styles.trendSmallMeta}>
-            <View style={[styles.trendSmallSrcBadge, { backgroundColor: srcColor + "1A" }]}>
-              <View style={[styles.trendSmallSrcDot, { backgroundColor: srcColor }]} />
-              <Text style={[styles.trendSmallSrc, { color: srcColor }]} numberOfLines={1}>
-                {item.source}
+          {/* Giờ nằm TRÊN ảnh (giống FeaturedCard) chứ không ở hàng meta: card
+              chỉ 172px, để giờ dưới thì tên nguồn bị cắt còn "Ngườ…"/"Sài Gò…".
+              Pill nền tối như videoBadge → đọc được trên mọi ảnh, không cần scrim. */}
+          {t ? (
+            <View style={styles.trendTimeWrap}>
+              <Ionicons name="time-outline" size={11} color="rgba(255,255,255,0.9)" />
+              <Text style={styles.trendTime} numberOfLines={1}>
+                {t}
               </Text>
             </View>
-            {t ? <Text style={styles.trendSmallTime}>{t} trước</Text> : null}
+          ) : null}
+        </View>
+        <View style={styles.trendSmallBody}>
+          <View style={[styles.trendSmallSrcBadge, { backgroundColor: srcColor + "1A" }]}>
+            <View style={[styles.trendSmallSrcDot, { backgroundColor: srcColor }]} />
+            <Text style={[styles.trendSmallSrc, { color: srcColor }]} numberOfLines={1}>
+              {item.source}
+            </Text>
           </View>
           <Text style={styles.trendSmallTitle} numberOfLines={2}>
             {item.title}
@@ -325,6 +342,15 @@ export default function HomeScreen({ navigation }: Props) {
   const [headerAnim] = useState(new Animated.Value(0));
   const [categoryAnim] = useState(new Animated.Value(0));
   const flatListRef = useRef<FlatList<HomeRow>>(null);
+  const [readCounts, setReadCounts] = useState<ReadCounts>({});
+  // Lượt đọc tăng khi user mở bài ở tab khác (Article) → đọc lại mỗi lần Home
+  // được focus để strip "ĐỌC NHIỀU NHẤT" phản ánh vừa đọc xong. getReadCounts
+  // tự nuốt lỗi nên không cần catch ở đây.
+  useFocusEffect(
+    useCallback(() => {
+      getReadCounts().then(setReadCounts);
+    }, []),
+  );
   // Bấm lại icon tab Trang chủ khi đang ở tab này → scroll về đầu trang
   useScrollToTop(flatListRef);
   const { showAlert } = useAlert();
@@ -442,19 +468,14 @@ export default function HomeScreen({ navigation }: Props) {
     const heroSet = new Set(heroes);
     return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
   }, [filtered]);
-  // "ĐỌC NHIỀU NHẤT" — lấy từ rest (có ảnh), LOẠI 8 bài mới nhất (đang nằm đầu
-  // TIN MỚI NHẤT) rồi xáo ngẫu nhiên lấy 6 → không trùng với danh sách mới nhất.
-  const trending = useMemo(() => {
-    const pool = rest.filter((i) => i.image);
-    const beyond = pool.slice(8); // bỏ 8 bài mới nhất = phần đầu TIN MỚI NHẤT
-    const source = beyond.length >= 6 ? beyond : pool;
-    const shuffled = [...source];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled.slice(0, 6);
-  }, [rest]);
+  // "ĐỌC NHIỀU NHẤT" — 6 bài CÓ ẢNH trong rest, sắp theo số lượt mở thật
+  // (đếm ở ArticleScreen), hoà thì bài mới hơn lên trước. Chưa đọc bài nào →
+  // toàn số 0 → thành "6 bài mới nhất ngoài hero", vẫn hơn hẳn kiểu xáo ngẫu
+  // nhiên cũ (vốn nhắm vào đuôi feed nên toàn bài cả chục ngày).
+  const trending = useMemo(
+    () => rankTrending(rest.filter((i) => i.image), readCounts),
+    [rest, readCounts],
+  );
   // ── Section hóa TIN MỚI NHẤT theo chủ đề ──
   // Chỉ khi lướt tự do (không lọc nguồn/chủ đề, không tìm kiếm): mỗi chủ đề hiện
   // LIST_COLLAPSED bài + "Xem thêm N tin" (mở rộng inline). Khi lọc, list đã ngắn
@@ -796,12 +817,14 @@ export default function HomeScreen({ navigation }: Props) {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              testID="trendStrip"
               contentContainerStyle={styles.trendStrip}
             >
-              {trending.map((h) => (
+              {trending.map((h, i) => (
                 <TrendSmallCard
                   key={h.link}
                   item={h}
+                  rank={i + 1}
                   onPress={goArticle}
                   styles={styles}
                 />
@@ -1287,12 +1310,14 @@ const makeStyles = (
       color: Color.accent,
     },
 
-    /* ── Đọc nhiều nhất — strip ngang gọn ── */
-    trendStrip: { paddingHorizontal: 12, paddingBottom: 2, gap: 10 },
+    /* ── Đọc nhiều nhất — strip ngang ──
+       Số đo copy từ ArticleCardCompact (radius/dot/badge/title/padding) để card
+       trong strip trông cùng một họ với card danh sách bên dưới. Ảnh 172×97 ≈ 16:9. */
+    trendStrip: { paddingHorizontal: 12, paddingBottom: 2, gap: 12 },
     trendSmallCard: {
-      width: 150,
+      width: 172,
       backgroundColor: Color.card,
-      borderRadius: Radius.sm,
+      borderRadius: Radius.md,
       overflow: "hidden",
       ...Platform.select({
         ios: {
@@ -1307,15 +1332,35 @@ const makeStyles = (
     },
     trendSmallImgWrap: {
       width: "100%",
-      height: 84,
+      height: 97,
       backgroundColor: Color.skeleton,
     },
     trendSmallImg: { width: "100%", height: "100%" },
     trendSmallImgPh: { alignItems: "center", justifyContent: "center" },
+    // Thứ hạng: nền hot đặc + chữ trắng, đồng màu với tiêu đề section → mắt nối
+    // được badge với section. Chữ số to hơn hẳn meta để đọc lướt là thấy ngay.
+    trendRank: {
+      position: "absolute",
+      top: 6,
+      left: 6,
+      minWidth: 22,
+      height: 22,
+      paddingHorizontal: 6,
+      borderRadius: Radius.sm,
+      backgroundColor: Color.hot,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    trendRankText: {
+      fontSize: Font.tiny,
+      fontWeight: "900",
+      color: "#FFF",
+      letterSpacing: 0.2,
+    },
     videoBadge: {
       position: "absolute",
-      left: 5,
-      bottom: 5,
+      left: 6,
+      bottom: 6,
       width: 20,
       height: 20,
       borderRadius: 6,
@@ -1324,30 +1369,45 @@ const makeStyles = (
       justifyContent: "center",
       paddingLeft: 1,
     },
-    trendSmallBody: { padding: 8 },
-    trendSmallMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 3 },
-    trendSmallSrcBadge: {
+    trendTimeWrap: {
+      position: "absolute",
+      right: 6,
+      bottom: 6,
+      height: 20,
       flexDirection: "row",
       alignItems: "center",
       gap: 3,
-      paddingHorizontal: 5,
-      paddingVertical: 1,
-      borderRadius: 20,
-      maxWidth: 90,
+      paddingHorizontal: 6,
+      borderRadius: 6,
+      backgroundColor: "rgba(0,0,0,0.65)",
     },
-    trendSmallSrcDot: { width: 4, height: 4, borderRadius: 2 },
+    trendTime: { fontSize: Font.tiny - 1, color: "#FFF", fontWeight: "600" },
+    trendSmallBody: { padding: 10 },
+    // Hàng meta giờ chỉ còn badge nguồn → alignSelf flex-start để nó không kéo
+    // giãn hết chiều ngang card, nhờ vậy tên nguồn dài hiện đủ.
+    trendSmallSrcBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      alignSelf: "flex-start",
+      gap: 4,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 20,
+      maxWidth: "100%",
+      marginBottom: 4,
+    },
+    trendSmallSrcDot: { width: 5, height: 5, borderRadius: 2.5 },
     trendSmallSrc: {
       fontSize: Font.tiny - 1,
       color: Color.hot,
       fontWeight: "800",
       letterSpacing: 0.2,
     },
-    trendSmallTime: { fontSize: Font.tiny - 1, color: Color.textMuted },
     trendSmallTitle: {
-      fontSize: Font.caption,
+      fontSize: Font.body,
       fontWeight: "700",
       color: Color.text,
-      lineHeight: 16,
+      lineHeight: 19,
     },
 
     /* ── Source dropdown ── */
