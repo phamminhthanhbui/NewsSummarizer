@@ -24,7 +24,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
 import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
-import { KEYS } from '../services/storage';
+import { KEYS, bumpReadCount } from '../services/storage';
 import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, fetchArticleTextFast, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory, isVideoPageUrl } from '../services/summarize';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
@@ -106,6 +106,11 @@ export default function ArticleScreen({ navigation, route }: any) {
 
   // Auto-fetch article + summarize + load related + saved state
   useEffect(() => {
+    // Đếm lượt đọc — nguồn cho "ĐỌC NHIỀU NHẤT" ở Home. Effect này chạy cho MỌI
+    // đường vào bài (Home, Đã lưu, Lịch sử, bài liên quan) nên là chỗ duy nhất
+    // cần đếm. Fire-and-forget: không chờ, không chặn tải bài.
+    void bumpReadCount(item.link);
+
     // Restore persisted save state (syncs with SavedScreen)
     AsyncStorage.getItem(KEYS.saved)
       .then((raw) => {

@@ -33,6 +33,7 @@ export const KEYS = {
   themeMode: '@theme_mode',
   notifEnabled: '@notif_enabled',
   notifTimes: '@notif_times',
+  readCounts: '@read_counts',
 } as const;
 
 // ---- Dữ liệu giả ----

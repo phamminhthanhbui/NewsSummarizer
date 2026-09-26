@@ -2,7 +2,7 @@
 // marquee nhân đôi, ĐỌC NHIỀU NHẤT theo filter, ảnh fail load không crash.
 import { test, expect, type Page } from '@playwright/test';
 import {
-  FEED_ITEMS, JINA_MARKDOWN, SUMMARY_TEXT, mockNetwork, waitForFeedLoaded,
+  FEED_ITEMS, JINA_MARKDOWN, SUMMARY_TEXT, KEYS, mockNetwork, getStorage, waitForFeedLoaded,
 } from './helpers';
 
 const FIRST = FEED_ITEMS[0];
@@ -112,6 +112,18 @@ test.describe('ĐỌC NHIỀU NHẤT theo filter', () => {
     await expect(page.getByText('Sức khỏe cập nhật số 6').first()).toBeVisible();
     await expect(page.getByText('Sức khỏe cập nhật số 7').first()).toBeVisible();
     await expect(page.getByText('Sức khỏe cập nhật số 8').first()).toBeVisible();
+  });
+
+  // Thứ tự trong strip do rankTrending quyết định — logic đó có self-check
+  // riêng ở src/services/trending.test.ts (node, xác định, không phụ thuộc
+  // timing/feed cache như ở đây). E2E chỉ kiểm phần nối mà unit test không phủ:
+  // mở bài có thật sự ghi lượt đọc không.
+  test('mở bài: ghi lượt đọc vào storage (nguồn cho ĐỌC NHIỀU NHẤT)', async ({ page }) => {
+    await openFirstArticle(page);
+    await expect(async () => {
+      const raw = await getStorage(page, KEYS.readCounts);
+      expect(raw && JSON.parse(raw)[FIRST.link]).toBe(1);
+    }).toPass({ timeout: 15_000 });
   });
 
   test('category rỗng: section ĐỌC NHIỀU NHẤT ẩn theo filter', async ({ page }) => {
