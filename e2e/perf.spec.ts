@@ -27,7 +27,9 @@ test.describe('Reload nhanh (cache fresh)', () => {
       route.fallback();
     });
     await page.goto('/');
-    await waitForFeedLoaded(page);
+    // refresh:false — test này kiểm "cache còn hạn thì KHÔNG gọi /api/fetch",
+    // nên không được bấm Làm mới (sẽ tự tạo request). Chờ cache render xong.
+    await waitForFeedLoaded(page, { refresh: false });
     await expect(page.getByText(FIRST.title).first()).toBeVisible();
     await page.waitForTimeout(2000);
     expect(fetchCalls).toBe(0);

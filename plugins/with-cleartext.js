@@ -1,12 +1,12 @@
-// Thêm android:usesCleartextTraffic="true" vào AndroidManifest lúc prebuild.
-// Cần vì app gọi proxy qua http:// LAN (192.168.x.x) — Android release mặc định
-// chặn toàn bộ HTTP không mã hoá → app chết mạng im lặng.
-// (SDK 57 không còn đọc key android.usesCleartextTraffic trong app.json.)
+// Dev builds may point EXPO_PUBLIC_PROXY_URL at a local HTTP/LAN proxy.
+// Store builds must use HTTPS; in that case cleartext traffic stays disabled.
 const { withAndroidManifest } = require('expo/config-plugins');
 
-module.exports = function withCleartext(config) {
-  return withAndroidManifest(config, (config) => {
-    config.modResults.manifest.application[0].$['android:usesCleartextTraffic'] = 'true';
-    return config;
+module.exports = function withConditionalCleartext(config) {
+  return withAndroidManifest(config, (next) => {
+    const proxyUrl = (process.env.EXPO_PUBLIC_PROXY_URL || '').trim();
+    const allowCleartext = /^http:\/\//i.test(proxyUrl);
+    next.modResults.manifest.application[0].$['android:usesCleartextTraffic'] = allowCleartext ? 'true' : 'false';
+    return next;
   });
 };

@@ -29,6 +29,8 @@ yarn-error.*
 # macOS
 .DS_Store
 *.pem
+# Public intermediate CA required by the fetch proxy (not a private key)
+!/server/tls-extra-ca.pem
 
 # local env files
 .env*.local
@@ -40,8 +42,14 @@ yarn-error.*
 /ios
 /android
 
-# test results
+# test / local design output
 test-results/
+design-review/
+dist-auth-store/
+dist-web-check/
+dist-android-check/
+package.json.*
+!package.json
 
 # Edge TTS MP3 disk cache (server/proxy.js)
 server/.tts-cache/

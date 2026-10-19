@@ -1,0 +1,13 @@
+const fs = require('fs');
+const path = require('path');
+
+const root = path.resolve(__dirname, '..');
+const source = path.join(root, 'public');
+const target = path.join(root, process.argv[2] || 'dist-web');
+
+if (!fs.existsSync(source)) process.exit(0);
+fs.mkdirSync(target, { recursive: true });
+for (const name of fs.readdirSync(source)) {
+  fs.cpSync(path.join(source, name), path.join(target, name), { recursive: true });
+}
+console.log(`Copied public assets to ${path.relative(root, target)}.`);

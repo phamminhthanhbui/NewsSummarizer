@@ -13,6 +13,10 @@ export interface SummaryRecord {
   url: string;
   title: string;
   summary: string;
+  method?: 'rules';
+  summaryVersion?: string;
+  summarySource?: 'article' | 'description';
+  summaryInputHash?: string;
   date: string;
   source: string;
 }

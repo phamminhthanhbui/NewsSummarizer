@@ -2,7 +2,7 @@
 // mục Thông báo (nhiều khung giờ + giờ tùy chỉnh), alert dùng chung, scroll-về-đầu.
 import { test, expect } from '@playwright/test';
 import {
-  KEYS, mockNetwork, seedStorage, getStorage, gotoTab, waitForFeedLoaded,
+  KEYS, mockNetwork, seedStorage, getStorage, gotoTab, waitForFeedLoaded, scrollToText,
 } from './helpers';
 
 test.beforeEach(async ({ page }) => {
@@ -36,9 +36,11 @@ test.describe('Ticker NÓNG', () => {
 
 test.describe('Card gọn TIN MỚI NHẤT', () => {
   test('bài không nổi bật hiện dạng card gọn trong danh sách', async ({ page }) => {
-    // .first(): tiêu đề trùng giữa các card (mock per-feed cùng item)
-    await expect(page.getByText('Đội tuyển Việt Nam thắng đậm trận giao hữu').first()).toBeVisible();
-    await expect(page.getByText('Ca sĩ trẻ ra mắt album đầu tay').first()).toBeVisible();
+    // FlatList ảo hoá: row ngoài viewport KHÔNG có trong DOM → assert thẳng là
+    // phụ thuộc chiều cao dòng/độ dài feed. scrollToText cuộn tới rồi mới assert.
+    await expect(page.getByText('Không có bài báo')).toBeHidden();
+    await scrollToText(page, 'Đội tuyển Việt Nam thắng đậm trận giao hữu');
+    await scrollToText(page, 'Ca sĩ trẻ ra mắt album đầu tay');
   });
 
   test('bấm card gọn mở bài', async ({ page }) => {
@@ -122,6 +124,11 @@ test.describe('Scroll về đầu khi bấm lại tab Trang chủ', () => {
         .some((el) => el.scrollTop > 0 && el.scrollHeight > el.clientHeight);
     });
 
+    // waitForFeedLoaded chỉ chờ nhãn "Đang tải" biến mất, mà lúc đó list còn
+    // đang ở trạng thái rỗng ("Không có bài báo") — wheel rơi vào khoảng này là
+    // mất hút, cuộn được đúng 0px. Chờ list có bài thật rồi mới cuộn.
+    await expect(page.getByText('Không có bài báo')).toBeHidden();
+
     // Cuộn xuống trong danh sách
     await page.mouse.move(400, 500);
     await page.mouse.wheel(0, 2500);
@@ -130,7 +137,9 @@ test.describe('Scroll về đầu khi bấm lại tab Trang chủ', () => {
 
     // Bấm lại tab Trang chủ khi đang ở tab này
     await gotoTab(page, 'Trang chủ');
-    await page.waitForTimeout(600);
-    expect(await verticalScrolled()).toBe(false);
+    // scrollToOffset dùng smooth scroll của browser: thời gian tỉ lệ với quãng
+    // đường (~2.3k px ở đây) nên sleep cứng 600ms là race — đo được còn 4px rồi
+    // mới về 0. Poll cho tới khi đứng yên thay vì đoán thời lượng.
+    await expect.poll(verticalScrolled, { timeout: 5000 }).toBe(false);
   });
 });

@@ -1,24 +1,25 @@
-﻿// E2E: pipeline ảnh/caption trong tóm tắt — các case phát sinh từ review thực tế.
-// LƯU Ý: ArticleScreen chỉ hiển thị tóm tắt AI + media (ảnh kèm caption) + bài
-// liên quan — KHÔNG render text thô của bài. Nên assertion chỉ trên: ảnh có/không,
-// caption hiển thị, khung tóm tắt. (Phần strip widget ảnh hưởng text gửi LLM —
-// không quan sát trực tiếp được qua mock LLM, nên verify qua ảnh bị lọc.)
+// E2E: pipeline ảnh/caption trong tóm tắt — các case phát sinh từ review thực tế.
+// ArticleScreen hiển thị các câu được chọn tại thiết bị, ảnh/chú thích và bài
+// liên quan. Kiểm tra nội dung từ nguồn và media sau khi lọc widget của báo.
 import { test, expect, type Page } from '@playwright/test';
 import {
-  FEED_ITEMS, mockNetwork, waitForFeedLoaded,
+  FEED_ITEMS, JINA_MARKDOWN, KEYS, mockNetwork, seedStorage, waitForFeedLoaded,
 } from './helpers';
 
 const FIRST = FEED_ITEMS[0];
+const SECOND = FEED_ITEMS[1];
 
 async function openFirstArticle(page: Page) {
   await page.getByText(FIRST.title).first().click();
-  await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('TÓM TẮT', { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 // Override route Jina đăng ký SAU mockNetwork → thắng route mặc định
+const SOURCE_CONTEXT = 'Ban tổ chức cho biết thông tin được ghi nhận tại sự kiện và sẽ tiếp tục được cập nhật theo diễn biến thực tế. Các đơn vị liên quan đang kiểm tra những nội dung cần làm rõ trước khi công bố thông báo chính thức. Người đọc có thể theo dõi bài gốc để xem đầy đủ hình ảnh và các phát biểu tại sự kiện.';
+
 function mockJina(page: Page, md: string) {
   return page.route('**/api/jina**', (route) =>
-    route.fulfill({ status: 200, contentType: 'text/markdown', body: md }),
+    route.fulfill({ status: 200, contentType: 'text/markdown', body: md + '\n\n' + SOURCE_CONTEXT }),
   );
 }
 
@@ -26,6 +27,12 @@ const P = (text: string, bg: string, fg?: string) => `https://placehold.co/600x4
 
 test.beforeEach(async ({ page }) => {
   await mockNetwork(page);
+  await seedStorage(page, { [KEYS.feedsCache]: JSON.stringify(FEED_ITEMS), [KEYS.feedsCacheTime]: String(Date.now()), [KEYS.history]: '[]' });
+  await page.route('https://placehold.co/**', route => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#dbe2e8"/></svg>' }));
+  await page.route('**/api/fetch?url=**', route => {
+    const target = new URL(route.request().url()).searchParams.get('url') || '';
+    return /^https:\/\/example\.com\/bai-/.test(target) ? route.fulfill({ status: 503, body: '' }) : route.fallback();
+  });
   await page.goto('/');
   await waitForFeedLoaded(page);
 });
@@ -54,7 +61,7 @@ Tiền Phong
     await openFirstArticle(page);
     await expect(page.locator('img[src*="WidgetThumb"]')).toHaveCount(0);
     await expect(page.locator('img[src*="HeroTP"]').first()).toBeVisible();
-    await expect(page.getByText('Tóm tắt AI giả lập', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('summary-method')).toContainText('Chọn câu từ bài gốc');
   });
 
   test('không có marker kết thúc: fallback vẫn loại ảnh widget, giữ hero', async ({ page }) => {
@@ -72,7 +79,7 @@ Thân bài thật sau tiêu đề. Đoạn này đủ dài để app parse và h
     await openFirstArticle(page);
     await expect(page.locator('img[src*="WidgetThumb"]')).toHaveCount(0);
     await expect(page.locator('img[src*="HeroTP"]').first()).toBeVisible();
-    await expect(page.getByText('Tóm tắt AI giả lập', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('summary-method')).toContainText('Chọn câu từ bài gốc');
   });
 
   test('ảnh bọc link: zoom về chính ảnh được giữ, link bài khác bị bỏ', async ({ page }) => {
@@ -176,124 +183,44 @@ thích nào sau ảnh trong markdown — caption nằm trong HTML bài gốc.`);
       }
       await route.fallback();
     });
-    // Summary dài nhiều đoạn để 2 ảnh gallery đều có chỗ đan xen (ArticleScreen
-    // bỏ ảnh thừa khi summary chỉ 1 đoạn ngắn).
-    await page.route('**/api/llm', async (route) => {
-      const body = route.request().postData() || '';
-      if (body.includes('chú thích ảnh')) {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({
-          choices: [{
-            message: { content: 'Đoạn mở đầu nêu bối cảnh sự kiện và nhân vật chính của bài báo này.\n\nÝ chính thứ hai phân tích diễn biến then chốt với số liệu cụ thể từ cơ quan chức năng.\n\nÝ chính thứ ba dẫn phát biểu của chuyên gia về tác động dài hạn đối với thị trường.\n\nĐoạn kết tóm lại ý nghĩa sự kiện và hướng theo dõi trong thời gian tới.' },
-          }],
-        }),
-      });
-    });
-    page.on('console', (m) => { if (m.text().includes('BF ')) console.log('BROWSER:', m.text()); });
     await openFirstArticle(page);
     await expect(page.getByText('Đại sứ Mỹ Kirby ở EA Suck, Đắk Lắk (Ảnh: TT)')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Obama trong chuyến thăm Việt Nam (Ảnh: FBNV)')).toBeVisible({ timeout: 15_000 });
   });
-});
 
-test.describe('Caption dài → AI rút gọn', () => {
-  const LONG_CAP = 'Tuấn Trần và Trần Thiên Tú không biết võ nhưng qua quá trình huấn luyện của Johnny Trí Nguyễn đã thành những võ sĩ thực sự trên phim - Ảnh: NSXCC';
-  const SHORT_CAP = 'Tuấn Trần, Trần Thiên Tú thành võ sĩ nhờ Johnny Trí Nguyễn - Ảnh: NSXCC';
+  test('player JS data-vid (host trần) vào được tóm tắt dù Jina có ≥2 ảnh', async ({ page }) => {
+    // Thanh Niên: player là <div type="VideoStream" data-vid="host/path.mp4"> —
+    // markdown của Jina KHÔNG chứa link stream nào (chỉ có ảnh). Jina ≥2 ảnh nên
+    // cổng merge cũ (jinaMediaCount < 2) đóng → video biến mất khỏi tóm tắt.
+    // Case này khoá lại: video phải được hút từ HTML, và URL phải được ghép
+    // https:// (data-vid ghi host trần, không scheme) mới phát được.
+    await mockJina(page, `![Image 1](${P('LhA', '111111')})
 
-  test('đúng 1 request batch cho caption >88 ký tự; bản ngắn thay thế; caption ngắn không bị đụng', async ({ page }) => {
-    let condenseCalls = 0;
-    let condenseBody = '';
-    await page.route('**/api/llm', async (route) => {
-      const body = route.request().postData() || '';
-      if (body.includes('chú thích ảnh')) {
-        condenseCalls++;
-        condenseBody = body;
-        await route.fulfill({
-          status: 200, contentType: 'application/json',
-          body: JSON.stringify({ choices: [{ message: { content: SHORT_CAP } }] }),
-        });
+![Image 2](${P('LhB', '222222')})
+
+Thân bài đủ dài để vượt ngưỡng tối thiểu, mô phỏng bài Thanh Niên nhúng player
+video bằng JS nên markdown của Jina không chứa link stream nào cả.`);
+    const html = `<html><body><div class="detail-content">
+<p>Đoạn văn trước player, đủ dài để vùng nội dung được nhận diện khi quét media.</p>
+<div class="VCSortableInPreviewMode" type="VideoStream" embed-type="4" data-vid="thanhnien.mediacdn.vn/325084952045817856/2026/9/8/premiere-len-huong-test.mp4" data-autoplay="false"></div>
+<p>Đoạn văn sau player trong bài gốc.</p>
+</div></body></html>`;
+    await page.route('**/api/fetch**', async (route) => {
+      const decoded = decodeURIComponent(route.request().url());
+      if (decoded.includes(FIRST.link)) {
+        await route.fulfill({ status: 200, contentType: 'text/html', body: html });
         return;
       }
-      await route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ choices: [{ message: { content: 'Tóm tắt AI giả lập: giá vàng tăng mạnh do nhu cầu trú ẩn an toàn.' } }] }),
-      });
+      await route.fallback();
     });
-
-    await mockJina(page, `[![Image 1: a](https://placehold.co/600x400/111111/FFFFFF.jpg?text=Long1)](https://placehold.co/600x400/111111/FFFFFF.jpg?text=Long1)
-
-${LONG_CAP}
-
-[![Image 2: b](https://placehold.co/600x400/222222/FFFFFF.jpg?text=Short2)](https://placehold.co/600x400/222222/FFFFFF.jpg?text=Short2)
-
-Ninh Bình quá đẹp trong Hộ linh tráng sĩ - Ảnh: NSX
-
-Thân bài kiểm tra condense, đủ dài để app parse và hiển thị tóm tắt.`);
-
     await openFirstArticle(page);
-    await expect(page.getByText(SHORT_CAP)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(LONG_CAP)).toHaveCount(0);
-
-    await expect(async () => {
-      expect(condenseCalls).toBe(1);
-      expect(condenseBody).toContain('Tuấn Trần và Trần Thiên Tú không biết võ');
-      expect(condenseBody).not.toContain('Ninh Bình quá đẹp trong Hộ linh tráng sĩ');
-    }).toPass({ timeout: 5_000 });
-    await page.waitForTimeout(1500);
-    expect(condenseCalls).toBe(1);
-  });
-
-  test('mở lại bài: caption đã nén lấy từ cache, không gọi AI thêm', async ({ page }) => {
-    let condenseCalls = 0;
-    await page.route('**/api/llm', async (route) => {
-      const body = route.request().postData() || '';
-      if (body.includes('chú thích ảnh')) {
-        condenseCalls++;
-        await route.fulfill({
-          status: 200, contentType: 'application/json',
-          body: JSON.stringify({ choices: [{ message: { content: SHORT_CAP } }] }),
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ choices: [{ message: { content: 'Tóm tắt AI giả lập: giá vàng tăng mạnh do nhu cầu trú ẩn an toàn.' } }] }),
-      });
-    });
-
-    await mockJina(page, `[![Image 1: a](https://placehold.co/600x400/111111/FFFFFF.jpg?text=Long1)](https://placehold.co/600x400/111111/FFFFFF.jpg?text=Long1)
-
-${LONG_CAP}
-
-Thân bài cho test cache caption, đủ dài để app parse và hiển thị tóm tắt.`);
-
-    await openFirstArticle(page);
-    await expect(page.getByText(SHORT_CAP)).toBeVisible({ timeout: 15_000 });
-    expect(condenseCalls).toBe(1);
-
-    await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
-    await page.getByText(FIRST.title).first().click();
-    await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(SHORT_CAP)).toBeVisible();
-    await page.waitForTimeout(1500);
-    expect(condenseCalls).toBe(1);
+    await expect(page.locator('video[src*="premiere-len-huong-test.mp4"]')).toHaveCount(1);
   });
 });
 
 test.describe('Media đan xen bố cục bài gốc', () => {
   test('3 ảnh ở 3 vị trí: đủ số, không trùng, caption không dồn', async ({ page }) => {
-    const FOUR_PARAS = 'Đoạn mở đầu nêu bối cảnh sự kiện và nhân vật chính của bài báo này.\n\nÝ chính thứ hai phân tích diễn biến then chốt với số liệu cụ thể từ cơ quan chức năng.\n\nÝ chính thứ ba dẫn phát biểu của chuyên gia về tác động dài hạn đối với thị trường.\n\nĐoạn kết tóm lại ý nghĩa sự kiện và hướng theo dõi trong thời gian tới.';
-    await page.route('**/api/llm', async (route) =>
-      route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ choices: [{ message: { content: FOUR_PARAS } }] }),
-      }),
-    );
+
     await mockJina(page, `Đoạn mở đầu trước ảnh thứ nhất để media có vị trí tham chiếu trong bố cục bài viết gốc.
 
 ![Image 1: a](https://placehold.co/600x400/111111/FFFFFF.jpg?text=Media1)
@@ -314,3 +241,166 @@ test.describe('Media đan xen bố cục bài gốc', () => {
     await expect(page.locator('img[src*="Media3"]')).toHaveCount(1);
   });
 });
+
+// HTML bài gốc cho các kiểm thử media; giữ handler RSS cho URL khác.
+function mockArticleHtml(page: Page, link: string, html: string) {
+  return page.route('**/api/fetch?url=**', (route) => {
+    if (decodeURIComponent(route.request().url()).includes(link)) {
+      return route.fulfill({ status: 200, contentType: 'text/html', body: html });
+    }
+    return route.fallback();
+  });
+}
+
+// File audio THẬT (WAV im lặng tự sinh) + giả lập HTTP Range như CDN thật
+// (cdn.tienphong.vn trả 206). Trả 200 trần thì media element coi nguồn là không tua
+// được → seekable rỗng → gán currentTime bị kẹp về 0 TRONG IM LẶNG, và test sẽ đỏ dù
+// code đúng. seek() cũng thoát sớm khi dur = 0 nên mock bằng URL chết là xanh giả.
+function mockPaperAudio(page: Page, seconds = 4) {
+  return page.route('**/audios/abc/podcast.mp3', (route) => {
+    const buf = wavSilence(seconds);
+    const m = /bytes=(\d+)-(\d*)/.exec(route.request().headers()['range'] || '');
+    if (m) {
+      const start = Number(m[1]);
+      const end = m[2] ? Number(m[2]) : buf.length - 1;
+      return route.fulfill({
+        status: 206,
+        headers: {
+          'Content-Type': 'audio/wav',
+          'Accept-Ranges': 'bytes',
+          'Content-Range': `bytes ${start}-${end}/${buf.length}`,
+          'Content-Length': String(end - start + 1),
+        },
+        body: buf.subarray(start, end + 1),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      headers: {
+        'Content-Type': 'audio/wav',
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(buf.length),
+      },
+      body: buf,
+    });
+  });
+}
+
+test.describe('Audio bản đọc của tòa soạn (Tiền Phong…)', () => {
+  // Nguyên văn hình dạng thẻ trên trang Tiền Phong: bị chính trang ẨN đi
+  // (visibility:hidden) vì nút play hiển thị là JS riêng.
+  const TP_HTML = `<html><head><meta property="og:image" content="${P('Hero', 'EEEEEE', '333333')}"></head><body>
+<div class="main-content">
+<p>Thân bài thật của bài báo, đủ dài để parser coi đây là vùng nội dung hợp lệ.</p>
+<audio style="visibility: hidden; width: 0; height: 0;" playsinline preload="metadata" src="https://cdn.tienphong.vn/audios/abc/podcast.mp3"></audio>
+</div></body></html>`;
+
+  test('Jina bắt ≥2 ảnh: audio vẫn hiện (không đi qua cổng gộp media)', async ({ page }) => {
+    // 2 ảnh từ Jina = đúng nhánh `jinaMediaCount >= 2`, nơi htmlToMerge chỉ còn
+    // lại video. Audio dùng chung cổng đó thì ca này mất thanh nghe — đây là
+    // hồi quy mà nhánh `toMerge` trong loadArticleContent sinh ra để chặn.
+    // Ảnh phải nằm SAU "Markdown Content:" — stripJinaHeader (summarize.ts:519)
+    // cắt sạch phần trước mốc đó, ảnh đặt lên trên sẽ biến mất trong im lặng.
+    const jinaMd = JINA_MARKDOWN.replace(
+      'Markdown Content:',
+      `Markdown Content:\n\n![A](${P('A', 'AAAAAA')})\n\n![B](${P('B', 'BBBBBB')})`,
+    );
+    await mockJina(page, jinaMd);
+    await mockArticleHtml(page, FIRST.link, TP_HTML);
+    await openFirstArticle(page);
+    // Ảnh A/B CHỈ có trong markdown Jina → thấy nó = blocks Jina đã THAY blocks
+    // HTML fast-path (ArticleScreen:182 `setBlocks(b)`). Phải neo vào mốc này rồi
+    // mới khẳng định audio: khẳng định sớm là đang nhìn blocks fast-path — lúc
+    // nào cũng có audio, test xanh vô nghĩa (đã thử: bỏ fix mà vẫn xanh).
+    await expect(page.locator('img[src*="AAAAAA"]')).toHaveCount(1);
+    await expect(page.getByText('BẢN ĐỌC CỦA VNEXPRESS')).toBeVisible();
+    await expect(page.locator('audio[src*="podcast.mp3"]')).toHaveCount(1);
+    // Có bản đọc của báo → nút "Nghe" (đọc bản tóm tắt) phải bị khoá.
+    // Khẳng định thẳng aria-disabled: TouchableOpacity của react-native-web render
+    // ra <div> nên toBeDisabled() của Playwright không coi là disabled (div không
+    // phải control gốc) — nhưng aria-disabled + pointer-events:none mới là thứ
+    // thực sự chặn bấm.
+    await expect(page.getByLabel('Bài có bản đọc của tòa soạn, dùng thanh nghe bên dưới'))
+      .toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('bài không có audio → không dựng thanh nghe', async ({ page }) => {
+    await mockArticleHtml(page, FIRST.link, `<html><body><div class="main-content"><p>Bài thường, không có audio của tòa soạn.</p></div></body></html>`);
+    await openFirstArticle(page);
+    await expect(page.locator('audio')).toHaveCount(0);
+  });
+
+  // TUA. Ca này sinh ra từ câu hỏi "không thể tua?" của người dùng, và đã xác nhận
+  // là ĐÚNG: bản cũ gắn Pressable.onPress, mà react-native-web đi nhánh sự kiện
+  // `click` cho phần tử không tương tác — ở nhánh đó `currentTarget` chưa có lúc
+  // getter locationX chạy, nên locationX trả undefined và hàm tua thoát sớm. Đã đo:
+  // gắn lại Pressable.onPress thì ca này ĐỎ, dùng responder thì XANH.
+  // Giờ dùng onResponderGrant/Move → chạm và KÉO đều tua (onPress chỉ bắn lúc nhả
+  // tay nên kéo không ăn).
+  //
+  // Phải phát file audio THẬT (WAV im lặng tự sinh): seek() thoát sớm khi dur = 0,
+  // nên mock bằng URL chết thì test này xanh giả.
+  test('tua được: chạm 3/4 thanh → đồng hồ nhảy khỏi 0:00', async ({ page }) => {
+    await mockPaperAudio(page);
+    await mockArticleHtml(page, FIRST.link, TP_HTML);
+    await openFirstArticle(page);
+
+    const bar = page.getByLabel('Tua bản đọc');
+    await expect(bar).toBeVisible();
+    // Chờ metadata: chưa có duration thì seek() tự huỷ, chạm xong vẫn 0:00.
+    await expect(page.getByText(/\/\s*0:04/).first()).toBeVisible();
+
+    // page.mouse.click dùng toạ độ VIEWPORT và KHÔNG tự cuộn (locator.click mới
+    // cuộn). Thanh tua nằm dưới hero + tiêu đề nên phải tự đưa vào màn hình trước,
+    // không thì cú chạm rơi ra ngoài viewport và test đỏ oan.
+    await bar.scrollIntoViewIfNeeded();
+    const box = (await bar.boundingBox())!;
+    await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+
+    // 4s × 3/4 = 3.0s; sai số ±1px trên thanh ~300px ≈ ±0.013s nên chỉ lệch tối đa
+    // 1 giây ở mép làm tròn — nhận cả 0:02 lẫn 0:03, nhưng KHÔNG nhận 0:00.
+    await expect(page.getByText(/0:0[23]\s*\/\s*0:04/).first()).toBeVisible();
+  });
+
+  // RỜI BÀI. Người dùng báo: đang nghe rồi mở bài khác thì tiếng vẫn chạy.
+  // Cơ chế: bấm bài liên quan gọi navigation.push('Article') (ArticleScreen:321) —
+  // màn hình cũ bị ĐẨY XUỐNG chứ không unmount, nên cleanup lúc unmount không chạy,
+  // thẻ <audio> vẫn nằm trong DOM và trình duyệt phát tiếp.
+  // Trạng thái đọc từ DOM chứ không qua UI: sau khi push, thanh nghe của bài cũ
+  // không còn nhìn thấy được nữa, nên không thể khẳng định qua getByLabel.
+  test('mở bài khác (push, chỉ blur) → bản đọc của báo phải dừng', async ({ page }) => {
+    await mockPaperAudio(page, 222);
+    await mockArticleHtml(page, FIRST.link, TP_HTML);
+    await openFirstArticle(page);
+
+    await page.getByLabel('Phát bản đọc của báo').click();
+    // Trả về "số thẻ audio|paused" — gộp cả hai vào một probe để phân biệt được
+    // "đã dừng" với "màn hình cũ bị unmount nên không còn thẻ nào" (bẫy false-green).
+    const audioState = () => page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('audio')) as HTMLAudioElement[];
+      return els.length ? `${els.length}|${els.map((a) => a.paused).join(',')}` : 'none';
+    });
+    await expect.poll(audioState).toBe('1|false');
+
+    await page.getByText(SECOND.title).last().click();
+
+    // '1|true' = màn hình cũ VẪN mounted (đúng nhánh blur) và đã pause.
+    // 'none' = bị unmount → ca này không còn kiểm chứng được đường blur nữa.
+    await expect.poll(audioState).toBe('1|true');
+  });
+});
+
+// WAV im lặng — Chromium giải mã PCM không cần codec ngoài, nên duration có ngay
+// và không phụ thuộc mạng. 8kHz mono 8-bit: 8000 byte/giây, mẫu 8-bit lấy 128 làm
+// mức 0.
+function wavSilence(seconds: number): Buffer {
+  const rate = 8000;
+  const n = rate * seconds;
+  const buf = Buffer.alloc(44 + n, 128);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22); buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate, 28); buf.writeUInt16LE(1, 32); buf.writeUInt16LE(8, 34);
+  buf.write('data', 36); buf.writeUInt32LE(n, 40);
+  return buf;
+}

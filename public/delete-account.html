@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="vi">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xóa tài khoản · NewsSummarizer</title><link rel="stylesheet" href="/legal.css"></head>
+<body><main class="shell">
+  <div class="brand"><div class="mark">✦</div><div><b>NewsSummarizer</b><div class="muted">Signal Editorial</div></div></div>
+  <div class="eyebrow">QUẢN LÝ DỮ LIỆU</div><h1>Xóa tài khoản NewsSummarizer.</h1>
+  <p>Trang này cho phép bạn yêu cầu xóa tài khoản ngay cả khi không còn cài ứng dụng. Bạn cần đăng nhập lại để xác nhận quyền sở hữu tài khoản.</p>
+  <div class="notice"><p style="margin:0"><strong>Lưu ý:</strong> xóa tài khoản sẽ xóa hồ sơ đăng nhập và dữ liệu tài khoản phía dịch vụ. Dữ liệu chỉ nằm trên thiết bị đã gỡ ứng dụng không thể được xóa từ xa. Việc xóa tài khoản <strong>không tự hủy thuê bao Apple/Google</strong>; hãy hủy thuê bao trong tài khoản cửa hàng nếu bạn không muốn tiếp tục gia hạn.</p></div>
+
+  <div class="card">
+    <label class="field" for="email">Email tài khoản</label><input id="email" type="email" autocomplete="email" placeholder="ban@email.com">
+    <label class="field" for="password">Mật khẩu</label><input id="password" type="password" autocomplete="current-password" placeholder="Mật khẩu hiện tại">
+    <label class="field" for="confirm">Nhập XOA để xác nhận</label><input id="confirm" autocomplete="off" placeholder="XOA">
+    <button id="deleteButton" class="button" type="button">Xóa tài khoản vĩnh viễn</button>
+    <div id="status" role="status" aria-live="polite"></div>
+  </div>
+
+  <p class="muted">Nếu bạn không thể đăng nhập, hãy đặt lại mật khẩu từ ứng dụng trước. Nếu vẫn cần hỗ trợ, liên hệ <a id="supportEmail" href="#">email hỗ trợ chưa cấu hình</a>.</p>
+  <div class="footer"><a href="/privacy.html">Chính sách quyền riêng tư</a> · <a href="/terms.html">Điều khoản sử dụng</a></div>
+</main>
+<script src="/site-config.js"></script>
+<script>
+(() => {
+  const cfg = window.NS_PUBLIC_CONFIG || {};
+  const button = document.getElementById('deleteButton');
+  const status = document.getElementById('status');
+  const support = document.getElementById('supportEmail');
+  if (cfg.supportEmail) { support.textContent = cfg.supportEmail; support.href = 'mailto:' + cfg.supportEmail; } else support.removeAttribute('href');
+  const show = (message, ok = false) => { status.className = ok ? 'success' : 'error'; status.textContent = message; };
+
+  button.addEventListener('click', async () => {
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const confirm = document.getElementById('confirm').value.trim().toUpperCase();
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) return show('Trang xóa tài khoản chưa được cấu hình. Vui lòng liên hệ bộ phận hỗ trợ.');
+    if (!email || !password) return show('Nhập email và mật khẩu của tài khoản.');
+    if (confirm !== 'XOA') return show('Nhập XOA để xác nhận thao tác xóa vĩnh viễn.');
+    button.disabled = true; button.textContent = 'Đang xác minh và xóa...'; status.className = ''; status.textContent = '';
+    try {
+      const login = await fetch(cfg.supabaseUrl.replace(/\/$/, '') + '/auth/v1/token?grant_type=password', {
+        method: 'POST', headers: { apikey: cfg.supabaseAnonKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const auth = await login.json().catch(() => ({}));
+      if (!login.ok || !auth.access_token) throw new Error('Email hoặc mật khẩu không đúng.');
+      const del = await fetch(cfg.supabaseUrl.replace(/\/$/, '') + '/functions/v1/delete-account', {
+        method: 'POST', headers: { apikey: cfg.supabaseAnonKey, Authorization: 'Bearer ' + auth.access_token, 'Content-Type': 'application/json' }, body: '{}'
+      });
+      const result = await del.json().catch(() => ({}));
+      if (!del.ok) throw new Error(result.error || 'Không thể xóa tài khoản lúc này.');
+      document.getElementById('email').value = ''; document.getElementById('password').value = ''; document.getElementById('confirm').value = '';
+      show('Tài khoản đã được xóa. Nếu bạn có thuê bao Apple/Google, hãy kiểm tra và hủy riêng trong cửa hàng nếu cần.', true);
+      button.textContent = 'Tài khoản đã xóa';
+    } catch (error) {
+      show(error instanceof Error ? error.message : 'Không thể xóa tài khoản lúc này.');
+      button.disabled = false; button.textContent = 'Xóa tài khoản vĩnh viễn';
+    }
+  });
+})();
+</script></body></html>

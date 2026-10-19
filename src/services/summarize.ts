@@ -1,463 +1,33 @@
-// NVIDIA NIM — OpenAI-compatible requests, streaming and model fallback.
-
+// Local sentence selection; article fetching and media parsing stay independent.
 import { Platform } from 'react-native';
 import { KEYS } from './storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getProxyBase, orderedProxyBases, markProxyDead, markProxyAlive, proxiedFetchText } from '../utils/proxy';
 import { runCpuTask } from '../utils/parseQueue';
+import { pickAudioUrl } from '../utils/audioSrc';
 import type { FeedItem, SummaryRecord } from '../types';
+import { buildRuleSummary, RULE_SUMMARY_VERSION, fingerprintSummaryInput, isCurrentRuleSummary } from './ruleSummary';
 
-export type LLMProvider = 'nvidia';
-
-// NVIDIA NIM — app chạy được ngay khi start, không cần vào Settings nhập key.
-// User nhập key khác trong Settings sẽ ghi đè (AsyncStorage ưu tiên hơn).
-export const DEFAULT_NVIDIA_KEY = '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';
-
-export interface ProviderConfig {
-  id: LLMProvider;
-  label: string;
-  baseUrl: string;
-  models: { id: string; label: string; power?: number }[];
-  needsKey: boolean;
-  keyStorageKey: keyof typeof KEYS;
-  // For custom: user provides baseUrl
-  supportsCustomUrl?: boolean;
-}
-
-export const PROVIDERS: ProviderConfig[] = [
-  {
-    id: 'nvidia',
-    label: 'NVIDIA NIM',
-    baseUrl: 'https://integrate.api.nvidia.com/v1',
-    // Thứ tự mảng = thứ tự hiển thị trong dropdown, và models[0] là model MẶC ĐỊNH
-    // (SettingsScreen lấy models[0].id). Còn chuỗi fallback thì xếp theo `power` giảm dần.
-    models: [
-      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (mạnh, miễn phí)', power: 6 },
-      { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (nhanh, miễn phí)', power: 5 },
-      { id: 'nvidia/ising-calibration-1.5-31b', label: 'Ising Calibration 31B (nhanh, miễn phí)', power: 4 },
-      { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', label: 'Nemotron 3.5 Lightning 30B (nhanh, miễn phí)', power: 3 },
-      // ĐÃ LOẠI — đo thực tế 22/9/2026 bằng 6 vòng probe (luôn kèm 1 model đối chứng đã biết-tốt):
-      // - deepseek-ai/deepseek-v4-pro-0813, minimaxai/minimax-m3 → 410 Gone, NIM đã EOL.
-      // - google/gemma-4-31b-it, moonshotai/kimi-k3, mistralai/mistral-nemotron, z-ai/glm-5.3
-      //   → timeout 8-9/9 lần thử trong 4 phiên, kể cả lúc nền tảng đã hết nghẽn ⇒ hỏng thật.
-      // - openai/gpt-oss-20b, meta/muse-glimmer-30b, z-ai/glm-5.3-flash
-      //   → 200 nhưng content RỖNG, chỉ có reasoning_content; app chỉ đọc message.content
-      //     nên tóm tắt ra chuỗi rỗng (lỗi im lặng — nguy hiểm hơn lỗi ồn ào).
-      // - poolside/laguna-xs-2.1, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
-      //   → 400 khi app gửi thinking:{type:'disabled'} (model bắt buộc có reasoning).
-      // - writer/palmyra-*, 01-ai/yi-large, và nhiều model cũ (llama-3.1/3.3, gemma-2b/3-*,
-      //   mistral-*, mixtral, phi-3.5-moe, granite-3.0-8b, sea-lion-7b, jamba, dbrx, zamba2,
-      //   kimi-k2.6, llama3-chatqa, nemotron-4-340b, nemotron-nano-3-30b)
-      //   → 404 "Not found for account" (tài khoản không có quyền).
-      // - nvidia/nemotron-3-ultra-550b-a55b → 200 nhưng là model enterprise, rủi ro tốn phí → loại.
-      //
-      // LƯU Ý KHI KIỂM TRA LẠI: NIM free tier nghẽn theo từng đợt (503 "Service temporarily
-      // overloaded", timeout hàng loạt). Probe PHẢI chạy tuần tự và PHẢI kèm 1 model đối chứng
-      // đã biết-tốt — nếu chính đối chứng fail thì đang nghẽn, đừng kết luận model hỏng.
-      // Chỉ tin các lỗi tất định: 410 (EOL), 404 (không có quyền), 400 (sai request shape).
-    ],
-    needsKey: true,
-    keyStorageKey: 'apiKey',
-  },
-];
-
-export function getProviderConfig(provider: LLMProvider): ProviderConfig | undefined {
-  return PROVIDERS.find((p) => p.id === provider);
-}
-
-export function getModelsForProvider(provider: LLMProvider): { id: string; label: string; power?: number }[] {
-  return getProviderConfig(provider)?.models || [];
-}
-
-// Legacy export for backward compat
-export const NIM_MODELS = getModelsForProvider('nvidia');
-
-// Dựng request theo từng provider (endpoint + kiểu auth khác nhau)
-export function buildLlmRequest(
-  provider: LLMProvider,
-  apiKey: string,
-  model: string,
-  systemPrompt: string,
-  userContent: string,
-  maxTokens: number,
-  customBaseUrl?: string,
-): { url: string; headers: Record<string, string>; body: any } {
-  const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
-
-  const baseUrl = cfg.baseUrl;
-  if (!baseUrl) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
-
-  // NVIDIA NIM là OpenAI-compatible /chat/completions
-  const url = `${baseUrl}/chat/completions`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${apiKey}`,
-  };
-  const body: any = {
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent },
-    ],
-    max_tokens: maxTokens,
-    temperature: 0.3,
-  };
-  // NVIDIA có model reasoning — tắt thinking để trả summary trực tiếp (không tiêu
-  // token/độ trễ vào chuỗi suy luận, content luôn có nội dung). Model không hỗ trợ
-  // thì NIM bỏ qua field này.
-  body.thinking = { type: 'disabled' };
-  return { url, headers, body };
-}
-
-// Gửi request — web đi qua proxy local (server/proxy.js) khi provider không có CORS.
-// Failover qua các candidate base (cùng origin → IP Metro → loopback), mỗi base một
-// attempt với header-timeout riêng: base chết (IP cũ/firewall) không chặn base sau.
-// timeoutMs chỉ dùng cho test kết nối; summarize không đặt (bài dài có thể chậm).
-export async function sendLlmRequest(
-  url: string,
-  headers: Record<string, string>,
-  body: any,
-  provider: LLMProvider,
-  label: string,
-  timeoutMs?: number,
-  onToken?: (partial: string) => void,
-): Promise<any> {
-  const isWeb = Platform.OS === 'web';
-
-  // NVIDIA trên web đi qua proxy; native gọi trực tiếp.
-  // Danh sách base đã sắp theo sức khỏe (base sống đầu tiên).
-  const proxyBases = isWeb ? orderedProxyBases() : [''];
-  if (!proxyBases.length) {
-    throw new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
-  }
-
-  let lastError: Error = new Error('Dịch vụ AI không kết nối được, kiểm tra mạng và thử lại');
-  for (const base of proxyBases) {
-    const corsProxy = base ? `${base}/api/llm` : undefined;
-    const finalUrl = corsProxy || url;
-    const finalHeaders = corsProxy
-      ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-      : headers;
-    const finalBody = corsProxy
-      ? JSON.stringify({ url, method: 'POST', body, headers })
-      : JSON.stringify(body);
-
-    // Attempt timer CHỈ tồn tại khi caller truyền timeoutMs (test kết nối).
-    // Summarize thật KHÔNG có timer: proxy /api/llm chỉ trả response SAU KHI
-    // LLM chạy xong (thường 15-40s) — timer ngắn sẽ giết nhầm request khỏe
-    // rồi đánh dấu OAN base đang sống là chết (lỗi đã gặp).
-    const controller = new AbortController();
-    const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    try {
-      const res = await fetch(finalUrl, {
-        method: 'POST',
-        headers: finalHeaders,
-        body: finalBody,
-        signal: controller.signal,
-      });
-      if (timer) clearTimeout(timer);
-      if (!res.ok) {
-        // Proxy chết/treo ở tầng server → thử base kế; lỗi từ LLM upstream là
-        // nghiệp vụ → báo ngay, không retry base khác.
-        if (corsProxy && (res.status === 404 || res.status >= 500)) {
-          markProxyDead(base);
-          lastError = new Error(`Dịch vụ AI tạm thời lỗi (HTTP ${res.status})`);
-          continue;
-        }
-        const err = await res.json().catch(() => ({}));
-        const msg = (err as any)?.error?.message || (err as any)?.message || `HTTP ${res.status}`;
-        throw new Error(`Dịch vụ AI tạm thời lỗi (${msg})`);
-      }
-      if (corsProxy) markProxyAlive(base);
-      const ct = res.headers.get('content-type') || '';
-      if (ct.includes('event-stream')) {
-        // Stream thật sự (web): đọc từng chunk, onToken vẽ dần.
-        if (onToken && res.body && typeof (res.body as any).getReader === 'function') {
-          const content = await readSseContent(res, onToken);
-          return { choices: [{ message: { content } }] };
-        }
-        // Native / không hỗ trợ reader → đọc trọn body text rồi parse SSE 1 lần.
-        const raw = await res.text();
-        const content = raw.split('\n').reduce((acc, line) => {
-          const l = line.trim();
-          if (!l.startsWith('data:')) return acc;
-          const payload = l.slice(5).trim();
-          if (!payload || payload === '[DONE]') return acc;
-          try {
-            const j = JSON.parse(payload);
-            return acc + (j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.text ?? '');
-          } catch { return acc; }
-        }, '');
-        onToken?.(content);
-        return { choices: [{ message: { content } }] };
-      }
-      return await res.json();
-    } catch (e) {
-      if (timer) clearTimeout(timer);
-      const msg = e instanceof Error ? e.message : '';
-      if (/^Dịch vụ AI/.test(msg)) throw e;
-      if ((e as any)?.name === 'AbortError') {
-        // Chỉ xảy ra ở nhánh test kết nối (summarize không còn timer)
-        lastError = new Error('Dịch vụ AI phản hồi quá chậm, thử lại sau');
-      } else {
-        lastError = e instanceof Error ? e : lastError;
-      }
-      if (corsProxy) markProxyDead(base);
-      continue;
-    }
-  }
-  throw lastError;
-}
-
-// Đọc SSE (data: {json}\n\n ...) từ response, gom delta.content, gọi onToken
-// cho phần text đã tích lũy (throttle ~100ms) để UI vẽ dần chữ.
-async function readSseContent(res: Response, onToken: (acc: string) => void): Promise<string> {
-  const reader = (res.body as any).getReader() as ReadableStreamDefaultReader<Uint8Array>;
-  const decoder = new TextDecoder();
-  let buf = '';
-  let acc = '';
-  let lastCb = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const j = JSON.parse(payload);
-        const delta = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.text ?? '';
-        if (delta) {
-          acc += delta;
-          const now = Date.now();
-          if (now - lastCb >= 100) { lastCb = now; onToken(acc); }
-        }
-      } catch { /* chunk chẵn lẻ chưa đủ JSON — chờ dòng sau */ }
-    }
-  }
-  onToken(acc); // bản cuối trước khi normalize
-  return acc;
-}
-
-// Gợi ý riêng theo chuyên mục — FeedItem đã mang category từ RSS
-const CATEGORY_PROMPT_HINTS: Record<string, string> = {
-  'Thể thao': 'Ưu tiên tỉ số, lượt đi/lượt về, tên cầu thủ và HLV liên quan.',
-  'Kinh doanh': 'Ưu tiên số liệu tài chính, doanh thu, dự báo và kết luận thị trường.',
-  'Công nghệ': 'Ưu tiên tên sản phẩm/thiết bị, thông số nổi bật và giá bán nếu có.',
-  'Sức khỏe': 'Ưu tiên triệu chứng và khuyến cáo từ chuyên môn; KHÔNG đưa chẩn đoán hay cách chữa cụ thể.',
-  'Giải trí': 'Ưu tiên tên nghệ sĩ, tác phẩm và sự kiện chính.',
-};
-
-// Core: summarize via NVIDIA NIM.
-// Trả về summary CÓ CẤU TRÚC dạng văn bản thuần:
-//   dòng 1        = TL;DR (1 câu)
-//   các dòng giữa = ý chính (mỗi dòng 1 đoạn)
-//   dòng "• ..."  = dữ kiện cụ thể (số liệu/tên/thời gian)
-// ArticleScreen nhận diện qua bullet để style TL;DR + chip dữ kiện riêng.
-export async function summarizeWithProvider(
-  articleText: string,
-  provider: LLMProvider,
-  apiKey: string,
-  model: string,
-  customBaseUrl?: string,
-  category?: string,
-  onToken?: (partial: string) => void,
-  attemptTimeoutMs?: number,
+export async function summarizeArticle(
+  articleText: string, _category?: string, onComplete?: (summary: string) => void, title = '',
 ): Promise<string> {
-  const hint = (category && CATEGORY_PROMPT_HINTS[category]) || '';
-  const prompt = `Bạn là biên tập viên tin tức. Tóm tắt bài báo dưới đây bằng tiếng Việt, trả về ĐÚNG cấu trúc sau — không tiêu đề, không giải thích, không markdown:
-
-Dòng 1: TL;DR — MỘT câu do BẠN TỰ VIẾT nêu trọng tâm bài (dưới 20 từ). KHÔNG được là chuyên mục, ngày giờ, tên báo, hay copy nguyên câu từ bài.
-Tiếp theo: 3-4 dòng, mỗi dòng MỘT ý chính do BẠN TỔNG HỢP, bám trọng tâm (tiêu đề + đoạn đầu). Mỗi ý 1 câu văn xuôi. KHÔNG liệt kê từng chi tiết phụ, KHÔNG copy nguyên văn câu dài từ bài.
-Cuối cùng: 2-3 dòng bắt đầu bằng "• " liệt kê DỮ KIỆN cụ thể (số liệu, tên riêng, thời gian, địa điểm). Chỉ lấy thông tin CÓ TRONG bài.
-
-${hint ? `Lưu ý chuyên mục ${category}: ${hint}\n` : ''}Quy tắc: giữ nguyên số liệu/tên riêng/thời gian; KHÔNG bịa thông tin; KHÔNG đưa metadata (chuyên mục, ngày giờ đăng, tên tòa soạn, ghi chú ảnh "Ảnh: ..."); các dòng cách nhau bằng dòng trống. Toàn bộ output PHẢI là tiếng Việt thuần — không dùng từ Trung Quốc/Nhật/Hàn; nếu thiếu từ thì diễn đạt lại bằng tiếng Việt.`;
-
-  const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
-
-  // Cắt input quá dài → model tập trung vào phần đầu (thường chứa ý chính),
-  // giảm chi phí/latency và hạn chế bản tóm tắt lan man. 2560 ký tự đủ phủ
-  // ~95% tin VnExpress/Tuổi Trẻ; cắt tiếp 4000→2560 rút thời gian prefill +
-  // hạ độ trễ chữ đầu tiên (bài dài là nguồn chậm chính của summarize).
-  const MAX_INPUT_CHARS = 2560;
-  const inputText = articleText.length > MAX_INPUT_CHARS
-    ? articleText.slice(0, MAX_INPUT_CHARS) + '\n…(phần sau đã cắt)'
-    : articleText;
-
-  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, prompt, inputText, 480, customBaseUrl);
-  // Stream chỉ khi UI muốn xem dần; normalize từng partial để không nhả label
-  // ("TL;DR:")/markdown residue lên màn hình giữa chừng.
-  const emit = onToken ? (acc: string) => onToken(normalizeStructuredSummary(acc)) : undefined;
-  if (emit) body.stream = true; // web+server proxy hỗ trợ SSE passthrough
-  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, attemptTimeoutMs, emit);
-
-  // NVIDIA OpenAI-compatible → content trong choices[0].message.content
-  const raw = data.choices?.[0]?.message?.content || '';
-  return normalizeStructuredSummary(raw);
+  const summary = await runCpuTask(() => buildRuleSummary(articleText, title));
+  if (!summary) throw new Error('Chưa có đủ nội dung nguồn để tóm tắt.');
+  onComplete?.(summary);
+  return summary;
 }
 
-// Làm sạch output model về đúng format chuẩn:
-// bỏ label ("TL;DR:", "Tóm tắt:"...), markdown residue, dòng trùng;
-// thống nhất bullet về "• "; giới hạn ≤7 dòng chính + ≤4 dữ kiện.
-// Ký tự CJK lọt từ model (GLM/Qwen thỉnh thoảng trượt ngôn ngữ) → cảnh báo log.
-export function normalizeStructuredSummary(raw: string): string {
-  let lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.some((l) => /[一-鿿぀-ヿ가-힯]/.test(l))) {
-    console.warn('[summarize] LLM output contains CJK characters — model slipped language');
-  }
-  lines = lines
-    .map((l) => l
-      .replace(/^#{1,4}\s*/, '')
-      .replace(/^\*\*(.+?)\*\*\s*:?\s*$/, '$1')
-      .replace(/^(?:TL;?DR|Tóm\s*tắt|Ý\s*chính|Dữ\s*kiện(?:\s*chính)?|Nội\s*dung(?:\s*chính)?|Chính)\s*[:：—-]\s*/i, '')
-      .trim())
-    .filter(Boolean)
-    .map((l) => l.replace(/^[-*–—]\s+/, '• ').replace(/^•\s*/, '• '))
-    .filter((l) => !/^(?:bài\s*báo|bài\s*viết)\s*(?:này|trên)/i.test(l) || l.length > 40) // bỏ dòng mở đầu kiểu "Bài báo này nói về..."
-    // Bỏ metadata lọt từ bài (chuyên mục/ngày giờ/ghi chú ảnh — dòng NGẮN không bullet).
-    // QUAN TRỌNG: bullet "• " là dữ kiện → LUÔN giữ, không bị filter này nuốt.
-    .filter((l) => {
-      if (/^•/.test(l)) return true;
-      if (l.length > 40) return true;
-      return !/(?:^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]|^(?:Ảnh|Hình|Photo)\s*[:：]|^GMT)/i.test(l);
-    });
-  if (!lines.length) return '';
-  const seen = new Set<string>();
-  lines = lines.filter((l) => { const k = l.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const facts = lines.filter((l) => l.startsWith('•')).slice(0, 3);
-  const mains = lines.filter((l) => !l.startsWith('•')).slice(0, 5);
-  return [...mains, ...facts].join('\n\n');
-}
-
-// Fallback KHÔNG cần AI: chọn-câu extractive khi mọi provider chết/mất mạng.
-// Điểm câu = chồng lấn từ khóa với title + ưu tiên câu mở đoạn + câu có số liệu.
-// Output cùng cấu trúc với AI (TL;DR / ý chính / • dữ kiện) nên UI hiển thị như thường.
 export function buildExtractiveSummary(title: string, blocks: ArticleBlock[]): string {
-  const text = blocksToText(blocks);
-  if (!text) return '';
-  const kw = new Set(
-    title.toLowerCase().split(/\s+/).map((w) => w.replace(/[.,!?…:;"'()]/g, '')).filter((w) => w.length >= 4),
-  );
-  type Cand = { s: string; score: number; order: number };
-  const cands: Cand[] = [];
-  let order = 0;
-  for (const b of blocks) {
-    if (b.type !== 'text' || !b.text) continue;
-    const sentences = b.text.split(/(?<=[.!?…])\s+/).map((x) => x.trim());
-    sentences.forEach((sen, si) => {
-      if (sen.length < 40 || sen.length > 260) return;
-      const words = sen.toLowerCase().split(/\s+/);
-      let kwHits = 0;
-      for (const w of words) { const clean = w.replace(/[.,!?…:;"'()]/g, ''); if (kw.has(clean)) kwHits++; }
-      const score = kwHits * 2 + (si === 0 ? 1.5 : 0) + (/\d/.test(sen) ? 0.5 : 0);
-      cands.push({ s: sen, score, order: order++ });
-    });
-  }
-  if (!cands.length) return '';
-  const ranked = [...cands].sort((a, b) => b.score - a.score);
-  const tldrCand = ranked[0];
-  const picked = ranked.slice(0, 6).sort((a, b) => a.order - b.order);
-  const mainLines = picked.filter((c) => c !== tldrCand).slice(0, 5).map((c) => c.s);
-  // Dữ kiện KHÔNG lặp câu đã chọn làm ý chính
-  const pickedOrders = new Set(picked.map((c) => c.order));
-  const facts = ranked
-    .filter((c) => /\d/.test(c.s) && !pickedOrders.has(c.order))
-    .slice(0, 3)
-    .map((c) => '• ' + (c.s.length > 180 ? c.s.slice(0, 177) + '…' : c.s));
-  return [tldrCand.s, ...mainLines, ...facts].join('\n\n');
-}
-
-// Kiểm tra kết nối: gửi request nhỏ nhất (max_tokens 8, timeout 15s), throw nếu lỗi.
-// Dùng chung buildLlmRequest/sendLlmRequest nên auth/endpoint/proxy giống hệt khi summarize thật.
-export async function testProviderConnection(
-  provider: LLMProvider,
-  apiKey: string,
-  model: string,
-  customBaseUrl?: string,
-): Promise<void> {
-  const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
-
-  const { url, headers, body } = buildLlmRequest(
-    provider, apiKey, model,
-    'Bạn là trợ lý kiểm tra kết nối. Trả lời đúng một từ: OK',
-    'ping',
-    8,
-    customBaseUrl,
-  );
-  const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 15000);
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error('Dịch vụ AI trả về phản hồi rỗng');
-}
-
-// High-level: fetch key + model from storage, then summarize
-// Provider mặc định của app: NVIDIA NIM (chạy ngay khi start, key có sẵn, miễn phí).
-export const DEFAULT_PROVIDER: LLMProvider = 'nvidia';
-
-// Danh sách (provider, model) cần thử, theo thứ tự ưu tiên:
-// 1) model người dùng chọn
-// 2) các model còn lại, sắp mạnh→yếu (power giảm)
-// Mục tiêu: model lỗi → đổi model khác (mạnh nhất trước).
-function buildFallbackCandidates(preferredProvider: LLMProvider, preferredModel?: string): { provider: LLMProvider; model: string }[] {
-  const out: { provider: LLMProvider; model: string }[] = [];
-  const seen = new Set<string>();
-  const push = (p: LLMProvider, m: string) => {
-    const k = `${p}:${m}`;
-    if (seen.has(k)) return;
-    seen.add(k);
-    out.push({ provider: p, model: m });
-  };
-
-  const pCfg = getProviderConfig(preferredProvider);
-  if (pCfg) {
-    const models = [...pCfg.models].sort((a, b) => (b.power ?? 0) - (a.power ?? 0));
-    const pref = preferredModel && models.some((m) => m.id === preferredModel) ? preferredModel : models[0]?.id;
-    if (pref) push(preferredProvider, pref);
-    for (const m of models) if (m.id !== pref) push(preferredProvider, m.id);
-  }
-  return out;
-}
-
-export async function summarizeArticle(articleText: string, category?: string, onToken?: (partial: string) => void): Promise<string> {
-  const storedProvider = ((await AsyncStorage.getItem(KEYS.provider)) as LLMProvider) || DEFAULT_PROVIDER;
-  const provider = getProviderConfig(storedProvider) ? storedProvider : DEFAULT_PROVIDER;
-  const storedModel = await AsyncStorage.getItem(KEYS.model);
-  const candidates = buildFallbackCandidates(provider, storedModel || undefined);
-
-  let lastError: Error = new Error('Tất cả model/provider đều không khả dụng, thử lại sau');
-  // Request NHỎ trên native (input <700 ký tự = "tóm nhanh từ mô tả", output
-  // ~100-200 token): model nào >20s chưa trả = chết → candidate kế. Web qua
-  // proxy /api/llm buffer tới khi LLM xong (15-40s) → KHÔNG cap, kẻo giết oan
-  // base đang sống (lỗi đã gặp).
-  const fastCapMs = Platform.OS !== 'web' && articleText.length < 700 ? 20000 : undefined;
-  for (const c of candidates) {
-    const cfg = getProviderConfig(c.provider);
-    if (!cfg) continue;
-    let apiKey = await AsyncStorage.getItem(KEYS[cfg.keyStorageKey]);
-    if (!apiKey) apiKey = DEFAULT_NVIDIA_KEY;
-
-    try {
-      const summary = await summarizeWithProvider(articleText, c.provider, apiKey || '', c.model, undefined, category, onToken, fastCapMs);
-      // model có thể trả 200 nhưng rỗng (vd reasoning bị tắt thinking) → xem là lỗi, thử model tiếp.
-      if (summary && summary.trim().length >= 20) return summary;
-      lastError = new Error(`Model ${c.model} (${c.provider}) trả nội dung rỗng`);
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-    }
-  }
-  throw lastError;
+  return buildRuleSummary(blocksToText(blocks), title);
 }
 
 // ----- Article parsing (Jina markdown → text/ảnh/video blocks) -----
 
 export interface ArticleBlock {
-  type: 'text' | 'image' | 'video';
+  // 'audio' = bản đọc toàn bài của TÒA SOẠN (Tiền Phong…), KHÁC nút "Nghe"
+  // trong app (nút đó đọc bản TÓM TẮT bằng expo-speech). ArticleScreen render nó
+  // thành thanh nghe ở ĐẦU bài, không đan xen vào đoạn như ảnh/video.
+  type: 'text' | 'image' | 'video' | 'audio';
   text?: string;
   url?: string;
   kind?: 'youtube' | 'vimeo' | 'file';
@@ -492,8 +62,7 @@ function altToCaption(alt: string | undefined): string | undefined {
   return c;
 }
 
-// Caption dài quá ngưỡng → AI rút gọn ở cuối file (aiCondenseCaptions) —
-// user muốn tóm tắt thật sự, không phải cắt "…" theo công thức.
+// Giữ nguyên chú thích ảnh của nguồn để bảo toàn ý nghĩa và credit.
 
 // Alt placeholder kiểu CMS: "Image 5: filename.jpg" → Ảnh là thumbnail carousel/
 // UI chứ không phải ảnh nội dung → bỏ luôn BLOCK ảnh (không chỉ bỏ caption).
@@ -883,7 +452,7 @@ export function parseArticleBlocks(raw: string, pageUrl = ''): ArticleBlock[] {
   // Caption thật của báo: Jina giữ thành dòng riêng NGAY SAU ảnh lẫn trong block
   // text kế tiếp — kiểu "Ảnh: ...", "Hình: ...", "Clip: ...", "Nguồn: ...",
   // hoặc gallery "Tên phim - Ảnh 1." (Tuổi Trẻ). Dời dòng này thành caption của
-  // ảnh (như bố cục bài gốc) + tách khỏi text để không lọt vào nội dung AI tóm.
+  // ảnh (như bố cục bài gốc) + tách khỏi text để không lọt vào nội dung tóm tắt.
   // Nhận diện: dòng NGẮN sau ảnh có từ khóa caption theo sau bởi dấu phân cách
   // ("Ảnh: ...", "Hình 1.", "Clip: ...", "Nguồn: ...", gallery "Tên phim - Ảnh 2.").
   // KHÔNG dùng \b — ký tự Việt hoa dấu ("Ả") không phải \w ASCII nên \b không khớp.
@@ -950,7 +519,7 @@ const isCaptionLine = (line: string): boolean => {
   return withCaps;
 }
 
-// Gộp các block text thành 1 chuỗi (nguồn cho AI tóm tắt + đếm thời gian đọc).
+// Gộp các block text thành 1 chuỗi (nguồn cho bộ chọn câu + đếm thời gian đọc).
 export function blocksToText(blocks: ArticleBlock[]): string {
   return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
 }
@@ -1104,6 +673,13 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
   const ogVideo = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i);
   if (ogVideo) push(-1, classifyVideo(decodeHtml(ogVideo[1])));
 
+  // Audio tòa soạn (bản đọc toàn bài — Tiền Phong mỗi bài 1 file podcast.mp3).
+  // pos = 0 (push -1) chứ KHÔNG dùng vị trí thật: thẻ <audio> nằm cuối DOM bài
+  // gốc (đo trên bài Tiền Phong: 38343/39788 ký tự ≈ pos 0.96) nhưng thanh nghe
+  // ở cuối tóm tắt thì không ai thấy — chính trang họ cũng đặt player ở đầu bài.
+  const audioUrl = pickAudioUrl(region, pageUrl);
+  if (audioUrl) push(-1, { type: 'audio', url: audioUrl, kind: 'file' });
+
   // MỘT lượt quét cả ảnh lẫn video TRONG region, sort theo vị trí xuất hiện →
   // thứ tự khớp bố cục bài gốc (ảnh sau đoạn 1, rồi đoạn 2 có video…).
   // Mỗi nhánh bắt đúng 1 group = URL (group 1..5 theo thứ tự khai báo);
@@ -1132,6 +708,11 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
     if (u.startsWith('//')) u = 'https:' + u;
     const isImg = m[1] !== undefined;
     if (!isImg) {
+      // Thanh Niên ghi data-vid dạng HOST TRẦN không scheme
+      // ("thanhnien.mediacdn.vn/…/x.mp4") — JS của báo tự ghép https, nhưng
+      // expo-video / <video src> resolve relative → sai host → không phát được.
+      // (Nhánh m3u8 / data-src .mp4 / <source src> đều đã absolute sẵn.)
+      if (!/^https?:/i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
       // Video "tin liên quan" thường bọc trong <a href=bài khác> (widget xem
       // thêm) → kiểm tra link bọc giống ảnh: href trỏ bài KHÁC → bỏ.
       const vbefore = region.slice(Math.max(0, m.index - 800), m.index);
@@ -1246,6 +827,7 @@ function htmlRegionToText(region: string): string {
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<figcaption\b[^>]*>[\s\S]*?<\/figcaption>/gi, ' ')
     .replace(/<(title|svg|iframe|form|select|button)[\s\S]*?<\/\1>/gi, ' ')
     // tag block → dòng mới để câu không dính liền nhau
     .replace(/<\/(?:p|div|li|h[1-6]|blockquote|br|tr|figcaption)>/gi, '\n')
@@ -1287,7 +869,7 @@ const CONTENT_CACHE_MAX = 24;
 
 export function prefetchArticleContent(url: string, item?: FeedItem): void {
   if (!url || contentCache.has(url)) return;
-  // Trang video: không có bài văn để tóm — prefetch không có ích, bỏ (không tốn LLM).
+  // Trang video: không có bài văn để tóm — prefetch không có ích, bỏ (không cần chọn câu).
   if (isVideoPageUrl(url)) return;
   // E2E: mockNetwork toàn bộ, prefetch chỉ làm nhiễu cache (lưu kết quả giả mặc
   // định trước khi test kịp override route) → bỏ qua.
@@ -1319,8 +901,8 @@ export function prefetchArticleContent(url: string, item?: FeedItem): void {
 // ----- Tóm tắt trước (pre-summarize) nền -----
 // HomeScreen prefetch bài nào → summarize ngay bằng FULL TEXT vừa tải + ghi
 // history. Người dùng mở bài → history hit → tóm tắt hiện TỨC THÌ (độ trễ ~0ms,
-// không chờ LLM). Bài chưa kịp xong khi mở → peekPendingSummary() để await chứ
-// không gọi LLM trùng lần hai.
+// không chờ tính lại). Bài chưa kịp xong khi mở → peekPendingSummary() để await chứ
+// không tính trùng lần hai.
 const summaryInflight = new Map<string, Promise<string>>();
 
 export function peekPendingSummary(url: string): Promise<string> | undefined {
@@ -1330,44 +912,40 @@ export function peekPendingSummary(url: string): Promise<string> | undefined {
 // Summary cũ từ trước khi fix (metadata lọt, fragment, dấu vết markdown) vẫn nằm
 // trong history cache → mở lại bài vẫn thấy bản "lạ". Phát hiện + purge để tóm lại.
 export function isStaleSummary(s: string): boolean {
-  if (!s) return false;
-  const lines = s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return false;
-  // Quá dài (>12 dòng) = summary cũ chứa cả bài/related của báo → tóm lại
-  if (lines.length > 12) return true;
-  // Dòng còn dấu vết markdown ảnh/link, hoặc kết thúc "…" (caption cụt)
-  if (lines.some((l) => /\]\(/i.test(l) || /…$|\.\.\.$/.test(l))) return true;
-  const first = lines[0];
-  // Dòng đầu còn label "TL;DR" / "Tóm tắt:" → summary cũ chưa được làm sạch
-  if (/^TL;?DR\s*[:：—-]?/i.test(first)) return true;
-  if (/^Tóm\s*tắt\s*[:：—-]/i.test(first)) return true;
-  // Dòng đầu là chuyên mục / ngày giờ / ghi chú ảnh / fragment chữ thường
-  if (/^(?:ảnh|hình|photo)\s*[:：]/i.test(first)) return true;
-  if (/^nhóm\s+phóng\s+viên/i.test(first)) return true;
-  if (/^\d{1,2}[\/:]\d{1,2}(?:\/\d{2,4})?|\b\d{1,2}:\d{2}\b|^Thứ\s+\w+[,:]/i.test(first)) return true;
-  const c = first.charAt(0);
-  return !!c && c.toLowerCase() === c && c !== c.toUpperCase();
+  return !s.trim() || /!\[[^\]]*\]\(/.test(s);
 }
 
-export async function saveSummaryToHistory(item: FeedItem, summary: string): Promise<void> {
-  try {
+// Serialize background writes so simultaneous prefetches retain every article.
+let historyWriteQueue: Promise<void> = Promise.resolve();
+export function saveSummaryToHistory(
+  item: FeedItem, summary: string, sourceText = '', summarySource: 'article' | 'description' = 'article',
+): Promise<void> {
+  const write = historyWriteQueue.then(async () => {
+    if (!summary.trim()) return;
     const raw = await AsyncStorage.getItem(KEYS.history);
-    const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
-    const next = history.filter((h) => h.url !== item.link); // dedupe — bản mới nhất thắng
+    const parsed = raw ? JSON.parse(raw) : [];
+    const history: SummaryRecord[] = Array.isArray(parsed) ? parsed : [];
+    const previous = history.find(h => h.url === item.link);
+    if (summarySource === 'description' && previous?.summarySource === 'article' && isCurrentRuleSummary(previous)) return;
+    const next = history.filter(h => h.url !== item.link);
     next.unshift({
       url: item.link, title: item.title, summary, date: new Date().toISOString(), source: item.source,
+      method: 'rules', summaryVersion: RULE_SUMMARY_VERSION, summarySource,
+      summaryInputHash: fingerprintSummaryInput(sourceText),
     });
     await AsyncStorage.setItem(KEYS.history, JSON.stringify(next.slice(0, LIMITS.historyMax)));
-  } catch { /* history hỏng thì bỏ qua, không chặn UX */ }
+  }).catch(() => {});
+  historyWriteQueue = write;
+  return write;
 }
 
 function startSummaryFor(item: FeedItem, src: string): Promise<string> {
   const existing = summaryInflight.get(item.link);
   if (existing) return existing;
-  const p = summarizeArticle(src, item.category)
+  const p = summarizeArticle(src, item.category, undefined, item.title)
     .then((s) => {
       summaryInflight.delete(item.link);
-      if (s && s.trim().length >= 20 && !isStaleSummary(s)) void saveSummaryToHistory(item, s);
+      if (s && s.trim().length >= 20 && !isStaleSummary(s)) void saveSummaryToHistory(item, s, src, 'article');
       return s;
     })
     .catch((e) => {
@@ -1393,7 +971,7 @@ function preSummarizeSrc(item: FeedItem, src: string): void {
       const raw = await AsyncStorage.getItem(KEYS.history);
       const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
       const hit = history.find((h) => h.url === item.link);
-      if (hit && !isStaleSummary(hit.summary)) return; // đã có summary tốt → khỏi tốn LLM
+      if (hit && isCurrentRuleSummary(hit) && hit.summarySource === 'article') return; // đã có summary tốt → tái sử dụng bản đã chọn câu
     } catch { /* tính cả khi đọc history lỗi */ }
     startSummaryFor(item, src).catch(() => {});
   })();
@@ -1468,9 +1046,23 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
   // thứ tự thật của ảnh/video.
   const mediaHtml = await mediaHtmlPromise;
   const jinaMediaCount = blocks.filter((b) => b.type === 'image' || b.type === 'video').length;
-  if (jinaMediaCount < 2) {
+  // Jina có ≥2 media nhưng KHÔNG có video = player JS (Thanh Niên data-vid,
+  // VnExpress <div type="VideoStream">) mà markdown không thấy. Nhánh đó chỉ hút
+  // VIDEO từ HTML — ảnh vẫn để Jina lo (merge ảnh ở đây dễ lôi thumbnail/tin
+  // liên quan vào tóm tắt, lý do cổng <2 tồn tại).
+  const jinaHasVideo = blocks.some((b) => b.type === 'video');
+  const htmlToMerge = jinaMediaCount < 2
+    ? mediaHtml
+    : jinaHasVideo ? [] : mediaHtml.filter((b) => b.type === 'video');
+  // Audio đi ĐƯỜNG RIÊNG, không qua cổng trên: nó là thanh nghe ở ĐẦU bài chứ
+  // không đan xen với ảnh/video, nên "Jina đã bắt đủ ảnh" không phải lý do để
+  // bỏ nó. Quan trọng: Tiền Phong (báo có audio) đúng là trang Jina bắt nhiều
+  // ảnh → để chung cổng là mất audio ở ĐÚNG ca cần nhất. URL trùng thì vòng lặp
+  // existingBase bên dưới tự lọc.
+  const toMerge = [...htmlToMerge, ...mediaHtml.filter((b) => b.type === 'audio')];
+  if (toMerge.length) {
     const existingBase = new Set(blocks.filter((b) => b.url).map((b) => baseUrlKey(b.url!)));
-    for (const mb of mediaHtml) {
+    for (const mb of toMerge) {
       if (!mb.url || existingBase.has(baseUrlKey(mb.url))) continue;
       existingBase.add(baseUrlKey(mb.url));
       blocks.push(mb);
@@ -1494,58 +1086,3 @@ async function loadArticleContent(url: string): Promise<ArticleBlock[]> {
 }
 
 import { LIMITS } from './storage';
-
-// ----- Nén caption ảnh dài bằng AI -----
-// Caption figcaption/alt của báo có thể 120-200 ký tự → UI 2 dòng không đủ.
-// Thay vì cắt "…", gửi TẤT CẢ caption dài trong MỘT request batch, cache theo
-// URL ảnh (mở lại bài = 0 lời gọi). AI chết → giữ caption gốc (lặng lẽ).
-export const CAPTION_AI_MAX = 88;
-
-const captionAIcache = new Map<string, string>(); // baseUrlKey → caption đã nén
-const captionAIpending = new Set<string>();
-
-export function getCachedCaption(url: string): string | undefined {
-  return captionAIcache.get(baseUrlKey(url));
-}
-
-export async function aiCondenseCaptions(
-  items: { url: string; caption: string }[],
-): Promise<number> {
-  const todo = items.filter((it) =>
-    it.caption.length > CAPTION_AI_MAX
-    && !captionAIcache.has(baseUrlKey(it.url))
-    && !captionAIpending.has(baseUrlKey(it.url)),
-  );
-  if (!todo.length) return 0;
-  todo.forEach((t) => captionAIpending.add(baseUrlKey(t.url)));
-  try {
-    const provider = DEFAULT_PROVIDER;
-    const cfg = getProviderConfig(provider);
-    if (!cfg) return 0;
-    const apiKey = (await AsyncStorage.getItem(KEYS[cfg.keyStorageKey])) || DEFAULT_NVIDIA_KEY;
-    const storedModel = await AsyncStorage.getItem(KEYS.model);
-    const model = (storedModel && cfg.models.some((m) => m.id === storedModel) ? storedModel : cfg.models[0]?.id) || '';
-    const list = todo.map((t, i) => `${i + 1}. ${t.caption}`).join('\n');
-    const prompt = `Bạn là biên tập viên ảnh của tòa soạn. Viết lại mỗi chú thích ảnh dưới đây thành bản NGẮN (tối đa 12 từ), tiếng Việt, trọn nghĩa.\nQuy tắc: giữ đúng tên riêng/địa danh và credit nguồn ("Ảnh: ..."); không bịa thêm; giữ nguyên dấu "=" giữa tên phim và credit nếu có; trả về ĐÚNG ${todo.length} dòng theo thứ tự, mỗi dòng chỉ chứa chú thích đã rút gọn, không số thứ tự, không giải thích.\n\n${list}`;
-    const { url, headers, body } = buildLlmRequest(provider, apiKey || '', model, prompt, list, 220);
-    const data = await sendLlmRequest(url, headers, body, provider, cfg.label, 20000);
-    const raw = data.choices?.[0]?.message?.content || '';
-    const lines = raw
-      .split(/\r?\n/)
-      .map((l: string) => l.replace(/^\s*\d+[.):\-]\s*/, '').replace(/^["“«](.*)["”»]$/, '$1').trim())
-      .filter(Boolean);
-    let stored = 0;
-    todo.forEach((t, i) => {
-      const s = lines[i];
-      if (s && s.length >= 4 && s.length < t.caption.length) {
-        captionAIcache.set(baseUrlKey(t.url), s);
-        stored++;
-      }
-    });
-    return stored;
-  } catch {
-    return 0; // thất bại → caption gốc, không lỗi UI
-  } finally {
-    todo.forEach((t) => captionAIpending.delete(baseUrlKey(t.url)));
-  }
-}

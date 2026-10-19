@@ -1,216 +1,107 @@
 import { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  Image,
-  StyleSheet,
-  Platform,
-} from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FeedItem } from '../types';
-import { Color, Font, Radius, useTheme } from '../constants/theme';
+import { Sans, Color, Radius, useTheme, Layout } from '../constants/theme';
 import { KEYS } from '../services/storage';
-import { fetchAllFeeds, SOURCE_COLORS } from '../services/feeds';
+import { fetchAllFeeds } from '../services/feeds';
+import { LibraryTabs, ScreenHeader, Empty } from '../components/PremiumUI';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 type Props = { navigation: NativeStackNavigationProp<any> };
+type Palette = typeof Color;
 
 export default function SavedScreen({ navigation }: Props) {
   const [items, setItems] = useState<FeedItem[]>([]);
-  const insets = useSafeAreaInsets();
+  const [query, setQuery] = useState('');
   const C = useTheme();
-  const styles = makeStyles(C); // styles động theo dark mode
+  const styles = makeStyles(C);
 
-  useFocusEffect(
-    useCallback(() => {
-      AsyncStorage.getItem(KEYS.saved).then(async (raw) => {
-        const saved: FeedItem[] = raw ? JSON.parse(raw) : [];
-        setItems(saved);
-        // Bản lưu cũ có thể thiếu image (hoặc image CDN hết hạn) → vá từ feed hiện tại
-        if (saved.some((i) => !i.image)) {
-          const feeds = await fetchAllFeeds().catch(() => [] as FeedItem[]);
-          if (!feeds.length) return;
-          const byLink = new Map(feeds.map((f) => [f.link, f]));
-          const merged = saved.map((i) => {
-            const f = byLink.get(i.link);
-            return f?.image && !i.image ? { ...i, image: f.image } : i;
-          });
-          if (merged.some((m, idx) => m !== saved[idx])) {
-            await AsyncStorage.setItem(KEYS.saved, JSON.stringify(merged));
-            setItems(merged);
-          }
+  useFocusEffect(useCallback(() => {
+    AsyncStorage.getItem(KEYS.saved).then(async (raw) => {
+      const saved: FeedItem[] = raw ? JSON.parse(raw) : [];
+      setItems(saved);
+      if (saved.some((item) => !item.image)) {
+        const feeds = await fetchAllFeeds().catch(() => [] as FeedItem[]);
+        if (!feeds.length) return;
+        const byLink = new Map(feeds.map((feed) => [feed.link, feed]));
+        const merged = saved.map((item) => {
+          const feed = byLink.get(item.link);
+          return feed?.image && !item.image ? { ...item, image: feed.image } : item;
+        });
+        if (merged.some((item, index) => item !== saved[index])) {
+          await AsyncStorage.setItem(KEYS.saved, JSON.stringify(merged));
+          setItems(merged);
         }
-      });
-    }, []),
-  );
+      }
+    });
+  }, []));
 
+  const filtered = items.filter((item) => `${item.title} ${item.source}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi')));
   const handleDelete = async (link: string) => {
-    const next = items.filter((i) => i.link !== link);
+    const next = items.filter((item) => item.link !== link);
     await AsyncStorage.setItem(KEYS.saved, JSON.stringify(next));
     setItems(next);
   };
-
   const handleClearAll = async () => {
     await AsyncStorage.removeItem(KEYS.saved);
     setItems([]);
   };
-
-  const open = (item: FeedItem) =>
-    navigation.navigate('HomeTab', { screen: 'Article', params: { item } });
+  const open = (item: FeedItem) => navigation.navigate('HomeTab', { screen: 'Article', params: { item } });
 
   return (
     <View style={styles.container} testID="savedScreen">
-      {/* Header — tiêu đề + vạch màu, nút xoá dạng pill tint */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <View style={styles.headerLeft}>
-          <View style={styles.titleBar} />
-          <Text style={styles.title}>Bài đã lưu</Text>
-        </View>
-        {items.length > 0 && (
-          <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={14} color={Color.hot} />
-            <Text style={styles.clearText}>Xoá tất cả</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* List */}
+      <ScreenHeader
+        title="Thư viện"
+        subtitle={`${items.length} bài đã lưu`}
+        action={items.length ? <TouchableOpacity onPress={handleClearAll} style={styles.clearBtn}><Ionicons name="trash-outline" size={16} color={C.danger} /><Text style={styles.clearText}>Xóa tất cả</Text></TouchableOpacity> : null}
+      />
+      <View style={styles.tabsWrap}><LibraryTabs active="Saved" navigation={navigation} /></View>
       <FlatList
-        data={items}
+        data={filtered}
         keyExtractor={(item) => item.link}
+        showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => {
-          const srcColor = SOURCE_COLORS[item.source] || Color.hot;
-          return (
-            <TouchableOpacity style={styles.card} onPress={() => open(item)} activeOpacity={0.85}>
-              {item.image ? (
-                <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" />
-              ) : (
-                <View style={[styles.thumb, styles.thumbPh]}>
-                  <Ionicons name="image-outline" size={22} color={C.textMuted} />
-                </View>
-              )}
-              <View style={styles.cardBody}>
-                <View style={styles.cardHeader}>
-                  <View style={[styles.srcBadge, { backgroundColor: srcColor }]}>
-                    <Text style={styles.srcText} numberOfLines={1}>{item.source}</Text>
-                  </View>
-                  {item.pubDate && (
-                    <Text style={styles.dim} numberOfLines={1}>{new Date(item.pubDate).toLocaleString('vi-VN')}</Text>
-                  )}
-                </View>
-                <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.remove}
-                onPress={() => handleDelete(item.link)}
-                hitSlop={10}
-                activeOpacity={0.6}
-                accessibilityLabel="Bỏ lưu bài"
-              >
-                <Ionicons name="close" size={16} color={C.textMuted} />
-              </TouchableOpacity>
-            </TouchableOpacity>
-          );
-        }}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <View style={styles.emptyBadge}>
-              <Ionicons name="bookmark-outline" size={32} color={C.textMuted} />
-            </View>
-            <Text style={styles.emptyText}>Chưa có bài đã lưu</Text>
-            <View style={styles.emptyHintRow}>
-              <Text style={styles.emptyHint}>Bấm</Text>
-              <Ionicons name="heart" size={14} color={Color.danger} />
-              <Text style={styles.emptyHint}>trong bài báo để lưu</Text>
-            </View>
+        ListHeaderComponent={
+          <View style={styles.searchBox}>
+            <Ionicons name="search-outline" size={18} color={C.textMuted} />
+            <TextInput value={query} onChangeText={setQuery} placeholder="Tìm trong bài đã lưu" placeholderTextColor={C.textMuted} style={styles.searchInput} />
+            {query ? <TouchableOpacity onPress={() => setQuery('')}><Ionicons name="close-circle" size={18} color={C.textMuted} /></TouchableOpacity> : null}
           </View>
         }
-        showsVerticalScrollIndicator={false}
+        renderItem={({ item }) => (
+          <TouchableOpacity style={styles.row} onPress={() => open(item)} activeOpacity={0.82}>
+            {item.image ? <Image source={{ uri: item.image }} style={styles.thumb} resizeMode="cover" /> : <View style={[styles.thumb, styles.thumbPh]}><Ionicons name="bookmark-outline" size={22} color={C.textMuted} /></View>}
+            <View style={styles.rowBody}>
+              <Text style={styles.meta} numberOfLines={1}>{item.source} · {item.category || 'Tin mới'}</Text>
+              <Text style={styles.rowTitle} numberOfLines={2}>{item.title}</Text>
+              {item.pubDate ? <Text style={styles.date}>{new Date(item.pubDate).toLocaleDateString('vi-VN')}</Text> : null}
+            </View>
+            <TouchableOpacity onPress={() => handleDelete(item.link)} accessibilityLabel="Bỏ lưu bài" hitSlop={10} style={styles.remove}><Ionicons name="close" size={16} color={C.textMuted} /></TouchableOpacity>
+          </TouchableOpacity>
+        )}
+        ListEmptyComponent={<Empty title={query ? 'Không có kết quả' : 'Chưa có bài đã lưu'} subtitle={query ? 'Thử tìm bằng từ khóa khác.' : 'Lưu những bài quan trọng để đọc lại nhanh trong Thư viện.'} icon="bookmark-outline" />}
       />
     </View>
   );
 }
 
-// Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
-type Palette = typeof Color;
-const makeStyles = (Color: Palette) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: Color.bg },
-
-  // Header — tiêu đề + vạch màu
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    backgroundColor: Color.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: Color.border,
-  },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  titleBar: { width: 4, height: 22, borderRadius: 2, backgroundColor: Color.hot },
-  title: { fontSize: Font.title, fontWeight: '800', color: Color.text, letterSpacing: -0.2 },
-  clearBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: Color.hotSoft,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  clearText: { fontSize: Font.caption, color: Color.hot, fontWeight: '700' },
-
-  // List
-  listContent: { padding: 12, paddingBottom: 24 },
-  separator: { height: 10 },
-
-  // Card — cùng ngôn ngữ với card Home: nền surface, radius md, shadow nhẹ
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Color.card,
-    padding: 10,
-    borderRadius: Radius.md,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 2 },
-      default: { boxShadow: '0 2px 8px rgba(0,0,0,0.08)' },
-    }),
-  },
-  thumb: { width: 84, height: 84, borderRadius: Radius.sm, backgroundColor: Color.skeleton, marginRight: 12 },
+const makeStyles = (C: Palette) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  tabsWrap: { paddingTop: 14, width: '100%', maxWidth: Layout.content, alignSelf: 'center' },
+  clearBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, backgroundColor: C.dangerSoft },
+  clearText: { fontFamily: Sans.medium, color: C.danger, fontSize: 11 },
+  listContent: { padding: 18, paddingBottom: 44, width: '100%', maxWidth: 900, alignSelf: 'center' },
+  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingHorizontal: 13, marginBottom: 16 },
+  searchInput: { flex: 1, paddingVertical: 13, fontFamily: Sans.regular, fontSize: 13, color: C.text },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: Radius.md, padding: 10, marginBottom: 10 },
+  thumb: { width: 92, height: 76, borderRadius: 11, backgroundColor: C.surfaceAlt },
   thumbPh: { alignItems: 'center', justifyContent: 'center' },
-  cardBody: { flex: 1, marginRight: 8 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 6 },
-  srcBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4, maxWidth: 120 },
-  srcText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 0.3 },
-  dim: { fontSize: Font.tiny, color: Color.textMuted, flexShrink: 1 },
-  cardTitle: { fontSize: Font.body, fontWeight: '800', color: Color.text, lineHeight: 20 },
-
-  // Remove button
-  remove: { width: 32, height: 32, borderRadius: 16, backgroundColor: Color.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
-
-  // Empty — cùng kiểu với empty Home
-  empty: { paddingTop: 96, alignItems: 'center', gap: 12, paddingHorizontal: 24 },
-  emptyBadge: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Color.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyText: { fontSize: 17, fontWeight: '700', color: Color.text },
-  emptyHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  emptyHint: { fontSize: Font.caption, color: Color.textMuted },
+  rowBody: { flex: 1, minWidth: 0 },
+  meta: { fontFamily: Sans.bold, fontSize: 10, color: C.hot, marginBottom: 5 },
+  rowTitle: { fontFamily: Sans.bold, fontSize: 14, lineHeight: 20, color: C.text },
+  date: { fontFamily: Sans.regular, fontSize: 10, color: C.textMuted, marginTop: 6 },
+  remove: { width: 34, height: 34, borderRadius: 11, backgroundColor: C.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
 });
-
-// Mặc định light; component dùng useTheme() sẽ tự nhận palette đúng khi đổi mode
-const styles = makeStyles(Color);

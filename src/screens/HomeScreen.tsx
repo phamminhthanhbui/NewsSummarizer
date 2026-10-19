@@ -1,1517 +1,298 @@
-import React, {
-  useState,
-  useEffect,
-  useCallback,
-  useMemo,
-  useRef,
-} from "react";
-import {
-  View,
-  Text,
-  Image,
-  FlatList,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  RefreshControl,
-  Animated,
-  Easing,
-  Keyboard,
-  Platform,
-  TextInput,
-  Dimensions,
-  AccessibilityInfo,
-  AppState,
-  Modal,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { useScrollToTop, useFocusEffect } from "@react-navigation/native";
-import {
-  FEEDS,
-  fetchAllFeeds,
-  readFeedsCache,
-  isFeedsCacheFresh,
-  SOURCE_COLORS,
-} from "../services/feeds";
-import { useAlert } from "../components/AppAlert";
-import { prefetchArticleContent, isVideoPageUrl } from "../services/summarize";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { KEYS, getReadCounts, type ReadCounts } from "../services/storage";
-import { rankTrending } from "../services/trending";
-import type { FeedItem } from "../types";
-import { Color, Font, Radius, Shadow, useTheme } from "../constants/theme";
-import { timeAgo } from "../utils/timeAgo";
-import ArticleCardCompact from "../components/ArticleCardCompact";
-import FeaturedCard from "../components/FeaturedCard";
-import SkeletonCard from "../components/SkeletonCard";
-import SourceLogo from "../components/SourceLogo";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { View, Text, Image, FlatList, ScrollView, TouchableOpacity, TextInput, RefreshControl, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { useFocusEffect, useScrollToTop } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
+import { FEEDS, readFeedsCache, fetchAllFeeds } from '../services/feeds';
+import { getPreferences } from '../services/preferences';
+import { useTheme, Sans, Radius, Layout } from '../constants/theme';
+import { ScreenHeader, Heading, Action, Empty, IconButton, SectionTitle } from '../components/PremiumUI';
+import ArticleCardCompact from '../components/ArticleCardCompact';
+import type { FeedItem } from '../types';
+import { useAuth } from '../providers/AuthProvider';
 
-type Props = { navigation: NativeStackNavigationProp<any> };
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 11) return 'Chào buổi sáng';
+  if (hour < 18) return 'Chào buổi chiều';
+  return 'Chào buổi tối';
+}
 
-// Cờ E2E — tắt auto-play (marquee, carousel) trong Playwright để click không bị timeout
-const E2E =
-  typeof globalThis !== "undefined" && (globalThis as any).__E2E__ === true;
-
-const getHeroWidth = (insets: { left: number; right: number }) =>
-  Dimensions.get("window").width - insets.left - insets.right;
-
-const CATEGORIES = ["Tất cả", ...new Set(FEEDS.map((f) => f.category))];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  "Tất cả": "#FB512A",
-  "Việt Nam": "#DC2626",
-  "Công nghệ": "#7C3AED",
-  "Kinh doanh": "#D97706",
-  "Thể thao": "#059669",
-  "Giải trí": "#DB2777",
-  "Sức khỏe": "#2563EB",
-};
-
-
-const CATEGORY_ICONS: Record<
-  string,
-  React.ComponentProps<typeof Ionicons>["name"]
-> = {
-  "Tất cả": "apps",
-  "Việt Nam": "flag",
-  "Công nghệ": "hardware-chip",
-  "Kinh doanh": "briefcase",
-  "Thể thao": "football",
-  "Giải trí": "film",
-  "Sức khỏe": "medkit",
-};
-
-// Row trộn loại trong FlatList TIN MỚI NHẤT ở chế độ lướt: header chủ đề /
-// bài báo / nút "Xem thêm". FeedItem thường vẫn là một loại hợp lệ.
-type HomeRow =
-  | FeedItem
-  | { kind: "h"; cat: string }
-  | { kind: "more"; cat: string; hidden: number };
-const LIST_COLLAPSED = 3; // số bài mỗi chủ đề trước khi "Xem thêm"
-
-const today = () => {
-  const d = new Date();
-  const days = [
-    "Chủ nhật",
-    "Thứ 2",
-    "Thứ 3",
-    "Thứ 4",
-    "Thứ 5",
-    "Thứ 6",
-    "Thứ 7",
-  ];
-  const months = [
-    "Th 1",
-    "Th 2",
-    "Th 3",
-    "Th 4",
-    "Th 5",
-    "Th 6",
-    "Th 7",
-    "Th 8",
-    "Th 9",
-    "Th 10",
-    "Th 11",
-    "Th 12",
-  ];
-  return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
-};
-
-/* ─── Category chip ─── */
-
-const CategoryChip = React.memo(
-  ({
-    category,
-    active,
-    onPress,
-    styles,
-  }: {
-    category: string;
-    active: boolean;
-    onPress: (c: string) => void;
-    styles: ReturnType<typeof makeStyles>;
-  }) => {
-    const C = useTheme();
-    const c = CATEGORY_COLORS[category] || C.hot;
-    return (
-      <TouchableOpacity
-        style={[styles.pill, active && { backgroundColor: c, borderColor: c }]}
-        onPress={() => onPress(category)}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-      >
-        <Ionicons
-          name={CATEGORY_ICONS[category] || "newspaper"}
-          size={13}
-          color={active ? "#FFF" : c}
-          style={styles.pillIcon}
-        />
-        <Text style={[styles.pillText, active && styles.pillTextActive]}>
-          {category}
-        </Text>
-      </TouchableOpacity>
-    );
-  },
-);
-
-/* ─── Source dropdown ─── */
-
-const SourceDropdown = React.memo(
-  ({
-    value,
-    onChange,
-    styles,
-    options,
-  }: {
-    value: string;
-    onChange: (s: string) => void;
-    styles: ReturnType<typeof makeStyles>;
-    options: string[];
-  }) => {
-    const C = useTheme();
-    const [open, setOpen] = useState(false);
-    const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-    const triggerRef = useRef<View>(null);
-    const openDropdown = useCallback(() => {
-      triggerRef.current?.measureInWindow((x, y, w, h) => {
-        setAnchor({ x, y, w, h });
-        setOpen(true);
-      });
-    }, []);
-    const currentColor =
-      value === "Tất cả" ? C.hot : SOURCE_COLORS[value] || C.hot;
-    return (
-      <View style={styles.dropdownWrap}>
-        <TouchableOpacity
-          ref={triggerRef as any}
-          style={[styles.dropdownButton, { borderColor: currentColor }]}
-          onPress={openDropdown}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityState={{ expanded: open }}
-          accessibilityLabel="Lọc theo nguồn tin"
-        >
-          {value === "Tất cả" ? (
-            <View
-              style={{
-                width: 20,
-                height: 20,
-                borderRadius: 6,
-                backgroundColor: currentColor + "22",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Ionicons name="funnel-outline" size={12} color={currentColor} />
-            </View>
-          ) : (
-            <SourceLogo source={value} color={currentColor} size={20} />
-          )}
-          <Text style={[styles.dropdownValue, { color: currentColor }]} numberOfLines={1}>{value}</Text>
-          <Ionicons name="chevron-down" size={14} color={C.textMuted} />
-        </TouchableOpacity>
-
-        <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-          <View style={styles.sourceModalOverlay}>
-            <TouchableOpacity style={styles.sourceModalBackdrop} activeOpacity={1} onPress={() => setOpen(false)} accessibilityLabel="Đóng chọn nguồn" />
-            <View style={[styles.sourceModalSheet, anchor && { position: "absolute", top: anchor.y + anchor.h + 6, left: Math.max(8, anchor.x), right: undefined, width: Math.max(220, anchor.w), maxWidth: 360 }]} testID="sourceDropdownPanel">
-              <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={styles.sourceModalGrid} nestedScrollEnabled showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                {options.map((src) => {
-                  const active = src === value;
-                  const sc = src === "Tất cả" ? C.hot : SOURCE_COLORS[src] || C.hot;
-                  return (
-                    <TouchableOpacity key={src} style={[styles.sourceChip, active && { backgroundColor: sc, borderColor: sc }]}
-                      onPress={() => { onChange(src); setOpen(false); }}
-                      activeOpacity={0.7} accessibilityRole="button" testID={"sourceOption-" + src} accessibilityState={{ selected: active }}>
-                      {src === "Tất cả" ? <Ionicons name="flash" size={14} color={active ? "#FFF" : sc} /> : <SourceLogo source={src} color={sc} size={22} active={active} />}
-                      <Text style={[styles.sourceChipText, active && styles.sourceChipTextActive]} numberOfLines={1}>{src}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
-      </View>
-    );
-  },
-);
-
-/* ─── Trend small card (strip ngang) ─── */
-
-// Card dọc gọn cho strip ngang: ảnh 16:9 + meta (nguồn, giờ) + title 2 dòng.
-// Nội dung lấy từ `rest` — khác hẳn hero carousel.
-const TrendSmallCard = React.memo(
-  ({
-    item,
-    rank,
-    onPress,
-    styles,
-  }: {
-    item: FeedItem;
-    rank: number;
-    onPress: (i: FeedItem) => void;
-    styles: ReturnType<typeof makeStyles>;
-  }) => {
-    const C = useTheme();
-    const t = timeAgo(item.pubDate);
-    const srcColor = SOURCE_COLORS[item.source] || C.hot;
-    const isVideo = isVideoPageUrl(item.link);
-    return (
-      <TouchableOpacity
-        style={styles.trendSmallCard}
-        testID="trendCard"
-        onPress={() => onPress(item)}
-        activeOpacity={0.85}
-      >
-        <View style={styles.trendSmallImgWrap}>
-          {item.image ? (
-            <Image
-              source={{ uri: item.image }}
-              style={styles.trendSmallImg}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={[styles.trendSmallImg, styles.trendSmallImgPh]}>
-              <Ionicons name="image-outline" size={24} color={C.textMuted} />
-            </View>
-          )}
-          {/* Huy hiệu thứ hạng — section này là "đọc NHIỀU NHẤT" nên thứ tự mới
-              là thông tin chính; thiếu nó thì strip chỉ là "vài bài có ảnh". */}
-          <View style={styles.trendRank}>
-            <Text style={styles.trendRankText}>{rank}</Text>
-          </View>
-          {isVideo ? (
-            <View style={styles.videoBadge} accessibilityLabel="Video">
-              <Ionicons name="play" size={9} color="#FFF" />
-            </View>
-          ) : null}
-          {/* Giờ nằm TRÊN ảnh (giống FeaturedCard) chứ không ở hàng meta: card
-              chỉ 172px, để giờ dưới thì tên nguồn bị cắt còn "Ngườ…"/"Sài Gò…".
-              Pill nền tối như videoBadge → đọc được trên mọi ảnh, không cần scrim. */}
-          {t ? (
-            <View style={styles.trendTimeWrap}>
-              <Ionicons name="time-outline" size={11} color="rgba(255,255,255,0.9)" />
-              <Text style={styles.trendTime} numberOfLines={1}>
-                {t}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-        <View style={styles.trendSmallBody}>
-          <View style={[styles.trendSmallSrcBadge, { backgroundColor: srcColor + "1A" }]}>
-            <View style={[styles.trendSmallSrcDot, { backgroundColor: srcColor }]} />
-            <Text style={[styles.trendSmallSrc, { color: srcColor }]} numberOfLines={1}>
-              {item.source}
-            </Text>
-          </View>
-          <Text style={styles.trendSmallTitle} numberOfLines={2}>
-            {item.title}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
-  },
-);
-
-/* ─── Main screen ─── */
-
-export default function HomeScreen({ navigation }: Props) {
-  const insets = useSafeAreaInsets();
+export default function HomeScreen({ navigation, route }: any) {
   const C = useTheme();
-  const styles = useMemo(() => makeStyles(C, insets), [C, insets]);
+  const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const desktop = width >= 1000;
+  const wide = width >= 1180;
+  const discover = route.name === 'Discover';
   const [items, setItems] = useState<FeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState("Tất cả");
-  const [selectedSource, setSelectedSource] = useState("Tất cả");
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchText, setSearchText] = useState("");
-  const [hasSearchText, setHasSearchText] = useState(false);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const searchInputRef = useRef<TextInput>(null);
-  const searchTextRef = useRef("");
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Toggle luôn đọc storage (nguồn sự thật) — ref cache 1-lần-lúc-mount bị stale
-  // khi tab/phiên khác bật/tắt cờ → nhập mã lần nào cũng "Đã mở khóa".
-  // Chain nối tiếp các lần toggle: 2 press liên tiếp không interleave (read-old-write).
-  const unlockChainRef = useRef<Promise<void>>(Promise.resolve());
-  const [headerAnim] = useState(new Animated.Value(0));
-  const [categoryAnim] = useState(new Animated.Value(0));
-  const flatListRef = useRef<FlatList<HomeRow>>(null);
-  const [readCounts, setReadCounts] = useState<ReadCounts>({});
-  // Lượt đọc tăng khi user mở bài ở tab khác (Article) → đọc lại mỗi lần Home
-  // được focus để strip "ĐỌC NHIỀU NHẤT" phản ánh vừa đọc xong. getReadCounts
-  // tự nuốt lỗi nên không cần catch ở đây.
-  useFocusEffect(
-    useCallback(() => {
-      getReadCounts().then(setReadCounts);
-    }, []),
-  );
-  // Bấm lại icon tab Trang chủ khi đang ở tab này → scroll về đầu trang
-  useScrollToTop(flatListRef);
-  const { showAlert } = useAlert();
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(discover);
+  const [category, setCategory] = useState('Tất cả');
+  const [source, setSource] = useState('Tất cả nguồn');
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [prefs, setPrefs] = useState({ categories: [] as string[], sources: [] as string[] });
+  const alive = useRef(true);
+  const busy = useRef(false);
+  const list = useRef<any>(null);
+  useScrollToTop(list);
 
-  useEffect(
-    () => () => {
-      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    },
-    [],
-  );
-  const load = useCallback(async () => {
-    const cached = await readFeedsCache();
-    if (cached.length) {
-      setItems(cached);
-      setLoading(false); // có cache → hiện ngay (stale-while-revalidate), fetch mới chạy nền
-    }
-    // Cache vừa ghi (< 1 phút) → KHÔNG fetch lại 44 feed
-    if (await isFeedsCacheFresh()) {
-      if (!cached.length) setItems([]);
-      return;
-    }
-    if (!cached.length) {
-      // COLD: màn hình đang skeleton → stream partial, hiện sớm từng phần
-      const data = await fetchAllFeeds((partial) => {
-        if (partial.length) {
-          setLoading(false);
-        }
-        setItems(partial);
-      });
-      if (data.length) setItems(data);
-      return;
-    }
-    // WARM: nội dung cache đang hiện → fetch nền IM LẶNG, chỉ setItems MỘT
-    // lần khi fetch xong. Trước đây mỗi partial (350ms) đều setItems → content
-    // tự xáo/tái render liên tục ~8s (nhìn như app "tự reload") và tap bị nuốt
-    // tới khi load xong.
-    const data = await fetchAllFeeds();
-    if (data.length) setItems(data);
-  }, []);
-
-  useEffect(() => {
-    load().finally(() => setLoading(false));
-    Animated.sequence([
-      Animated.timing(headerAnim, {
-        toValue: 1,
-        duration: 350,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(categoryAnim, {
-        toValue: 1,
-        duration: 400,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
-  }, [load]);
-
-  const onRefresh = useCallback(async () => {
+  const refresh = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
     setRefreshing(true);
-    // Hiện cache ngay — không chờ 18 feed xong (reload cảm nhận nhanh).
-    const cached = await readFeedsCache();
-    if (cached.length) setItems(cached);
-    // Refresh nền: cập nhật dần qua partial; spinner tắt khi có partial đầu
-    // tiên HOẶC tối đa 5s (không để spinner treo tới feed chậm nhất 24s).
-    let done = false;
-    const finish = () => { if (!done) { done = true; setRefreshing(false); } };
-    load().then(finish).catch(finish);
-    setTimeout(finish, 5000);
-    if (Platform.OS !== "web") {
-      const Haptics = require("expo-haptics");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    }
-  }, [load]);
-
-  const goArticle = useCallback(
-    (item: FeedItem) => {
-      Keyboard.dismiss();
-      navigation.navigate("Article", { item });
-    },
-    [navigation],
-  );
-
-
-  // Dropdown nguồn build từ item THẬT đang có (không từ FEEDS tĩnh) — nguồn
-  // nào feed chết/hết bài sẽ tự biến mất, feed sống lại thì tự hiện lại.
-  // Luôn giữ selectedSource trong list dù đang rỗng (tránh mất lựa chọn khi reload).
-  const sources = useMemo(() => {
-    const withItems = new Set(items.map((i) => i.source).filter(Boolean));
-    if (selectedSource !== "Tất cả") withItems.add(selectedSource);
-    return ["Tất cả", ...withItems];
-  }, [items, selectedSource]);
-
-  const filtered = useMemo(() => {
-    let result = items;
-    if (selectedCategory !== "Tất cả")
-      result = result.filter((i) => i.category === selectedCategory);
-    if (selectedSource !== "Tất cả")
-      result = result.filter((i) => i.source === selectedSource);
-    if (debouncedQuery.trim()) {
-      const q = debouncedQuery.trim().toLowerCase();
-      result = result.filter(
-        (i) =>
-          i.title.toLowerCase().includes(q) ||
-          i.description.toLowerCase().includes(q),
-      );
-    }
-    return result;
-  }, [items, selectedCategory, selectedSource, debouncedQuery]);
-
-  const { heroes, rest } = useMemo(() => {
-    const withImg = filtered.filter((i) => i.image);
-    const feat = withImg.filter((i) => i.featured);
-    const heroes = feat.concat(withImg.filter((i) => !i.featured)).slice(0, 5);
-    const heroSet = new Set(heroes);
-    return { heroes, rest: filtered.filter((i) => !heroSet.has(i)) };
-  }, [filtered]);
-  // "ĐỌC NHIỀU NHẤT" — 6 bài CÓ ẢNH trong rest, sắp theo số lượt mở thật
-  // (đếm ở ArticleScreen), hoà thì bài mới hơn lên trước. Chưa đọc bài nào →
-  // toàn số 0 → thành "6 bài mới nhất ngoài hero", vẫn hơn hẳn kiểu xáo ngẫu
-  // nhiên cũ (vốn nhắm vào đuôi feed nên toàn bài cả chục ngày).
-  const trending = useMemo(
-    () => rankTrending(rest.filter((i) => i.image), readCounts),
-    [rest, readCounts],
-  );
-  // ── Section hóa TIN MỚI NHẤT theo chủ đề ──
-  // Chỉ khi lướt tự do (không lọc nguồn/chủ đề, không tìm kiếm): mỗi chủ đề hiện
-  // LIST_COLLAPSED bài + "Xem thêm N tin" (mở rộng inline). Khi lọc, list đã ngắn
-  // → giữ phẳng như cũ. Một FlatList duy nhất, rows trộn loại — không thêm list comp.
-  const isBrowsing =
-    selectedCategory === "Tất cả" &&
-    selectedSource === "Tất cả" &&
-    !debouncedQuery.trim();
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(() => new Set());
-  const listData = useMemo<HomeRow[]>(() => {
-    if (!isBrowsing) return rest;
-    const byCat = new Map<string, FeedItem[]>();
-    for (const i of rest) {
-      const c = i.category || "Khác";
-      let arr = byCat.get(c);
-      if (!arr) byCat.set(c, (arr = []));
-      arr.push(i);
-    }
-    // thứ tự theo CATEGORIES của FEEDS, chủ đề lạ xếp sau
-    const order = [...new Set([...CATEGORIES.slice(1), ...byCat.keys()])];
-    const out: HomeRow[] = [];
-    for (const c of order) {
-      const arr = byCat.get(c);
-      if (!arr?.length) continue;
-      out.push({ kind: "h", cat: c });
-      const shown = expandedCats.has(c) ? arr : arr.slice(0, LIST_COLLAPSED);
-      out.push(...shown);
-      const hidden = arr.length - shown.length;
-      if (hidden > 0) out.push({ kind: "more", cat: c, hidden });
-    }
-    return out;
-  }, [rest, isBrowsing, expandedCats]);
-
-  const [heroIdx, setHeroIdx] = useState(0);
-  const [reduceMotion, setReduceMotion] = useState(false);
-  const heroListRef = useRef<FlatList<FeedItem>>(null);
-
-  useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled()
-      .then(setReduceMotion)
-      .catch(() => setReduceMotion(false));
-  }, []);
-  const heroIdxRef = useRef(0);
-  const heroAutoRef = useRef(false);
-  const lastManualRef = useRef(0);
-
-  // Đợi load xong mới tự chạy: interval 45ms/4s chạy giữa bão parse lúc cold-start
-  // tranh JS thread với tap (nguyên nhân khựng cảm nhận thêm).
-  useEffect(() => {
-    if (loading || heroes.length < 2 || reduceMotion || E2E) return;
-    const heroW = getHeroWidth(insets);
-    const t = setInterval(() => {
-      if (Date.now() - lastManualRef.current < 4000) return;
-      const next = (heroIdxRef.current + 1) % heroes.length;
-      heroIdxRef.current = next;
-      heroAutoRef.current = true;
-      setHeroIdx(next);
-      heroListRef.current?.scrollToOffset({
-        offset: next * heroW,
-        animated: true,
+    setError('');
+    try {
+      const result = await fetchAllFeeds((partial) => {
+        if (alive.current && partial.length) setItems(partial);
       });
-      setTimeout(() => {
-        heroAutoRef.current = false;
-      }, 600);
-    }, 4000);
-    return () => clearInterval(t);
-  }, [loading, heroes.length, reduceMotion, insets]);
-
-  const goHero = useCallback(
-    (delta: number) => {
-      const n = heroes.length;
-      if (n < 2) return;
-      const next = (heroIdxRef.current + delta + n) % n;
-      heroIdxRef.current = next;
-      heroAutoRef.current = true;
-      lastManualRef.current = Date.now();
-      setHeroIdx(next);
-      heroListRef.current?.scrollToOffset({
-        offset: next * getHeroWidth(insets),
-        animated: true,
-      });
-      setTimeout(() => {
-        heroAutoRef.current = false;
-      }, 600);
-    },
-    [heroes.length, insets],
-  );
-
-  /* Marquee ticker "NÓNG" — tự chạy liên tục; chạm/kéo thì dừng để lướt qua lại,
-     thả ra ~2.5s sau tự chạy tiếp. Loop mượt nhờ nhân đôi nội dung. */
-  const marqueeScrollRef = useRef<ScrollView>(null);
-  const marqueeXRef = useRef(0);
-  const marqueeAutoRef = useRef(true);
-  const marqueeResumeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [marqueeCopyW, setMarqueeCopyW] = useState(0);
+      if (alive.current) {
+        if (result.length) setItems(result);
+        else setError('Chưa thể kết nối nguồn tin. Bạn vẫn có thể đọc dữ liệu đã lưu.');
+      }
+    } catch {
+      if (alive.current) setError('Không thể tải tin lúc này.');
+    } finally {
+      busy.current = false;
+      if (alive.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    if (loading || heroes.length < 2 || reduceMotion || marqueeCopyW <= 0 || E2E) return;
-    const t = setInterval(() => {
-      if (!marqueeAutoRef.current) return;
-      let x = marqueeXRef.current + 3; // ~66px/s (3px mỗi 45ms) — đỡ gánh JS thread
-      if (x >= marqueeCopyW) x = 0; // hết bản copy 1 → quay về đầu (nội dung giống hệt)
-      marqueeXRef.current = x;
-      marqueeScrollRef.current?.scrollTo({ x, animated: false });
-    }, 45);
-    return () => clearInterval(t);
-  }, [loading, heroes.length, reduceMotion, marqueeCopyW]);
-
-  useEffect(
-    () => () => {
-      if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
-    },
-    [],
-  );
-
-  const marqueePause = useCallback(() => {
-    marqueeAutoRef.current = false;
-    if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
-  }, []);
-  const marqueeResume = useCallback(() => {
-    if (marqueeResumeRef.current) clearTimeout(marqueeResumeRef.current);
-    marqueeResumeRef.current = setTimeout(() => {
-      marqueeAutoRef.current = true;
-    }, 2500);
-  }, []);
-  const marqueeScroll = useCallback((e: any) => {
-    marqueeXRef.current = e.nativeEvent.contentOffset.x;
-  }, []);
-
-  const handleCategoryPress = useCallback((category: string) => {
-    setSelectedCategory(category);
-    setSelectedSource("Tất cả");
-    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-  }, []);
-  const handleSourcePress = useCallback((source: string) => {
-    setSelectedSource(source);
-    setSelectedCategory("Tất cả");
-    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-  }, []);
-
-  const handleSearchChange = useCallback(
-    async (text: string) => {
-      searchTextRef.current = text;
-      const had = text.length > 0;
-      setHasSearchText((prev) => (prev === had ? prev : had));
-      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-      searchDebounceRef.current = setTimeout(
-        () => setDebouncedQuery(text),
-        600,
-      );
-      if (text.trim() === "016527") {
-        if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        // Đọc storage mỗi lần bấm — await ở đây an toàn vì chain dưới đây serialized:
-        // press #2 xếp hàng sau khi #1 ghi xong, không interleave read-old-write.
-        unlockChainRef.current = unlockChainRef.current
-          .catch(() => {})
-          .then(async () => {
-            const on = (await AsyncStorage.getItem(KEYS.aiUnlocked)) === "1";
-            if (on) await AsyncStorage.removeItem(KEYS.aiUnlocked);
-            else await AsyncStorage.setItem(KEYS.aiUnlocked, "1");
-            showAlert({
-              type: "success",
-              message: on ? "Đã ẩn cấu hình AI trong Cài đặt" : "Đã mở khóa cấu hình AI trong Cài đặt",
-            });
-          })
-          .catch(() => {});
-        searchInputRef.current?.clear();
-        setSearchText("");
-        searchTextRef.current = "";
-        setHasSearchText(false);
-        setDebouncedQuery("");
-        Keyboard.dismiss();
-      }
-    },
-    [showAlert],
-  );
-
-  const handleSearchToggle = useCallback(() => {
-    setShowSearch((prev) => {
-      if (!prev) {
-        setTimeout(() => searchInputRef.current?.focus(), 100);
-      } else {
-        searchInputRef.current?.clear();
-        setSearchText("");
-        searchTextRef.current = "";
-        setHasSearchText(false);
-        setDebouncedQuery("");
-        Keyboard.dismiss();
-      }
-      return !prev;
+    alive.current = true;
+    readFeedsCache().then((cached) => {
+      if (!alive.current) return;
+      setItems(cached);
+      setLoading(!cached.length);
+      if (!cached.length) void refresh();
     });
-  }, []);
+    return () => { alive.current = false; };
+  }, [refresh]);
 
-  const heroRenderItem = useCallback(
-    ({ item }: { item: FeedItem }) => (
-      <View style={styles.heroSlide}>
-        <FeaturedCard item={item} onPress={goArticle} />
-      </View>
-    ),
-    [goArticle, styles],
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    getPreferences().then((p) => { if (active) setPrefs(p); });
+    return () => { active = false; };
+  }, []));
+
+  const categories = useMemo(() => ['Tất cả', ...new Set(FEEDS.map((f) => f.category))], []);
+  const sourceNames = useMemo(() => ['Tất cả nguồn', ...new Set(FEEDS.map((f) => f.name))], []);
+  const visible = useMemo(() => items.filter((item) =>
+    (category === 'Tất cả' || item.category === category) &&
+    (source === 'Tất cả nguồn' || item.source === source) &&
+    (!prefs.sources.length || prefs.sources.includes(item.source)) &&
+    (!prefs.categories.length || prefs.categories.includes(item.category || '')) &&
+    `${item.title} ${item.description}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi'))
+  ), [items, category, source, query, prefs]);
+
+  const hero = !discover && !query && category === 'Tất cả' && source === 'Tất cả nguồn'
+    ? visible.find((item) => item.featured && item.image) || visible.find((item) => item.image) || visible[0]
+    : undefined;
+  const data = hero ? visible.filter((item) => item.link !== hero.link) : visible;
+  const trends = visible.slice(0, 8);
+  const sourceHighlights = [...new Set(items.map((item) => item.source))].slice(0, 6);
+  const open = (item: FeedItem) => discover
+    ? navigation.navigate('HomeTab', { screen: 'Article', params: { item } })
+    : navigation.navigate('Article', { item });
+
+  const searchField = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingHorizontal: 14, minHeight: 48 }}>
+      <Ionicons name="search-outline" size={19} color={C.textMuted} />
+      <TextInput
+        value={query}
+        onChangeText={setQuery}
+        accessibilityLabel="Nhập từ khóa tìm kiếm"
+        placeholder={discover ? 'Tìm chủ đề, nguồn tin hoặc từ khóa' : 'Tìm trong dòng tin hôm nay'}
+        placeholderTextColor={C.textMuted}
+        style={{ flex: 1, minWidth: 0, paddingVertical: 13, fontFamily: Sans.regular, fontSize: 13, color: C.text }}
+      />
+      {query ? <TouchableOpacity onPress={() => setQuery('')} accessibilityLabel="Xóa tìm kiếm"><Ionicons name="close-circle" size={19} color={C.textMuted} /></TouchableOpacity> : null}
+    </View>
   );
 
-  const handleHeroScroll = useCallback((e: any) => {
-    const w = e.nativeEvent.layoutMeasurement.width || 1;
-    const idx = Math.min(
-      Math.max(Math.round(e.nativeEvent.contentOffset.x / w), 0),
-      4,
-    );
-    setHeroIdx((prev) => (prev === idx ? prev : idx));
-  }, []);
-
-  const renderItem = useCallback(
-    ({ item }: { item: HomeRow }) => {
-      if ("kind" in item) {
-        if (item.kind === "h") {
-          const color = CATEGORY_COLORS[item.cat] || C.accent;
-          return (
-            <View style={[styles.sectionRow, styles.catSectionRow]}>
-              <View style={[styles.sectionBar, { backgroundColor: color }]} />
-              <Text style={[styles.sectionTitle, { color }]}>
-                {item.cat.toUpperCase()}
-              </Text>
-              <View style={styles.sectionLine} />
-            </View>
-          );
-        }
+  const topicChips = (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 12 }}>
+      {categories.map((name) => {
+        const active = category === name;
         return (
           <TouchableOpacity
-            style={styles.seeMore}
-            activeOpacity={0.7}
-            onPress={() =>
-              setExpandedCats((prev) => {
-                const n = new Set(prev);
-                n.add(item.cat);
-                return n;
-              })
-            }
+            key={name}
+            onPress={() => setCategory(name)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            style={{ paddingHorizontal: 15, paddingVertical: 9, borderRadius: 999, backgroundColor: active ? C.hotSoft : C.card, borderWidth: 1, borderColor: active ? C.hot : C.border }}
           >
-            <Ionicons name="chevron-down-circle-outline" size={16} color={C.accent} />
-            <Text style={styles.seeMoreText}>
-              Xem thêm {item.hidden} tin {item.cat.toLowerCase()}
-            </Text>
+            <Text style={{ fontFamily: active ? Sans.bold : Sans.medium, fontSize: 12, color: active ? C.hot : C.textSecondary }}>{name}</Text>
           </TouchableOpacity>
         );
-      }
-      return <ArticleCardCompact item={item} onPress={goArticle} />;
-    },
-    [goArticle, styles, C],
+      })}
+    </ScrollView>
   );
 
-  // Prefetch content bài đang hiện rõ trên màn hình (>60%, tối thiểu 1.2s):
-  // bấm vào là article đã tải sẵn trong cache — tóm tắt chạy ngay, không chờ network.
-  // Kèm PRE-SUMMARIZE nền: tóm tắt luôn bằng full text, mở bài = hiện tức thì.
-  // GIỚI HẠN lần đầu: chỉ prefetch 1 bài (hero) để không cạnh tranh với feed/video load.
-  const prefetchCountRef = useRef(0);
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: any }) => {
-    for (const v of viewableItems) {
-      const link = v?.item?.link;
-      if (link) {
-        if (prefetchCountRef.current >= 3) return; // tối đa 3 bài prefetch
-        prefetchCountRef.current++;
-        // Prefetch cách nhau 600ms — 3 bài fetch + parse HTML cùng lúc đúng
-        // 1.2s sau launch là nguyên nhân khựng ~2s; giãn ra để không dồn cục.
-        // +2000ms gốc: nhường trọn 2s đầu sau launch cho tap (parse HTML bài báo
-        // nặng), sau đó vẫn cách nhau 600ms để không dồn cục.
-        const delay = 2000 + prefetchCountRef.current * 600;
-        setTimeout(() => prefetchArticleContent(link, v.item), delay);
-      }
-    }
-  }).current;
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60, minimumViewTime: 1200 }).current;
+  if (discover) {
+    return (
+      <View testID="discoverScreen" style={{ flex: 1, backgroundColor: C.bg }}>
+        <ScreenHeader
+          title="Khám phá"
+          subtitle="Tìm chủ đề, nguồn tin và câu chuyện đáng theo dõi"
+          action={user ? (
+            <IconButton icon="person-outline" label="Tài khoản" onPress={() => navigation.navigate('Account')} />
+          ) : (
+            <Action label="Đăng nhập" icon="log-in-outline" onPress={() => navigation.navigate('Login')} />
+          )}
+        />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: desktop ? 30 : 18, paddingBottom: 48, maxWidth: Layout.content, width: '100%', alignSelf: 'center' }}>
+          <Heading eyebrow="DISCOVER" title="Đi sâu vào điều bạn quan tâm." subtitle="Khám phá xu hướng, chủ đề và nguồn tin thay vì lướt thêm một dòng feed giống Hôm nay." />
+          <View style={{ marginBottom: 24 }}>{searchField}</View>
+          <View style={{ marginBottom: 28 }}>{topicChips}</View>
 
-  const listHeader = useMemo(
-    () => (
-      <View style={styles.listHeader}>
-        {/* HERO CAROUSEL */}
-        {heroes.length > 0 && (
-          <View style={styles.heroSection}>
-            <FlatList
-              ref={heroListRef}
-              data={heroes}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              keyExtractor={(item) => item.link}
-              renderItem={heroRenderItem}
-              scrollEventThrottle={100}
-              onScroll={handleHeroScroll}
-              onViewableItemsChanged={onViewableItemsChanged}
-              viewabilityConfig={viewabilityConfig}
-            />
-            {heroes.length > 1 && (
-              <>
-                <TouchableOpacity
-                  style={[styles.heroArrow, styles.heroArrowL]}
-                  onPress={() => goHero(-1)}
-                  activeOpacity={0.7}
-                  accessibilityLabel="Tin trước"
-                >
-                  <Ionicons name="chevron-back" size={18} color="#FFF" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.heroArrow, styles.heroArrowR]}
-                  onPress={() => goHero(1)}
-                  activeOpacity={0.7}
-                  accessibilityLabel="Tin sau"
-                >
-                  <Ionicons name="chevron-forward" size={18} color="#FFF" />
-                </TouchableOpacity>
-                <View style={styles.heroDots}>
-                  {heroes.map((h, i) => (
-                    <View
-                      key={h.link}
-                      style={[
-                        styles.heroDot,
-                        i === heroIdx && styles.heroDotActive,
-                      ]}
-                    />
-                  ))}
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* SECTION: ĐỌC NHIỀU NHẤT — lưới 2 cột từ rest, khác nội dung carousel */}
-        {trending.length > 0 && (
-          <>
-            <View style={styles.sectionRow}>
-              <View style={[styles.sectionBar, { backgroundColor: C.hot }]} />
-              <View style={styles.sectionTrendIcon}>
-                <Ionicons name="trending-up" size={12} color="#FFF" />
+          {query || category !== 'Tất cả' || source !== 'Tất cả nguồn' ? (
+            <>
+              <SectionTitle title="Kết quả" subtitle={`${visible.length} bài viết phù hợp`} />
+              <View style={{ gap: 2 }}>
+                {visible.slice(0, 30).map((item) => <ArticleCardCompact key={item.link} item={item} onPress={open} />)}
               </View>
-              <Text style={[styles.sectionTitle, { color: C.hot }]}>
-                ĐỌC NHIỀU NHẤT
-              </Text>
-              <View style={styles.sectionLine} />
-            </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              testID="trendStrip"
-              contentContainerStyle={styles.trendStrip}
-            >
-              {trending.map((h, i) => (
-                <TrendSmallCard
-                  key={h.link}
-                  item={h}
-                  rank={i + 1}
-                  onPress={goArticle}
-                  styles={styles}
-                />
-              ))}
-            </ScrollView>
-          </>
-        )}
+              {!visible.length ? <Empty title="Chưa tìm thấy kết quả" subtitle="Thử một từ khóa khác hoặc bỏ bộ lọc chủ đề." icon="search-outline" action={<Action label="Bỏ bộ lọc" onPress={() => { setQuery(''); setCategory('Tất cả'); }} />} /> : null}
+            </>
+          ) : (
+            <>
+              <SectionTitle title="Đang nổi" subtitle="Những câu chuyện mới nhất đang được nhiều nguồn nhắc tới" />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 32 }}>
+                {trends.map((item, index) => (
+                  <TouchableOpacity key={item.link} onPress={() => open(item)} activeOpacity={0.82} style={{ flexBasis: wide ? '48%' : '100%', flexGrow: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: Radius.md, padding: 16, flexDirection: 'row', gap: 14 }}>
+                    <Text numberOfLines={1} style={{ fontFamily: Sans.bold, fontSize: 24, lineHeight: 30, color: index < 3 ? C.hot : C.border, width: 40, flexShrink: 0, textAlign: 'center' }}>{String(index + 1).padStart(2, '0')}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text numberOfLines={2} style={{ fontFamily: Sans.bold, fontSize: 15, lineHeight: 22, color: C.text }}>{item.title}</Text>
+                      <Text style={{ fontFamily: Sans.regular, fontSize: 11, color: C.textMuted, marginTop: 7 }}>{item.source} · {item.category || 'Tin mới'}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-        {/* SECTION: LATEST — khi lướt đã có header chủ đề từng khối nên bỏ hẳn
-            nhãn "TIN MỚI NHẤT" (2 header chồng nhau = rối); chỉ giữ khi list phẳng */}
-        {!isBrowsing && (
-          <View style={styles.sectionRow}>
-            <View style={[styles.sectionBar, { backgroundColor: C.accent }]} />
-            <Text style={[styles.sectionTitle, { color: C.accent }]}>
-              TIN MỚI NHẤT
-            </Text>
-            <View style={styles.sectionLine} />
-          </View>
-        )}
+              <SectionTitle title="Chủ đề dành cho bạn" subtitle="Chọn một chủ đề để thu hẹp góc nhìn" />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 32 }}>
+                {categories.filter((name) => name !== 'Tất cả').slice(0, 8).map((name, index) => (
+                  <TouchableOpacity key={name} onPress={() => setCategory(name)} activeOpacity={0.8} style={{ minWidth: wide ? 210 : '46%', flexGrow: 1, backgroundColor: index === 0 ? C.navy : C.card, borderWidth: index === 0 ? 0 : 1, borderColor: C.border, borderRadius: Radius.md, padding: 18 }}>
+                    <View style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: index === 0 ? 'rgba(255,255,255,.1)' : C.hotSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 18 }}>
+                      <Ionicons name={['hardware-chip-outline', 'business-outline', 'globe-outline', 'heart-outline', 'football-outline', 'school-outline'][index % 6] as any} size={18} color={index === 0 ? '#fff' : C.hot} />
+                    </View>
+                    <Text style={{ fontFamily: Sans.bold, color: index === 0 ? '#fff' : C.text, fontSize: 15 }}>{name}</Text>
+                    <Text style={{ fontFamily: Sans.regular, color: index === 0 ? '#AEB9CA' : C.textMuted, fontSize: 11, marginTop: 5 }}>Khám phá tin mới →</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <SectionTitle title="Nguồn đáng theo dõi" subtitle="Điều chỉnh nguồn tin trong hồ sơ cá nhân" action={<TouchableOpacity onPress={() => navigation.navigate('Sources')}><Text style={{ color: C.hot, fontFamily: Sans.bold, fontSize: 12 }}>Quản lý →</Text></TouchableOpacity>} />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                {sourceHighlights.map((name) => (
+                  <TouchableOpacity key={name} onPress={() => { setSource(name); setQuery(''); }} style={{ minWidth: 150, flexGrow: 1, flexBasis: wide ? '30%' as any : '45%' as any, flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 14, padding: 13 }}>
+                    <View style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: C.hotSoft, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontFamily: Sans.bold, fontSize: 12, color: C.hot }}>{name.slice(0, 1).toUpperCase()}</Text></View>
+                    <Text numberOfLines={1} style={{ flex: 1, fontFamily: Sans.medium, color: C.text, fontSize: 12 }}>{name}</Text>
+                    <Ionicons name="chevron-forward" size={15} color={C.textMuted} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+        </ScrollView>
       </View>
-    ),
-    [
-      isBrowsing,
-      heroes,
-      trending,
-      heroIdx,
-      goHero,
-      heroRenderItem,
-      handleHeroScroll,
-      goArticle,
-      styles,
-    ],
-  );
+    );
+  }
 
   return (
-    <Animated.View
-      style={[styles.root, { opacity: headerAnim }]}
-    >
-      {/* HEADER — masthead */}
-      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <View style={styles.headerRow}>
-          <View style={styles.headerLeft}>
-            <View style={styles.masthead}>
-              <Image
-                source={require("../../assets/icon.png")}
-                style={styles.mastheadImg}
-                resizeMode="cover"
-              />
-            </View>
-            <View>
-              <Text style={styles.brand}>TIN TỨC</Text>
-              <Text style={styles.brandDate}>{today()}</Text>
-            </View>
+    <View testID="homeScreen" style={{ flex: 1, backgroundColor: C.bg }}>
+      <ScreenHeader
+        title="Hôm nay"
+        subtitle={new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'long' })}
+        action={
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <IconButton icon="search-outline" label="Tìm kiếm" active={searchOpen} onPress={() => setSearchOpen((value) => !value)} />
+            <IconButton icon="refresh-outline" label="Làm mới" onPress={refresh} />
+            <IconButton icon="person-outline" label="Tài khoản" onPress={() => navigation.navigate('Account')} />
           </View>
-          <View style={styles.headerRight}>
-            <TouchableOpacity
-              style={styles.headerIcon}
-              onPress={handleSearchToggle}
-              activeOpacity={0.7}
-              accessibilityLabel="Tìm kiếm"
-            >
-              <Ionicons
-                name={showSearch ? "close" : "search-outline"}
-                size={19}
-                color={C.text}
-              />
+        }
+      />
+
+      <FlatList
+        ref={list}
+        data={data}
+        keyExtractor={(item) => item.link}
+        renderItem={({ item }) => <ArticleCardCompact item={item} onPress={open} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={C.hot} />}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ padding: desktop ? 30 : 18, paddingBottom: 48, maxWidth: 1040, width: '100%', alignSelf: 'center' }}
+        ListHeaderComponent={
+          <>
+            <Heading eyebrow="BẢN TIN CỦA BẠN" title={`${greeting()}.`} subtitle="Tin đáng đọc từ những nguồn bạn tin tưởng, được sắp xếp để bạn nắm nhanh điều quan trọng." />
+            {searchOpen ? <View style={{ marginBottom: 20 }}>{searchField}</View> : null}
+            <View style={{ marginBottom: 20 }}>{topicChips}</View>
+
+            <TouchableOpacity onPress={() => setSourcesOpen((value) => !value)} style={{ flexDirection: 'row', gap: 7, alignItems: 'center', alignSelf: 'flex-start', marginBottom: 18 }}>
+              <Ionicons name="options-outline" size={16} color={C.textMuted} />
+              <Text style={{ fontFamily: Sans.medium, color: C.textMuted, fontSize: 12 }}>{source}</Text>
+              <Ionicons name={sourcesOpen ? 'chevron-up' : 'chevron-down'} size={14} color={C.textMuted} />
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.headerIcon}
-              onPress={onRefresh}
-              activeOpacity={0.7}
-              accessibilityLabel="Làm mới"
-              disabled={refreshing}
-            >
-              <Ionicons
-                name={refreshing ? "refresh-circle" : "refresh-outline"}
-                size={19}
-                color={C.text}
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* SEARCH BAR */}
-        {showSearch && (
-          <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={16} color={C.hot} />
-            <TextInput
-              ref={searchInputRef}
-              style={styles.searchInput}
-              placeholder="Tìm tiêu đề, nội dung..."
-              placeholderTextColor={C.textMuted}
-              value={searchText}
-              onChangeText={(t) => {
-                setSearchText(t);
-                handleSearchChange(t);
-              }}
-              autoFocus
-              accessibilityLabel="Nhập từ khóa tìm kiếm"
-            />
-            {hasSearchText && (
-              <TouchableOpacity
-                onPress={() => {
-                  // Hủy timer debounce đang treo — không nó sẽ set lại query cũ
-                  // 600ms sau khi đã Xóa (danh sách tự lọc lại "kỳ diệu")
-                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-                  searchInputRef.current?.clear();
-                  setSearchText("");
-                  setHasSearchText(false);
-                  setDebouncedQuery("");
-                }}
-                accessibilityLabel="Xóa"
-              >
-                <Ionicons name="close-circle" size={18} color={C.textMuted} />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-      </View>
-
-      {/* CATEGORY PILLS */}
-      <Animated.View
-        style={[
-          styles.categoryWrap,
-          {
-            opacity: categoryAnim,
-            transform: [
-              {
-                translateY: categoryAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [12, 0],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryScroll}
-        >
-          {CATEGORIES.map((cat) => (
-            <CategoryChip
-              key={cat}
-              category={cat}
-              active={selectedCategory === cat}
-              onPress={handleCategoryPress}
-              styles={styles}
-            />
-          ))}
-        </ScrollView>
-      </Animated.View>
-
-      {/* SOURCE FILTER — dropdown các trang báo trong config */}
-      <View style={styles.sourceWrap}>
-        <View style={styles.sourceRow}>
-          <Ionicons name="funnel-outline" size={14} color={C.textMuted} />
-          <Text style={styles.sourceLabel}>Nguồn</Text>
-          <SourceDropdown
-            value={selectedSource}
-            onChange={handleSourcePress}
-            options={sources}
-            styles={styles}
-          />
-        </View>
-      </View>
-
-      {/* BREAKING NEWS TICKER — nền đỏ đặc, chữ trắng, tự chạy + cho lướt */}
-      {heroes.length > 0 && (
-        <View style={styles.breakingStrip}>
-          <View style={styles.breakingBadge}>
-            <Ionicons name="flash" size={11} color={C.danger} />
-            <Text style={styles.breakingText}>NÓNG</Text>
-          </View>
-          <ScrollView
-            ref={marqueeScrollRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.breakingViewport}
-            contentContainerStyle={styles.breakingRow}
-            onContentSizeChange={(w) => setMarqueeCopyW(w / 2)}
-            onScroll={marqueeScroll}
-            scrollEventThrottle={16}
-            onScrollBeginDrag={marqueePause}
-            onScrollEndDrag={marqueeResume}
-            onMomentumScrollEnd={marqueeResume}
-            onTouchStart={marqueePause}
-            onTouchEnd={marqueeResume}
-          >
-            {[...heroes, ...heroes].map((h, i) => (
-              <React.Fragment key={`${h.link}-${i}`}>
-                {i > 0 && <Text style={styles.breakingDot}>•</Text>}
-                <TouchableOpacity
-                  style={styles.breakingItem}
-                  onPress={() => goArticle(h)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.breakingItemText} numberOfLines={1}>
-                    {h.title}
-                  </Text>
-                </TouchableOpacity>
-              </React.Fragment>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
-      {/* CONTENT */}
-      {loading ? (
-        <View style={styles.skelWrap} accessibilityLabel="Đang tải">
-          {Array.from({ length: 6 }, (_, i) => (
-            <SkeletonCard key={i} />
-          ))}
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={listData}
-          keyExtractor={(item) => ("link" in item ? item.link : `${item.kind}:${item.cat}`)}
-          renderItem={renderItem}
-          ListHeaderComponent={listHeader}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={viewabilityConfig}
-          scrollEventThrottle={100}
-          nestedScrollEnabled
-          ListEmptyComponent={
-            <View style={styles.empty} accessibilityLabel="Không có bài báo">
-              <View style={styles.emptyIcon}>
-                <Ionicons
-                  name="file-tray-outline"
-                  size={32}
-                  color={C.textMuted}
-                />
+            {sourcesOpen ? (
+              <View testID="sourceDropdownPanel" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                {sourceNames.map((name) => <Action key={name} testID={`sourceOption-${name}`} label={name} primary={source === name} onPress={() => { setSource(name); setSourcesOpen(false); }} />)}
               </View>
-              <Text style={styles.emptyText}>Không có bài báo</Text>
-              <Text style={styles.emptySub}>
-                {selectedCategory !== "Tất cả" || selectedSource !== "Tất cả"
-                  ? "Thử chọn chủ đề hoặc nguồn khác"
-                  : "Kéo xuống để làm mới"}
-              </Text>
-              {selectedCategory !== "Tất cả" || selectedSource !== "Tất cả" ? (
-                <TouchableOpacity
-                  style={styles.emptyBtn}
-                  onPress={() => {
-                    setSelectedCategory("Tất cả");
-                    setSelectedSource("Tất cả");
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="refresh" size={14} color="#FFF" />
-                  <Text style={styles.emptyBtnText}>Xem tất cả</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          }
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={C.primary}
-              colors={[C.primary]}
-              progressViewOffset={insets.top + 80}
-            />
-          }
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          initialNumToRender={6}
-          maxToRenderPerBatch={6}
-          windowSize={7}
-          removeClippedSubviews={Platform.OS !== "web"}
-        />
-      )}
+            ) : null}
 
-    </Animated.View>
+            {error ? (
+              <View style={{ padding: 16, backgroundColor: C.dangerSoft, borderRadius: Radius.md, marginBottom: 18, borderWidth: 1, borderColor: C.border }}>
+                <Text style={{ fontFamily: Sans.regular, fontSize: 13, color: C.text, lineHeight: 21 }}>{error}</Text>
+                <View style={{ alignSelf: 'flex-start', marginTop: 10 }}><Action label="Thử lại" onPress={refresh} /></View>
+              </View>
+            ) : null}
+
+            {hero ? (
+              <TouchableOpacity onPress={() => open(hero)} activeOpacity={0.88} style={{ backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: Radius.xl, overflow: 'hidden', marginBottom: 18, flexDirection: desktop ? 'row' : 'column' }}>
+                <View style={{ flex: desktop ? 1.2 : undefined, height: desktop ? 350 : 230, backgroundColor: C.surfaceAlt }}>
+                  {hero.image ? <Image source={{ uri: hero.image }} style={{ width: '100%', height: '100%' }} resizeMode="cover" /> : null}
+                </View>
+                <View style={{ flex: 1, padding: desktop ? 28 : 20, justifyContent: 'center' }}>
+                  <Text style={{ fontFamily: Sans.bold, color: C.hot, fontSize: 11, letterSpacing: 1.1, marginBottom: 12 }}>{(hero.category || 'ĐÁNG CHÚ Ý').toUpperCase()}</Text>
+                  <Text numberOfLines={4} style={{ fontFamily: Sans.bold, color: C.text, fontSize: desktop ? 26 : 22, lineHeight: desktop ? 35 : 30, letterSpacing: -0.5 }}>{hero.title}</Text>
+                  <Text numberOfLines={2} style={{ fontFamily: Sans.regular, color: C.textMuted, fontSize: 13, lineHeight: 21, marginTop: 13 }}>{hero.description || 'Mở bài để xem tóm tắt và nội dung nguồn.'}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 18 }}>
+                    <Text style={{ fontFamily: Sans.medium, fontSize: 11, color: C.textSecondary }}>{hero.source}</Text>
+                    <View style={{ width: 3, height: 3, borderRadius: 2, backgroundColor: C.textMuted }} />
+                    <Text style={{ fontFamily: Sans.medium, fontSize: 11, color: C.hot }}>Đọc bài →</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+
+            {!query && visible.length > 0 ? (
+              <View style={{ backgroundColor: C.navy, borderRadius: Radius.xl, padding: desktop ? 24 : 20, marginBottom: 30 }}>
+                <View style={{ flexDirection: desktop ? 'row' : 'column', gap: 20, alignItems: desktop ? 'center' : 'stretch' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: Sans.bold, color: '#F59A70', fontSize: 11, letterSpacing: 1 }}>5 PHÚT NẮM TIN</Text>
+                    <Text style={{ fontFamily: Sans.bold, color: '#fff', fontSize: 21, marginTop: 8 }}>Điều đáng biết lúc này</Text>
+                    <View style={{ marginTop: 14, gap: 10 }}>
+                      {visible.slice(0, 3).map((item) => (
+                        <View key={item.link} style={{ flexDirection: 'row', gap: 9 }}>
+                          <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.hot, marginTop: 7 }} />
+                          <Text numberOfLines={2} style={{ flex: 1, fontFamily: Sans.regular, color: '#CFD6E1', fontSize: 12, lineHeight: 19 }}>{item.title}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                  <View style={{ minWidth: desktop ? 185 : undefined }}><Action label="Nghe bản tin" icon="headset-outline" primary onPress={() => navigation.navigate('Briefing')} /></View>
+                </View>
+              </View>
+            ) : null}
+
+            <SectionTitle title={query ? 'Kết quả tìm kiếm' : 'Dòng tin mới'} subtitle={`${visible.length} bài viết`} />
+          </>
+        }
+        ListEmptyComponent={loading ? <ActivityIndicator accessibilityLabel="Đang tải" color={C.hot} size="large" /> : !hero ? <View accessibilityLabel="Không có bài báo"><Empty title="Chưa tìm thấy bài viết" subtitle="Thử đổi từ khóa hoặc bộ lọc nguồn tin." icon="search-outline" action={<Action label="Bỏ bộ lọc" onPress={() => { setQuery(''); setCategory('Tất cả'); setSource('Tất cả nguồn'); }} />} /></View> : null}
+      />
+    </View>
   );
 }
-
-/* ─── Styles ─── */
-
-type Palette = typeof Color;
-const makeStyles = (
-  Color: Palette,
-  insets: { top: number; bottom: number; left: number; right: number },
-) =>
-  StyleSheet.create({
-    // KHÔNG cộng insets.bottom — Tab Bar đã tự xử lý safe area (xem App.tsx tabBarStyle)
-    root: { flex: 1, backgroundColor: Color.bg },
-
-    /* ── Header ── */
-    header: {
-      backgroundColor: Color.card,
-      paddingHorizontal: 16,
-      paddingBottom: 8,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: Color.border,
-    },
-    headerRow: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-    },
-    headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
-    headerRight: { flexDirection: "row", alignItems: "center", gap: 2 },
-    masthead: {
-      width: 34,
-      height: 34,
-      borderRadius: Radius.sm,
-      backgroundColor: Color.hot,
-      alignItems: "center",
-      justifyContent: "center",
-      overflow: "hidden",
-    },
-    mastheadImg: { width: 34, height: 34 },
-    brand: {
-      fontSize: Font.title,
-      fontWeight: "900",
-      color: Color.text,
-      letterSpacing: 0.8,
-    },
-    brandDate: {
-      fontSize: Font.tiny,
-      color: Color.textMuted,
-      marginTop: 1,
-      letterSpacing: 0.1,
-    },
-    headerIcon: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-
-    /* ── Search bar ── */
-    searchBar: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-      marginTop: 10,
-      backgroundColor: Color.surfaceAlt,
-      borderRadius: Radius.md,
-      paddingHorizontal: 12,
-      height: 40,
-    },
-    searchInput: {
-      flex: 1,
-      fontSize: Font.body,
-      color: Color.text,
-      paddingVertical: 0,
-    },
-
-    /* ── Category pills ── */
-    categoryWrap: {
-      backgroundColor: Color.card,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: Color.border,
-    },
-    categoryScroll: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
-    pill: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingHorizontal: 14,
-      paddingVertical: 7,
-      borderRadius: 999,
-      backgroundColor: Color.surfaceAlt,
-      borderWidth: 1,
-      borderColor: Color.border,
-    },
-    pillIcon: { marginRight: 4 },
-    pillText: { fontSize: 13, fontWeight: "600", color: Color.textSecondary },
-    pillTextActive: { color: "#FFF", fontWeight: "700" },
-
-    /* ── Breaking news — ticker truyền hình nền đỏ + chữ trắng chạy marquee ── */
-    breakingStrip: {
-      flexDirection: "row",
-      alignItems: "center",
-      backgroundColor: Color.danger,
-      paddingVertical: 8,
-    },
-    breakingBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      backgroundColor: "#FFF",
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: 999,
-      marginLeft: 12,
-      ...Platform.select({
-        ios: {
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: 1 },
-          shadowOpacity: 0.2,
-          shadowRadius: 3,
-        },
-        android: { elevation: 2 },
-        default: { boxShadow: "0 2px 6px rgba(0,0,0,0.25)" },
-      }),
-    },
-    breakingText: {
-      fontSize: 11,
-      fontWeight: "900",
-      color: Color.danger,
-      letterSpacing: 0.6,
-    },
-    breakingViewport: { flex: 1 },
-    breakingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-    breakingItem: { maxWidth: 260 },
-    breakingDot: { fontSize: 8, color: "rgba(255,255,255,0.7)" },
-    breakingItemText: {
-      fontSize: Font.caption,
-      fontWeight: "700",
-      color: "#FFF",
-    },
-
-    /* ── Hero carousel ── */
-    heroSection: { marginBottom: 0 },
-    heroSlide: { width: getHeroWidth(insets) },
-    heroArrow: {
-      position: "absolute",
-      top: 100,
-      width: 34,
-      height: 34,
-      borderRadius: 17,
-      backgroundColor: "rgba(0,0,0,0.35)",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 2,
-    },
-    heroArrowL: { left: 8 },
-    heroArrowR: { right: 8 },
-    heroDots: {
-      flexDirection: "row",
-      justifyContent: "center",
-      gap: 5,
-      marginTop: 10,
-    },
-    heroDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      backgroundColor: Color.border,
-    },
-    heroDotActive: { width: 18, backgroundColor: Color.primary },
-
-    /* ── Section headers ── */
-    sectionRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingHorizontal: 16,
-      paddingTop: 20,
-      paddingBottom: 10,
-    },
-    sectionBar: { width: 4, height: 16, borderRadius: 2, marginRight: 8 },
-    sectionTitle: { fontSize: 13, fontWeight: "800", letterSpacing: 0.6 },
-    sectionTrendIcon: {
-      width: 20,
-      height: 20,
-      borderRadius: 4,
-      backgroundColor: Color.hot,
-      alignItems: "center",
-      justifyContent: "center",
-      marginRight: 8,
-    },
-    sectionLine: {
-      flex: 1,
-      height: 1,
-      backgroundColor: Color.border,
-      marginLeft: 10,
-    },
-    catSectionRow: { paddingTop: 26 },
-    seeMore: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "center",
-      paddingVertical: 14,
-      gap: 6,
-    },
-    seeMoreText: {
-      fontSize: 13,
-      fontWeight: "700",
-      color: Color.accent,
-    },
-
-    /* ── Đọc nhiều nhất — strip ngang ──
-       Số đo copy từ ArticleCardCompact (radius/dot/badge/title/padding) để card
-       trong strip trông cùng một họ với card danh sách bên dưới. Ảnh 172×97 ≈ 16:9. */
-    trendStrip: { paddingHorizontal: 12, paddingBottom: 2, gap: 12 },
-    trendSmallCard: {
-      width: 172,
-      backgroundColor: Color.card,
-      borderRadius: Radius.md,
-      overflow: "hidden",
-      ...Platform.select({
-        ios: {
-          shadowColor: "#0F172A",
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.06,
-          shadowRadius: 6,
-        },
-        android: { elevation: 2 },
-        default: { boxShadow: "0 2px 6px rgba(15, 23, 42, 0.08)" },
-      }),
-    },
-    trendSmallImgWrap: {
-      width: "100%",
-      height: 97,
-      backgroundColor: Color.skeleton,
-    },
-    trendSmallImg: { width: "100%", height: "100%" },
-    trendSmallImgPh: { alignItems: "center", justifyContent: "center" },
-    // Thứ hạng: nền hot đặc + chữ trắng, đồng màu với tiêu đề section → mắt nối
-    // được badge với section. Chữ số to hơn hẳn meta để đọc lướt là thấy ngay.
-    trendRank: {
-      position: "absolute",
-      top: 6,
-      left: 6,
-      minWidth: 22,
-      height: 22,
-      paddingHorizontal: 6,
-      borderRadius: Radius.sm,
-      backgroundColor: Color.hot,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    trendRankText: {
-      fontSize: Font.tiny,
-      fontWeight: "900",
-      color: "#FFF",
-      letterSpacing: 0.2,
-    },
-    videoBadge: {
-      position: "absolute",
-      left: 6,
-      bottom: 6,
-      width: 20,
-      height: 20,
-      borderRadius: 6,
-      backgroundColor: "rgba(0,0,0,0.65)",
-      alignItems: "center",
-      justifyContent: "center",
-      paddingLeft: 1,
-    },
-    trendTimeWrap: {
-      position: "absolute",
-      right: 6,
-      bottom: 6,
-      height: 20,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 3,
-      paddingHorizontal: 6,
-      borderRadius: 6,
-      backgroundColor: "rgba(0,0,0,0.65)",
-    },
-    trendTime: { fontSize: Font.tiny - 1, color: "#FFF", fontWeight: "600" },
-    trendSmallBody: { padding: 10 },
-    // Hàng meta giờ chỉ còn badge nguồn → alignSelf flex-start để nó không kéo
-    // giãn hết chiều ngang card, nhờ vậy tên nguồn dài hiện đủ.
-    trendSmallSrcBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      alignSelf: "flex-start",
-      gap: 4,
-      paddingHorizontal: 7,
-      paddingVertical: 2,
-      borderRadius: 20,
-      maxWidth: "100%",
-      marginBottom: 4,
-    },
-    trendSmallSrcDot: { width: 5, height: 5, borderRadius: 2.5 },
-    trendSmallSrc: {
-      fontSize: Font.tiny - 1,
-      color: Color.hot,
-      fontWeight: "800",
-      letterSpacing: 0.2,
-    },
-    trendSmallTitle: {
-      fontSize: Font.body,
-      fontWeight: "700",
-      color: Color.text,
-      lineHeight: 19,
-    },
-
-    /* ── Source dropdown ── */
-    // zIndex/elevation trên wrapper (không phải panel) → dropdown nổi trên breaking strip + carousel
-    sourceWrap: {
-      backgroundColor: Color.card,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: Color.border,
-      zIndex: 10,
-      elevation: 10,
-    },
-    sourceRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-    },
-    sourceLabel: {
-      fontSize: 12,
-      fontWeight: "700",
-      color: Color.textSecondary,
-      letterSpacing: 0.2,
-    },
-    dropdownWrap: { flex: 1, position: "relative", zIndex: 100 },
-    dropdownButton: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      borderRadius: Radius.md,
-      backgroundColor: Color.surfaceAlt,
-      borderWidth: 1,
-    },
-    dropdownValue: { flex: 1, fontSize: Font.body, fontWeight: "700" },
-    // Modal drop-down nguồn — ScrollView độc lập cuộn ổn định trên Android/iOS
-    sourceModalOverlay: { flex: 1, backgroundColor: "rgba(15, 23, 42, 0.45)" },
-    sourceModalBackdrop: { ...StyleSheet.absoluteFillObject },
-    sourceModalSheet: {
-      backgroundColor: Color.card,
-      borderRadius: Radius.lg,
-      paddingVertical: 8,
-      maxWidth: 360,
-      ...Shadow.card,
-      zIndex: 200,
-      elevation: 24,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: Color.border,
-    },
-    sourceModalGrid: { padding: 10, gap: 8 },
-    sourceChip: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-      paddingHorizontal: 10,
-      paddingVertical: 10,
-      borderRadius: Radius.md,
-      backgroundColor: Color.surfaceAlt,
-      borderWidth: 1,
-      borderColor: Color.border,
-    },
-    sourceChipText: {
-      fontSize: Font.caption,
-      fontWeight: "600",
-      color: Color.text,
-      flexShrink: 1,
-    },
-    sourceChipTextActive: { color: "#FFF", fontWeight: "800" },
-
-    /* ── List ── */
-    listContent: { paddingBottom: 32 },
-    listHeader: { paddingTop: 0 },
-
-    /* ── Skeletons ── */
-    skelWrap: { paddingTop: 8 },
-
-    /* ── Empty ── */
-    empty: {
-      paddingTop: 52,
-      alignItems: "center",
-      gap: 12,
-      paddingHorizontal: 24,
-    },
-    emptyIcon: {
-      width: 72,
-      height: 72,
-      borderRadius: 36,
-      backgroundColor: Color.border,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    emptyText: { fontSize: 17, fontWeight: "700", color: Color.text },
-    emptySub: { fontSize: 13, color: Color.textMuted, textAlign: "center" },
-    emptyBtn: {
-      marginTop: 4,
-      paddingHorizontal: 20,
-      paddingVertical: 10,
-      borderRadius: 999,
-      backgroundColor: Color.primary,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      ...Shadow.card,
-    },
-    emptyBtnText: { color: "#FFF", fontWeight: "700", fontSize: 13 },
-  });

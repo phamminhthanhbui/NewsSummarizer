@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 
-// Host của máy chạy Metro/Expo (hostUri = "192.168.x.x:8087" khi dev qua LAN)
+// Host của máy chạy Metro/Expo (hostUri = "192.168.x.x:8088" khi dev qua LAN)
 function metroHost(): string {
   return (Constants.expoConfig?.hostUri || '').split(':')[0];
 }
@@ -70,7 +70,7 @@ export function getGoodProxyBase(): string | null {
   return goodProxyBase && !isDead(goodProxyBase) ? goodProxyBase : null;
 }
 
-// Thứ tự thử cho caller tự quản (vd POST /api/llm): base sống đã biết đứng đầu,
+// Thứ tự thử proxy: base sống đã biết đứng đầu,
 // sau đó là các candidate chưa bị đánh dấu chết.
 export function orderedProxyBases(): string[] {
   const rest = getProxyCandidates().filter((b) => b !== goodProxyBase && !isDead(b));

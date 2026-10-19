@@ -103,6 +103,13 @@ export const FEEDS = [
   { name: 'VietnamPlus', url: 'https://www.vietnamplus.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'Công Luận', url: 'https://congluan.vn/rss/home.rss', category: 'Việt Nam' },
   { name: 'Giáo dục Thời đại', url: 'https://giaoducthoidai.vn/rss/home.rss', category: 'Việt Nam' },
+
+  // Video — nuôi dải VIDEO ở Trang chủ, KHÔNG hiện trong stream chính.
+  // Link của feed này trỏ về vnexpress.net/<slug>.html, giống hệt bài thường, nên
+  // isVideoPageUrl KHÔNG nhận ra chúng; tín hiệu duy nhất là category của feed.
+  // ĐỪNG đổi sang vnexpress.net/rss/video.rss: feed đó là kho chết (42/60 item
+  // từ 2015, chỉ 1 item của 2026) — dải sẽ toàn video chục năm trước.
+  { name: 'VNExpress', url: 'https://video.vnexpress.net/rss/tin-moi-nhat.rss', category: 'Video' },
 ];
 
 // Feed "tin nổi bật" riêng — KHÔNG nằm trong FEEDS (không hiện trong list thường,
@@ -357,7 +364,7 @@ export async function fetchAllFeeds(onProgress?: (items: FeedItem[]) => void): P
   if (emitTimer) clearTimeout(emitTimer);
 
   const final = finalize(accRegular, accFeatured);
-  writeFeedsCache(final);
+  if (final.length) writeFeedsCache(final); // Keep offline cache when every RSS source fails.
   return final;
 }
 

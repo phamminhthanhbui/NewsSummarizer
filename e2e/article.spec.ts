@@ -1,4 +1,4 @@
-// E2E: Article — tóm tắt AI (mock), cache history, lưu/bỏ lưu, copy, nghe,
+// E2E: Article — chọn câu từ nguồn, cache history, lưu/bỏ lưu, copy, nghe,
 // bài liên quan, quay lại. Fab không có label → chọn theo vị trí trong floatBar.
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -10,7 +10,7 @@ const FIRST = FEED_ITEMS[0];
 
 async function openFirstArticle(page: Page) {
   await page.getByText(FIRST.title).first().click();
-  await expect(page.getByText('AI TÓM TẮT')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('TÓM TẮT', { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 // floatBar: [Bài gốc] [refresh] [bookmark] — Text 'Bài gốc' → ông nội là floatBar
@@ -21,84 +21,42 @@ function floatBarButtons(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await mockNetwork(page);
+  await seedStorage(page, { [KEYS.feedsCache]: JSON.stringify(FEED_ITEMS), [KEYS.feedsCacheTime]: String(Date.now()), [KEYS.history]: '[]', [KEYS.saved]: '[]' });
   await page.goto('/');
   await waitForFeedLoaded(page);
 });
 
-test.describe('Tóm tắt AI', () => {
-  test('mở bài: tự tóm tắt, hiện summary mock', async ({ page }) => {
+test.describe('Tóm tắt tại thiết bị', () => {
+  test('mở bài: chọn câu từ nội dung nguồn', async ({ page }) => {
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('summary-method')).toContainText('Chọn câu từ bài gốc');
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
   });
-
-  test('summary lưu vào history storage', async ({ page }) => {
+  test('history ghi phương pháp và phiên bản hiện tại', async ({ page }) => {
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
-    await expect(async () => {
-      const raw = await getStorage(page, KEYS.history);
-      expect(raw).toBeTruthy();
-      const history = JSON.parse(raw!);
-      expect(history.length).toBeGreaterThan(0);
-      expect(history[0].url).toBe(FIRST.link);
-      expect(history[0].summary).toBeTruthy();
-    }).toPass({ timeout: 20_000 });
+    await expect.poll(async () => {
+      const list=JSON.parse((await getStorage(page,KEYS.history)) || '[]');
+      return list.find((r:any)=>r.url===FIRST.link)?.method;
+    }).toBe('rules');
   });
-
-  test('mở lại bài đã có cache: không gọi lại LLM', async ({ page }) => {
-    let llmCalls = 0;
-    await page.route('**/api/llm', async (route) => {
-      llmCalls++;
-      await route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
-      });
-    });
-
+  test('mở lại bản đã lưu không phát sinh yêu cầu POST', async ({ page }) => {
+    const posts:string[]=[];
+    page.on('request',r=>{if(r.method()==='POST')posts.push(r.url())});
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
-    await expect(async () => {
-      const raw = await getStorage(page, KEYS.history);
-      expect(raw && JSON.parse(raw).length).toBeGreaterThan(0);
-    }).toPass({ timeout: 20_000 });
-    // History ghi ngay khi bản fast chốt — bản nâng cấp full-text vẫn chạy nền
-    // (call #2, đúng thiết kế). Chờ nó settled rồi mới đếm để bắt phần "gọi trùng".
-    await page.waitForTimeout(4000);
-    const callsFirst = llmCalls;
-    expect(callsFirst).toBeGreaterThan(0);
-
-    // Quay Home mở lại — cache hit, không thêm call nào
-    await gotoTab(page, 'Trang chủ');
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
+    await page.getByLabel('Quay lại',{exact:true}).filter({visible:true}).click();
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible();
-    await page.waitForTimeout(1500);
-    expect(llmCalls).toBe(callsFirst);
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
+    expect(posts).toEqual([]);
   });
-
-  test('không lưu API key: vẫn tóm tắt được nhờ key mặc định NVIDIA', async ({ page }) => {
-    await page.evaluate(() => {
-      ['@nim_key', '@openai_key', '@anthropic_key', '@google_key', '@openrouter_key', '@custom_key']
-        .forEach((k) => localStorage.removeItem(k));
-    });
+  test('tóm tắt lại dùng nội dung trên thiết bị', async ({ page }) => {
+    const posts:string[]=[];
+    page.on('request',r=>{if(r.method()==='POST')posts.push(r.url())});
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
-  });
-
-  test('fab refresh tóm tắt lại, summary vẫn hiện', async ({ page }) => {
-    // Chậm mock LLM ~900ms để bắt được trạng thái "Đang tóm tắt..."
-    await page.route('**/api/llm', async (route) => {
-      await new Promise((r) => setTimeout(r, 900));
-      await route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
-      });
-    });
-    await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
-    await floatBarButtons(page).refresh.click();
-    // UI mới: summary cũ KHÔNG biến mất khi refresh — chỉ hiện footer "Đang
-    // hoàn thiện tóm tắt…" ở cuối (tên test: "summary vẫn hiện")
-    await expect(page.getByText('Đang hoàn thiện tóm tắt…')).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
+    await page.getByLabel('Tóm tắt lại',{exact:true}).click();
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
+    expect(posts).toEqual([]);
   });
 });
 
@@ -148,16 +106,16 @@ test.describe('Lưu / bỏ lưu', () => {
 test.describe('Các nút khác', () => {
   test('Copy tóm tắt không crash', async ({ page }) => {
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible({ timeout: 20_000 });
     await page.getByText('Copy tóm tắt').click();
     await page.waitForTimeout(300);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible();
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible();
   });
 
   test('Nghe tóm tắt không crash', async ({ page }) => {
     page.on('dialog', (d) => d.accept());
     await openFirstArticle(page);
-    await expect(page.getByText(SUMMARY_TEXT)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(SUMMARY_TEXT).first()).toBeVisible({ timeout: 20_000 });
     await page.getByLabel('Nghe tóm tắt').click();
     await page.waitForTimeout(500);
     // Nếu có giọng Việt web sẽ chuyển sang "Dừng đọc"; nếu không có giọng thì
@@ -168,11 +126,12 @@ test.describe('Các nút khác', () => {
   test('nút back quay về Home', async ({ page }) => {
     await openFirstArticle(page);
     await page.getByLabel('Quay lại').click();
-    await expect(page.getByText('ĐỌC NHIỀU NHẤT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Hiểu hôm nay. Sẵn sàng ngày mai.')).toBeVisible({ timeout: 10_000 });
   });
 
   test('bài viết liên quan hiển thị', async ({ page }) => {
     await openFirstArticle(page);
     await expect(page.getByText('Bài viết liên quan')).toBeVisible({ timeout: 15_000 });
   });
+
 });

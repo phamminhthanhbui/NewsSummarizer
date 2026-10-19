@@ -2,7 +2,6 @@
 // Dùng làm nguồn duy nhất cho: tóm tắt trọng tâm, gắn media, highlight.
 
 import { extractJsonObject } from '../utils/json';
-import type { LLMProvider } from './llm';
 
 // ----- Types -----
 
@@ -167,29 +166,9 @@ export function normalizeFocusOutput(raw: string): FocusModel {
   return normalizeFocusObject(obj);
 }
 
-// ----- LLM call -----
-// Dùng dynamic import để focus.ts không kéo react-native/llm vào top-level —
-// các hàm thuần (normalize/heuristic/truncate) chạy được dưới node (tự test).
-
-export async function extractFocus(
-  articleText: string,
-  provider: LLMProvider,
-  apiKey: string,
-  model: string,
-  customBaseUrl?: string,
-  category?: string,
-): Promise<FocusModel> {
-  const { getProviderConfig, buildLlmRequest, sendLlmRequest } = await import('./llm');
-  const cfg = getProviderConfig(provider);
-  if (!cfg) throw new Error('Dịch vụ AI tạm thời không khả dụng, thử lại sau');
-
-  const inputText = truncateSectionAware(articleText);
-  const system = buildFocusPrompt(inputText, category);
-  const user = `Bài báo:\n\n${inputText}`;
-  const { url, headers, body } = buildLlmRequest(provider, apiKey, model, system, user, 700, customBaseUrl);
-  const data = await sendLlmRequest(url, headers, body, provider, cfg.label);
-  const raw = data.choices?.[0]?.message?.content || '';
-  return normalizeFocusOutput(raw);
+// Deterministic focus extraction; kept for older consumers of this module.
+export async function extractFocus(articleText: string, title = ''): Promise<FocusModel> {
+  return buildHeuristicFocus(title, articleText);
 }
 
 // ----- Heuristic fallback (không cần AI) -----

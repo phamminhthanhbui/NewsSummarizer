@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet, Platform } from 'react-native';
-import { Color, Radius, useTheme } from '../constants/theme';
+import { Color, Radius, Shadow, useTheme } from '../constants/theme';
 
 export default function SkeletonCard() {
   const C = useTheme();
@@ -42,8 +42,9 @@ export default function SkeletonCard() {
 // Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
 type Palette = typeof Color;
 const makeStyles = (Color: Palette) => StyleSheet.create({
-  row: { flexDirection: 'row', backgroundColor: Color.card, paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Color.border },
-  thumb: { width: 118, height: 84, borderRadius: Radius.sm, marginRight: 12, overflow: 'hidden' },
+  // Hình dạng phải khớp ArticleCardCompact: lệch thì lúc feed về sẽ "nhảy" bố cục.
+  row: { flexDirection: 'row', backgroundColor: Color.card, paddingVertical: 12, paddingHorizontal: 12, marginHorizontal: 12, marginBottom: 10, borderRadius: Radius.lg, ...Shadow.card },
+  thumb: { width: 108, height: 76, borderRadius: Radius.sm, marginRight: 10, overflow: 'hidden' },
   body: { flex: 1, gap: 7, justifyContent: 'center' },
   fill: { ...StyleSheet.absoluteFillObject, borderRadius: 4 },
   line88: { height: 12, borderRadius: 4, width: '88%', overflow: 'hidden' },

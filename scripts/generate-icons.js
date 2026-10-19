@@ -26,9 +26,10 @@ async function generateIcons() {
   console.log('✓ favicon.png (48x48)');
 
   // Splash icon - 1284x2778 (iPhone X splash) or similar
-  // Nền splash = màu cam thương hiệu (#FB512A) đồng bộ icon
+  // Nền splash = màu thương hiệu, đồng bộ icon. rgb(212,42,0) = #D42A00 = Color.hot
+  // trong src/constants/theme.ts — đổi palette thì đổi cả đây.
   await sharp(svgBuffer)
-    .resize(1284, 2778, { fit: 'contain', background: { r: 251, g: 81, b: 42, alpha: 1 } })
+    .resize(1284, 2778, { fit: 'contain', background: { r: 212, g: 42, b: 0, alpha: 1 } })
     .png()
     .toFile(path.join(assetsDir, 'splash-icon.png'));
   console.log('✓ splash-icon.png (1284x2778)');

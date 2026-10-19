@@ -1,5 +1,5 @@
-// npm run start: chạy proxy (3001) + expo dev server (8087) cùng lúc.
-// Chỉ kill port 8087 nếu bị chiếm; các port khác để yên.
+// npm run start: chạy proxy (3001) + expo dev server (8088) cùng lúc.
+// Chỉ kill port 8088 nếu bị chiếm; các port khác để yên.
 const { spawn } = require('child_process');
 const net = require('net');
 
@@ -8,7 +8,7 @@ const stop = () => { if (proxy) proxy.kill(); process.exit(); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-// Kill 1 cổng (chỉ dùng cho 8087). port là hằng số
+// Kill 1 cổng (chỉ dùng cho 8088). port là hằng số
 // trong file → không có input ngoài. Dùng execFile (không shell) + lọc PID trong
 // JS thay vì `netstat | findstr` để tránh chạy lệnh qua shell.
 // PID '0' = socket mồ côi (TIME_WAIT/CLOSE_WAIT sau khi process chết) — nhân
@@ -30,12 +30,12 @@ const killPort = (port, cb) => {
 };
 
 const startExpo = () => {
-  killPort(8087, () => {
+  killPort(8088, () => {
   // KHÔNG dùng --clear: clear cache Metro ở MỖI lần start khiến bundle build
   // lạnh lại từ đầu — máy kết nối khi đang build, bundle mới xong CLI đẩy
   // xuống → app tự reload ngay sau khi render xong lần đầu. Khi cần clear
   // cache (sửa native/config/dep) thì chạy tay: npx expo start --clear
-  const expo = spawn('npx', ['expo', 'start', '--port', '8087'], { stdio: 'inherit', shell: true });
+  const expo = spawn('npx', ['expo', 'start', '--port', '8088'], { stdio: 'inherit', shell: true });
   expo.on('exit', stop);
   });
 };

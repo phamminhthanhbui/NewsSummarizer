@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { readFeedsCache } from './feeds';
 import { KEYS } from './storage';
+import { Color } from '../constants/theme';
 
 // Expo Go (SDK 53+) đã loại bỏ expo-notifications — import trong đó in ra ERROR/WARN
 // đỏ lòm. Bản standalone APK/APA thì đầy đủ chức năng, chỉ chặn ở Expo Go thôi.
@@ -42,7 +43,7 @@ export async function ensureSetup(): Promise<boolean> {
       name: 'Bản tin hằng ngày',
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FB512A',
+      lightColor: Color.hot,
     });
   }
   const { status } = await Notifications.getPermissionsAsync();
@@ -119,7 +120,7 @@ async function scheduleOne(hour: number, minute: number) {
       body,
       data: { url: link },
       sound: 'default',
-      color: '#FB512A',
+      color: Color.hot,
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.DAILY,
@@ -149,7 +150,7 @@ export async function sendTest() {
       title: 'Tin tức nổi bật',
       body: 'Mở ứng dụng để đọc tin nóng nhất hôm nay',
       sound: 'default',
-      color: '#FB512A',
+      color: Color.hot,
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,

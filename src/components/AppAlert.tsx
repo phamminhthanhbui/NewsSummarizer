@@ -22,12 +22,14 @@ export function useAlert() {
   return useContext(AlertContext);
 }
 
-// Màu nút (text) theo loại — kiểu iOS, chỉ là chữ màu, không nền
+// Màu nút (text) theo loại — kiểu iOS, chỉ là chữ màu, không nền.
+// Trỏ thẳng vào token thay vì hex lặp: trước đây 4 mã màu này sống riêng một bản,
+// đổi palette là chúng lệch lại một mình.
 const TYPE_COLOR: Record<AlertType, string> = {
-  info: '#2563EB',
-  success: '#059669',
-  error: '#DC2626',
-  warning: '#D97706',
+  info: Color.hot,
+  success: Color.success,
+  error: Color.danger,
+  warning: Color.amber,
 };
 
 export function AlertProvider({ children }: { children: React.ReactNode }) {

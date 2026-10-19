@@ -1,4 +1,4 @@
-// E2E Playwright — chạy app Expo web (8087) + proxy (3001) rồi test trên Chromium.
+// E2E Playwright — chạy app Expo web (8088) + proxy (3001) rồi test trên Chromium.
 // Chạy: npx playwright test (hoặc npm run test:e2e).
 // Mặc định tự spawn server (webServer). Muốn bám dev server đang chạy sẵn:
 //   set PLAYWRIGHT_SKIP_BROWSER_WS=1 && npx playwright test
@@ -13,7 +13,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:8087',
+    baseURL: 'http://localhost:8088',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     viewport: { width: 430, height: 932 }, // khổ điện thoại
@@ -28,7 +28,7 @@ export default defineConfig({
     ? undefined
     : {
         command: 'node scripts/dev.js',
-        url: 'http://localhost:8087',
+        url: 'http://localhost:8088',
         reuseExistingServer: true,
         timeout: 180_000,
         stdout: 'ignore',

@@ -34,7 +34,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     paddingHorizontal: 15, paddingVertical: 8, borderRadius: 999,
     backgroundColor: Color.bg, marginVertical: 9, borderWidth: 1, borderColor: Color.border,
   },
-  active: { backgroundColor: Color.primary, borderColor: Color.primary, ...Shadow.card },
+  active: { backgroundColor: Color.hot, borderColor: Color.hot, ...Shadow.card },
   txt: { fontSize: 13, fontWeight: '600', color: Color.textSecondary },
   txtActive: { color: '#FFF' },
 });

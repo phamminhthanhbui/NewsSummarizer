@@ -1,23 +1,30 @@
-// Design tokens — palette + type scale + radius
-// primary/danger lấy đúng từ 7 màu chủ đạo (THEME_COLORS): cam Kenh14 + đỏ thời sự
 import { useSyncExternalStore } from 'react';
 import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Palette interface — Color/DarkColor cùng shape, đổi giá trị thoải mái không vướng literal type
+export const Sans = {
+  regular: 'BeVietnamPro',
+  medium: 'BeVietnamPro-Medium',
+  bold: 'BeVietnamPro-Bold',
+} as const;
+
+// App hiện chỉ bundle Be Vietnam Pro. Giữ alias Serif để tương thích component cũ,
+// còn cảm giác editorial đến từ hierarchy/spacing thay vì phụ thuộc font hệ thống.
+export const Serif = Sans.bold;
+
 export interface Palette {
-  primary: string;
-  primaryDark: string;
-  primarySoft: string;
   hot: string;
   hotDark: string;
   hotSoft: string;
+  brandSurface: string;
+  navy: string;
   amber: string;
   accent: string;
   accentSoft: string;
   bg: string;
   card: string;
   surfaceAlt: string;
+  elevated: string;
   text: string;
   textSecondary: string;
   textMuted: string;
@@ -29,130 +36,111 @@ export interface Palette {
   danger: string;
   dangerSoft: string;
   scrim: string;
-  white: string;
 }
 
+// Signal Editorial — calm paper + navy + một accent cam duy nhất.
 export const Color: Palette = {
-  primary: '#FB512A',        // = THEME_COLORS 'Cam Kenh14'
-  primaryDark: '#A70E1A',
-  primarySoft: '#FFEEE8',    // pill/tint nền của primary
-  // Palette kiểu Kenh14 — cam đỏ trẻ trung, dùng cho HomeScreen
-  hot: '#FB512A',            // cam đỏ đặc trưng
-  hotDark: '#A70E1A',        // đỏ đậm cuối gradient
-  hotSoft: '#FFEEE8',        // tint nền của hot
-  amber: '#F0A52B',          // cam vàng nhấn
-  accent: '#2563EB',         // link blue
-  accentSoft: '#E9F0FE',
-  bg: '#F3F4F8',             // page background
-  card: '#FFFFFF',           // surface
-  surfaceAlt: '#F7F8FC',     // secondary surface (rows)
-  text: '#171A23',           // headlines
-  textSecondary: '#5B6270',  // descriptions
-  textMuted: '#9AA0AE',      // timestamps
-  border: '#E8EAF0',         // dividers
-  skeleton: '#ECEFF4',       // placeholder bg
-  skeletonAnim: '#DFE3EA',   // placeholder pulse
-  success: '#059669',        // = THEME_COLORS 'Xanh lá'
-  successSoft: '#D1FAE5',
-  danger: '#DC2626',         // = THEME_COLORS 'Đỏ thời sự'
-  dangerSoft: '#FEE2E2',
-  scrim: 'rgba(10,15,25,0.55)',
-  white: '#FFFFFF',
+  hot: '#F36A2D',
+  hotDark: '#D9541D',
+  hotSoft: '#FFF0E8',
+  brandSurface: '#F36A2D',
+  navy: '#17243A',
+  amber: '#A25D12',
+  accent: '#F36A2D',
+  accentSoft: '#FFF0E8',
+  bg: '#F7F6F2',
+  card: '#FFFFFF',
+  surfaceAlt: '#F1F0EB',
+  elevated: '#FBFAF7',
+  text: '#101828',
+  textSecondary: '#475467',
+  textMuted: '#667085',
+  border: '#E7E5DF',
+  skeleton: '#ECEAE4',
+  skeletonAnim: '#E2E0D8',
+  success: '#27866B',
+  successSoft: '#E9F5F0',
+  danger: '#D34A4A',
+  dangerSoft: '#FFF0F0',
+  scrim: 'rgba(13,20,32,0.62)',
 };
 
-// Dark mode — chỉ override màu nền/chữ; màu brand (hot/primary/success...) giữ nguyên
 export const DarkColor: Palette = {
   ...Color,
-  primarySoft: '#3A1D14',
-  hotSoft: '#3A1D14',
-  accentSoft: '#16233D',
-  bg: '#0F1115',
-  card: '#1A1D24',
-  surfaceAlt: '#22262F',
-  text: '#F2F4F8',
-  textSecondary: '#A8AFBC',
-  textMuted: '#6B7280',
-  border: '#2C313C',
-  skeleton: '#232730',
-  skeletonAnim: '#2E333E',
-  successSoft: '#0D2E22',
-  dangerSoft: '#3A1518',
-  scrim: 'rgba(0,0,0,0.7)',
+  hot: '#F47A42',
+  hotDark: '#E2652E',
+  hotSoft: '#35261F',
+  brandSurface: '#F47A42',
+  accent: '#F47A42',
+  accentSoft: '#35261F',
+  navy: '#0D1420',
+  bg: '#0D1420',
+  card: '#141E2D',
+  surfaceAlt: '#192638',
+  elevated: '#192638',
+  text: '#F5F7FA',
+  textSecondary: '#CBD2DC',
+  textMuted: '#9AA4B2',
+  border: '#293548',
+  skeleton: '#202C3D',
+  skeletonAnim: '#29374B',
+  success: '#75C9A9',
+  successSoft: '#14362C',
+  danger: '#FF9C9C',
+  dangerSoft: '#41262A',
+  scrim: 'rgba(0,0,0,0.72)',
 };
 
-// ---- Dark mode store (AsyncStorage + useSyncExternalStore) ----
 export type ThemeMode = 'light' | 'dark';
 const THEME_KEY = '@theme_mode';
-
 let themeMode: ThemeMode = Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
 const themeListeners = new Set<() => void>();
 
-// Giá trị đầu lấy từ system (đồng bộ) → đa số trường hợp frame đầu đã đúng
-// màu. AsyncStorage chỉ ghi đè khi user chọn mode KHÁC system trong Settings.
 AsyncStorage.getItem(THEME_KEY).then((val) => {
   if (val === 'dark' || val === 'light') setThemeMode(val);
 });
 
-export function getThemeMode(): ThemeMode {
-  return themeMode;
-}
-
+export function getThemeMode(): ThemeMode { return themeMode; }
 export function setThemeMode(mode: ThemeMode) {
   if (mode === themeMode) return;
   themeMode = mode;
-  AsyncStorage.setItem(THEME_KEY, mode);
-  themeListeners.forEach((l) => l());
+  void AsyncStorage.setItem(THEME_KEY, mode);
+  themeListeners.forEach((listener) => listener());
 }
-
 export function subscribeTheme(cb: () => void) {
   themeListeners.add(cb);
   return () => { themeListeners.delete(cb); };
 }
-
-// Hook: trả về palette theo mode hiện tại, mọi screen dùng hook này tự rerender khi đổi mode
-export function useTheme(): typeof Color {
+export function useTheme(): Palette {
   const mode = useSyncExternalStore(subscribeTheme, getThemeMode);
   return mode === 'dark' ? DarkColor : Color;
 }
 
 export const Font = {
-  hero: 22,
-  title: 18,
-  headline: 16,
-  body: 14,
+  display: 34,
+  hero: 30,
+  title: 22,
+  headline: 17,
+  body: 15,
   caption: 13,
   tiny: 12,
 } as const;
 
-export const Radius = {
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 22,
-} as const;
+export const Space = { xxs: 4, xs: 8, sm: 12, md: 16, lg: 24, xl: 32, xxl: 48 } as const;
+export const Radius = { sm: 10, md: 16, lg: 18, xl: 22, pill: 999 } as const;
+export const Layout = { sidebar: 248, reading: 720, content: 1180, settings: 860 } as const;
 
-// 7 màu chủ đạo của app — dải màu trang trí dưới header + màu active của tab bar
+// Legacy export vẫn giữ để không phá màn cũ; toàn app chỉ dùng cam làm brand accent.
 export const THEME_COLORS = [
-  { key: 'hot', label: 'Cam Kenh14', color: '#FB512A' },
-  { key: 'red', label: 'Đỏ thời sự', color: '#DC2626' },
-  { key: 'blue', label: 'Xanh biển', color: '#2563EB' },
-  { key: 'violet', label: 'Tím', color: '#7C3AED' },
-  { key: 'green', label: 'Xanh lá', color: '#059669' },
-  { key: 'pink', label: 'Hồng', color: '#DB2777' },
-  { key: 'gold', label: 'Vàng đồng', color: '#D97706' },
+  { key: 'sky', label: 'Cam', color: Color.hot },
+  { key: 'cyan', label: 'Cam', color: Color.hot },
+  { key: 'orange', label: 'Cảnh báo', color: Color.amber },
+  { key: 'green', label: 'Thành công', color: Color.success },
+  { key: 'berry', label: 'Cam', color: Color.hot },
 ] as const;
 
 export const Shadow = {
-  card: {
-    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-    elevation: 2,
-  },
-  button: {
-    boxShadow: '0 4px 12px rgba(251, 81, 42, 0.15)',
-    elevation: 3,
-  },
-  level4: {
-    boxShadow: '0 16px 32px rgba(15, 23, 42, 0.1)',
-    elevation: 8,
-  },
+  card: { boxShadow: '0 8px 24px rgba(23,36,58,0.055)', elevation: 1 },
+  button: { boxShadow: '0 6px 18px rgba(243,106,45,0.18)', elevation: 2 },
+  level4: { boxShadow: '0 18px 48px rgba(13,20,32,0.18)', elevation: 8 },
 } as const;

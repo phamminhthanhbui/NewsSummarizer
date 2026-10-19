@@ -1,3 +1,4 @@
+import { Action } from '../components/PremiumUI';
 import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import {
   View,
@@ -20,12 +21,14 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import Hls from 'hls.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { FeedItem, SummaryRecord } from '../types';
-import { Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
+import { Sans, Color, Font, Radius, Shadow, useTheme } from '../constants/theme';
 import { KEYS, bumpReadCount } from '../services/storage';
-import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, fetchArticleTextFast, baseUrlKey, sameImageFile, buildExtractiveSummary, aiCondenseCaptions, getCachedCaption, CAPTION_AI_MAX, isStaleSummary, peekPendingSummary, saveSummaryToHistory, isVideoPageUrl } from '../services/summarize';
+import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia, fetchArticleTextFast, baseUrlKey, sameImageFile, saveSummaryToHistory, isVideoPageUrl } from '../services/summarize';
+import { isCurrentRuleSummary, fingerprintSummaryInput } from '../services/ruleSummary';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
 import ArticleCard from '../components/ArticleCard';
@@ -56,8 +59,8 @@ export default function ArticleScreen({ navigation, route }: any) {
   // reuse span cũ theo index → mất highlight mỗi token stream về.
   const summaryKeyRef = useRef(0);
   const [error, setError] = useState('');
-  // Summary hiện tại do fallback extractive tạo (không có AI/mất mạng)
-  const [offline, setOffline] = useState(false);
+  // Distinguish a complete article from its short RSS description.
+  const [summarySource, setSummarySource] = useState<'article' | 'description'>('description');
   const [isSaved, setIsSaved] = useState(false);
   const [related, setRelated] = useState<FeedItem[]>([]);
   const [speaking, setSpeaking] = useState(false);
@@ -104,178 +107,115 @@ export default function ArticleScreen({ navigation, route }: any) {
     }).start();
   }, [imageModal.visible, imgAnim]);
 
-  // Auto-fetch article + summarize + load related + saved state
+  // Show available source sentences immediately, then update once full text arrives.
   useEffect(() => {
-    // Đếm lượt đọc — nguồn cho "ĐỌC NHIỀU NHẤT" ở Home. Effect này chạy cho MỌI
-    // đường vào bài (Home, Đã lưu, Lịch sử, bài liên quan) nên là chỗ duy nhất
-    // cần đếm. Fire-and-forget: không chờ, không chặn tải bài.
+    let alive = true;
+    let displayed = '';
+    setBlocks([]);
+    setContent('');
+    setSummary('');
+    setError('');
+    setSummarySource('description');
+    setSummarizing(true);
     void bumpReadCount(item.link);
+    AsyncStorage.getItem(KEYS.saved).then(raw => {
+      const saved: FeedItem[] = raw ? JSON.parse(raw) : [];
+      if (alive) setIsSaved(saved.some(s => s.link === item.link));
+    }).catch(() => {});
 
-    // Restore persisted save state (syncs with SavedScreen)
-    AsyncStorage.getItem(KEYS.saved)
-      .then((raw) => {
-        const articles: FeedItem[] = raw ? JSON.parse(raw) : [];
-        setIsSaved(articles.some((s) => s.link === item.link));
-      })
-      .catch(() => {});
-
-    // Tóm tắt nhanh: chạy độc lập, không chặn việc tải bài
-    (async () => {
-      setOffline(false);
-      // Lưu summary vào History (cache để lần sau mở lại là tức thì) — writer
-      //chung, dedupe theo URL (bản mới nhất thắng).
-      const saveToHistory = (summary: string) => saveSummaryToHistory(item, summary);
-
-      // Trang VIDEO (video.xxx.vn, /video/...): nội dung là clip, không có bài
-      // văn — AI tóm tắt vô nghĩa. Chỉ tải blocks (đã nhận diện video + stream),
-      // render player; bỏ qua mọi chuỗi summarize/upgrade.
-      if (isVideoPageUrl(item.link)) {
-        const b = (await fetchArticleContent(item.link).catch(() => [] as ArticleBlock[])) || [];
-        setBlocks(b);
-        setContent(blocksToText(b));
-        setSummarizing(false);
-        return;
+    const apply = (text: string, source: 'article' | 'description') => {
+      if (!alive) return;
+      if (displayed && displayed !== text) {
+        speakGenRef.current++;
+        cancelledRef.current = true;
+        stopSystem();
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        setSpeaking(false);
+        resumeRef.current = null;
+        resumeSummaryRef.current = '';
       }
-
-      // Chạy song song không chặn nhau: tóm nhanh từ mô tả + tải toàn bài để render
-      const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
-      // Media bài gốc từ HTML — NHANH (~1-2s), không chờ Jina chậm. Set blocks sớm
-      // để ảnh/video hiện cùng lúc với tóm tắt; Jina về sau sẽ thay bằng blocks đầy đủ.
-      // Dùng setState functional để KHÔNG đè blocks Jina đã có (Jina trả caption
-      // thật, HTML fast-path có thể trả caption tự sinh "Ảnh 1.").
-      fetchArticleMedia(item.link)
-        .then((media) => {
-          if (media.length) setBlocks((prev) => (prev.length ? prev : media));
-        })
-        .catch(() => {});
-      // Bài liên quan: đọc từ cache RSS (Home đã fetch + ghi cache) — KHÔNG gọi lại
-      // fetchAllFeeds() mỗi lần mở bài (30 request RSS thừa). Cache trống mới fetch.
-      (async () => {
-        let all = await readFeedsCache();
-        if (!all.length) all = await fetchAllFeeds().catch(() => [] as FeedItem[]);
-        const same = all.filter((a) => a.source === item.source && a.link !== item.link);
-        const others = all.filter((a) => a.source !== item.source && a.link !== item.link);
-        setRelated([...same, ...others].slice(0, LIMITS.relatedMax));
-      })().catch(() => {});
-
-      // CACHE: đã tóm tắt bài này rồi → hiện lại ngay, 0 lời gọi API.
-      // Summary cũ bị lỗi (metadata/fragment/](url)) → purge record hỏng + tóm lại.
-      const raw = await AsyncStorage.getItem(KEYS.history);
-      const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
-      const cached = history.find((h) => h.url === item.link);
-      if (cached && !isStaleSummary(cached.summary)) {
-        setSummary(cached.summary);
-        setSummarizing(false);
-        const blocks = await blocksTask;
-        setBlocks(blocks);
-        setContent(blocksToText(blocks));
-        return;
-      }
-      if (cached) {
-        const cleaned = history.filter((h) => !(h.url === item.link && isStaleSummary(h.summary)));
-        await AsyncStorage.setItem(KEYS.history, JSON.stringify(cleaned));
-      }
-
-      let lastErr = '';
-      // Bài gốc + text đầy đủ do Jina trả: chỉ để RENDER phần đọc (blocks/content),
-      // không quay lại đổi summary nữa — thiết kế "summary đổi 1 lần duy nhất".
-      blocksTask.then((b) => {
-        if (b.length) setBlocks(b);
-        const t = blocksToText(b);
-        if (t) setContent(t);
-      });
-
-      // SUMMARY KHÔNG stream token lên UI (đó là "đổi nội dung 3-4 lần" user thấy —
-      // thực chất là hàng chục setSummary/chunk). Đổi tối đa 2 lần, mỗi lần một
-      // câu hoàn chỉnh: pend (Home đã tóm full-text) → 1 lần là chốt. Không pend
-      // → AI từ mô tả RSS (~2-3s, lần 1) → nâng cấp full-text MỘT PHÁT khi toàn
-      // văn về (lần 2).
-      const descSrc = (item.description || '').trim();
-      const pend = peekPendingSummary(item.link);
-      let finalSummary = '';
-      let pendUsed = false;
-      if (pend) {
-        finalSummary = (await Promise.race([
-          pend.catch(() => null as string | null),
-          new Promise<null>((r) => setTimeout(r, 20000)),
-        ])) || '';
-        if (finalSummary.trim().length >= 20 && !isStaleSummary(finalSummary)) pendUsed = true;
-        else finalSummary = '';
-      }
-      if (!finalSummary && descSrc.length >= 80) {
-        finalSummary = await summarizeArticle(descSrc, item.category)
-          .catch((e: Error) => { lastErr = e.message || ''; return null; }) || '';
-      }
-      if (!finalSummary && descSrc) finalSummary = descSrc; // mô tả ngắn/tóm AI lỗi → hiện luôn
-      if (!finalSummary) {
-        // AI chết + không có mô tả → extractive (chọn-câu, không cần mạng).
-        const jinaBlocks = await Promise.race([
-          blocksTask,
-          new Promise<null>((r) => setTimeout(() => r(null), 1500)),
-        ]);
-        if (jinaBlocks && jinaBlocks.length) {
-          const ex = buildExtractiveSummary(item.title, jinaBlocks);
-          if (ex) { finalSummary = ex; setOffline(true); }
-        }
-      }
-      if (finalSummary) {
-        setSummary(finalSummary);
-        setError('');
-        await saveToHistory(finalSummary);
-      } else if (lastErr) {
-        setError(lastErr);
-      }
+      displayed = text;
+      setSummary(text);
+      setSummarySource(source);
+      setError('');
       setSummarizing(false);
+    };
 
-      // NÂNG CẤP full-text — đổi ĐÚNG 1 lần, một phát (không gõ chữ dần).
-      // Nguồn text: HTML nhanh (~1-2s) hoặc Jina (~10-20s), ai về đủ dài trước.
-      if (!pendUsed) {
-        const srcReady: Promise<string> = new Promise<string>((resolve) => {
-          let done = false;
-          const take = (t: string) => {
-            if (!done && t && t.trim().length >= 400) { done = true; resolve(t.trim()); }
-          };
-          fetchArticleTextFast(item.link).then((t) => take(t), () => {});
-          blocksTask.then((b) => take(blocksToText(b)), () => {});
-          // không nguồn nào đủ dài → dùng bản dài nhất (có thể rỗng)
-          Promise.all([
-            fetchArticleTextFast(item.link).catch(() => ''),
-            blocksTask.then(blocksToText),
-          ]).then(([a, b]) => {
-            if (!done) { done = true; resolve((b.length >= a.length ? b : a).trim()); }
-          });
-        });
-        const upgradeSrc = await srcReady;
-        if (upgradeSrc.length >= 400 && upgradeSrc.length > descSrc.length) {
-          const full = await summarizeArticle(upgradeSrc, item.category).catch(() => null);
-          if (full && full.trim().length >= 20 && !isStaleSummary(full)) {
-            setSummary(full);
-            setOffline(false);
-            await saveToHistory(full);
-          }
+    const blocksTask = fetchArticleContent(item.link).catch(() => [] as ArticleBlock[]);
+    if (isVideoPage) {
+      blocksTask.then(b => { if (alive) { setBlocks(b); setContent(blocksToText(b)); setSummarizing(false); } });
+      return () => { alive = false; };
+    }
+    const fastTextTask = fetchArticleTextFast(item.link).catch(() => '');
+    fetchArticleMedia(item.link).then(media => {
+      if (alive && media.length) setBlocks(previous => previous.length ? previous : media);
+    }).catch(() => {});
+    blocksTask.then(b => {
+      if (!alive) return;
+      if (b.length) setBlocks(b);
+      const text = blocksToText(b);
+      if (text) setContent(text);
+    });
+    (async () => {
+      let all = await readFeedsCache();
+      if (!all.length) all = await fetchAllFeeds().catch(() => [] as FeedItem[]);
+      if (alive) setRelated([
+        ...all.filter(a => a.source === item.source && a.link !== item.link),
+        ...all.filter(a => a.source !== item.source && a.link !== item.link),
+      ].slice(0, LIMITS.relatedMax));
+    })().catch(() => {});
+
+    (async () => {
+      let cached: SummaryRecord | undefined;
+      try {
+        const raw = await AsyncStorage.getItem(KEYS.history);
+        const history: SummaryRecord[] = raw ? JSON.parse(raw) : [];
+        cached = history.find(h => h.url === item.link && isCurrentRuleSummary(h));
+      } catch { }
+      if (!alive) return;
+      if (cached) apply(cached.summary, cached.summarySource || 'description');
+      else if (item.description?.trim()) {
+        const short = await summarizeArticle(item.description, item.category, undefined, item.title).catch(() => '');
+        if (!alive) return;
+        if (short) {
+          apply(short, 'description');
+          void saveSummaryToHistory(item, short, item.description, 'description');
         }
       }
-    })().catch(() => setSummarizing(false));
+
+      // HTML and parsed article race; never wait for a slower fetch to select sentences.
+      const fullText = await new Promise<string>(resolve => {
+        let done = false;
+        const take = (text: string) => {
+          if (!done && text.trim().length >= LIMITS.articleMinLength) { done = true; resolve(text); }
+        };
+        fastTextTask.then(take);
+        blocksTask.then(b => take(blocksToText(b)));
+        Promise.all([fastTextTask, blocksTask]).then(([htmlText, b]) => {
+          if (!done) { done = true; const parsed = blocksToText(b); resolve(parsed.length >= htmlText.length ? parsed : htmlText); }
+        });
+      });
+      if (!alive) return;
+      if (fullText.trim().length >= LIMITS.articleMinLength) {
+        setContent(previous => previous || fullText);
+        const hash = fingerprintSummaryInput(fullText);
+        const result = cached?.summarySource === 'article' && cached.summaryInputHash === hash
+          ? cached.summary : await summarizeArticle(fullText, item.category, undefined, item.title).catch(() => '');
+        if (!alive) return;
+        if (result) {
+          apply(result, 'article');
+          await saveSummaryToHistory(item, result, fullText, 'article');
+        }
+      }
+      if (alive) {
+        setSummarizing(false);
+        if (!displayed) setError('Chưa tải được nội dung để tóm tắt. Bạn có thể mở bài gốc.');
+      }
+    })().catch(() => { if (alive) setSummarizing(false); });
+    return () => { alive = false; };
   }, [item.link]);
 
-  // Caption DÀI → AI rút gọn nền (1 request batch, cache theo URL — xem
-  // aiCondenseCaptions). captionRev bump để re-render khi bản ngắn về.
-  const [captionRev, setCaptionRev] = useState(0);
-  useEffect(() => {
-    const items = blocks
-      .filter((b) => b.type === 'image' && b.url && b.caption && b.caption.length > CAPTION_AI_MAX)
-      .map((b) => ({ url: b.url!, caption: b.caption! }));
-    if (!items.length) return;
-    let alive = true;
-    aiCondenseCaptions(items)
-      .then((n) => { if (alive && n > 0) setCaptionRev((r) => r + 1); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [blocks]);
-
   const summarize = async () => {
-    // Đang đọc mà bấm tóm tắt lại → tắt giọng trước, kẻo voice cũ + bản tóm
-    // tắt mới đọc đè lên nhau
     speakGenRef.current++;
     cancelledRef.current = true;
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -286,18 +226,14 @@ export default function ArticleScreen({ navigation, route }: any) {
     resumeRef.current = null;
     resumeSummaryRef.current = '';
     try {
-      const src = content || item.description;
-      // Không stream — giữ nguyên bản cũ trên màn hình, đổi một phát khi bản mới xong.
-      const s = await summarizeArticle(src, item.category);
-      setSummary(s);
-      setOffline(false);
-      await saveSummaryToHistory(item, s);
-    } catch {
-      // AI lỗi → thử fallback extractive từ blocks đã tải
-      const ex = blocks.length ? buildExtractiveSummary(item.title, blocks) : '';
-      if (ex) { setSummary(ex); setOffline(true); }
-      else setError('Không tạo được tóm tắt');
-    }
+      const fetched = content ? '' : await fetchArticleTextFast(item.link).catch(() => '');
+      const src = content || fetched || item.description || '';
+      const source = content || fetched ? 'article' : 'description';
+      const result = await summarizeArticle(src, item.category, undefined, item.title);
+      setSummary(result);
+      setSummarySource(source);
+      await saveSummaryToHistory(item, result, src, source);
+    } catch { setError('Chưa có đủ nội dung nguồn để tóm tắt.'); }
     setSummarizing(false);
   };
 
@@ -533,16 +469,18 @@ export default function ArticleScreen({ navigation, route }: any) {
   const READ_WPM = 250;
   const readTime = Math.max(1, Math.ceil((content || item.description).length / READ_WPM));
 
-  // Trang video: khối video duy nhất (nếu đã tải về) — render player thay AI tóm tắt
+  // Trang video: khối video duy nhất (nếu đã tải về) — render player thay phần tóm tắt
   const videoBlock = isVideoPage ? blocks.find((b) => b.type === 'video') : null;
+  // Bản đọc toàn bài của tòa soạn (báo nào có) — thanh nghe ở ĐẦU bài, KHÔNG
+  // đan xen vào đoạn như ảnh/video (xem fetchMediaFromHtml trong summarize.ts).
+  const audioBlock = blocks.find((b) => b.type === 'audio') ?? null;
+  const hasPaperAudio = !!audioBlock?.url;
 
-  // Render 1 media block: ảnh/video — caption ưu tiên bản AI rút gọn (cache
-  // trong summarize.ts; captionRev bump khi bản mới về để re-render).
+  // Keep original image captions, including source credits.
   const renderMedia = (b: ArticleBlock, key: string) => {
     if (!b.url) return null;
     if (b.type === 'image') {
-      void captionRev;
-      return <SafeImg key={key} url={b.url} caption={getCachedCaption(b.url) ?? b.caption} onPress={() => openImageModal(b.url!)} />;
+      return <SafeImg key={key} url={b.url} caption={b.caption} onPress={() => openImageModal(b.url!)} />;
     }
     if (b.type === 'video') {
       return <BlockVideo key={key} block={b} />;
@@ -600,18 +538,21 @@ export default function ArticleScreen({ navigation, route }: any) {
     let sumAcc = 0;
     const cumPara = paras.map((p) => { sumAcc += p.length + 1; return sumAcc / totalSumChars; });
 
-    // Điểm chèn: media chèn TRƯỚC đoạn đầu tiên có tỉ lệ tích lũy >= frac.
+    // Điểm chèn: media chèn TRƯỚC đoạn đầu tiên có tỉ lệ tích lũy >= frac,
+    // nhưng KHÔNG BAO GIỜ trước đoạn 0 — TL;DR/lead phải là thứ đầu tiên
+    // người đọc thấy. Ảnh mở đầu bài gốc (pos ≈ 0) nếu để tự nhiên sẽ chen
+    // lên trước nội dung chính; chỉ có đúng 1 đoạn duy nhất thì chèn SAU nó.
     // Chống dồn cụm: 1 media mỗi đoạn tối đa — media trùng điểm chèn (summary
     // ngắn, pos gần nhau) dời xuống đoạn kế tiếp còn trống, GIỮ nguyên thứ tự
-    // pos của bài gốc; media thừa không còn chỗ → bỏ (tóm tắt không cần full
-    // gallery). atIdx ngắn hơn media → các media đuôi không được render.
+    // pos của bài gốc; media thừa không còn chỗ (slot cuối chỉ chứa 1) → bỏ
+    // (tóm tắt không cần full gallery). atIdx ngắn hơn media → media đuôi bỏ.
     const lastPara = Math.max(paras.length - 1, 0);
     const atIdx: number[] = [];
     for (const f of fracs) {
       const base = cumPara.reduce((c, v) => c + (v < f - 1e-9 ? 1 : 0), 0);
-      let t = Math.min(base, lastPara);
+      let t = Math.max(Math.min(base, lastPara), 1);
       while (atIdx.includes(t)) t++;
-      if (t > lastPara) break;
+      if (t > lastPara + 1) break;
       atIdx.push(t);
     }
 
@@ -707,7 +648,7 @@ export default function ArticleScreen({ navigation, route }: any) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.hBtn} accessibilityLabel="Quay lại">
           <Ionicons name="chevron-back" size={26} color={C.accent} />
         </TouchableOpacity>
-        <Text style={[styles.hTitle, { color: SOURCE_COLORS[item.source] || C.text }]} numberOfLines={1}>{item.source}</Text>
+        <Text style={styles.hTitle} numberOfLines={1}>{item.source}</Text>
         <TouchableOpacity onPress={handleShare} style={styles.hBtn}>
           <Ionicons name="share-social-outline" size={21} color={C.textSecondary} />
         </TouchableOpacity>
@@ -717,10 +658,11 @@ export default function ArticleScreen({ navigation, route }: any) {
         style={styles.body}
         contentContainerStyle={[styles.bodyBottom, { paddingBottom: 90 }]}
       >
+        <Text style={styles.articleCategory}>{(item.category || 'TIN TỨC').toUpperCase()}</Text>
         <Text style={styles.title}>{item.title}</Text>
 
         <View style={styles.meta}>
-          <Text style={[styles.metaSource, { color: SOURCE_COLORS[item.source] || C.primary }]}>{item.source}</Text>
+          <Text style={styles.metaSource}>{item.source}</Text>
           <Text style={styles.metaDot}> · </Text>
           <Text style={styles.metaTime}>
             {new Date(item.pubDate).toLocaleString('vi-VN')}
@@ -729,38 +671,32 @@ export default function ArticleScreen({ navigation, route }: any) {
           <Text style={styles.metaTime}>⏱ ~{readTime} phút đọc</Text>
         </View>
 
-        {/* AI Summary card — kiểu Kenh14: ảnh full-bleed, badge đỏ, góc vuông, nền trắng */}
+        {item.image ? <Image source={{ uri: item.image }} style={[styles.cardImg, { marginHorizontal: 20, borderRadius: 22, width: undefined, marginBottom: 22 }]} resizeMode="cover" /> : null}
         <View style={styles.summaryCard}>
-          {/* Hình gốc của bài */}
-          {item.image ? (
-            <Image source={{ uri: item.image }} style={styles.cardImg} resizeMode="cover" />
-          ) : null}
-
           <View style={styles.summaryLabelRow}>
             <LinearGradient
-              colors={[C.hot, C.hotDark]}
+              colors={[C.brandSurface, C.brandSurface]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.aiBadge}
             >
-              <Ionicons name={isVideoPage ? 'videocam' : 'sparkles'} size={13} color="#FFF" />
-              <Text style={styles.summaryLabel}>{isVideoPage ? 'VIDEO' : 'AI TÓM TẮT'}</Text>
+              <Ionicons name={isVideoPage ? 'videocam' : 'document-text-outline'} size={13} color="#FFF" />
+              <Text style={styles.summaryLabel}>{isVideoPage ? 'VIDEO' : 'TÓM TẮT'}</Text>
             </LinearGradient>
-            {offline ? (
-              <View style={styles.offlineChip}>
-                <Ionicons name="cloud-offline-outline" size={11} color={C.textMuted} />
-                <Text style={styles.offlineChipText}>OFFLINE</Text>
-              </View>
-            ) : null}
             {!isVideoPage && paraWords.length > 0 && (
               <TouchableOpacity
                 onPress={toggleSpeak}
-                disabled={summarizing}
-                accessibilityState={{ disabled: summarizing }}
-                style={[styles.speakBtn, speaking && styles.speakBtnOn, summarizing && styles.speakBtnDisabled]}
+                disabled={summarizing || hasPaperAudio}
+                accessibilityState={{ disabled: summarizing || hasPaperAudio }}
+                style={[styles.speakBtn, speaking && styles.speakBtnOn, (summarizing || hasPaperAudio) && styles.speakBtnDisabled]}
                 activeOpacity={0.7}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityLabel={speaking ? 'Dừng đọc' : summarizing ? 'Đang tóm tắt, chưa đọc được' : 'Nghe tóm tắt'}
+                accessibilityLabel={
+                  hasPaperAudio ? 'Bài có bản đọc của tòa soạn, dùng thanh nghe bên dưới'
+                    : speaking ? 'Dừng đọc'
+                    : summarizing ? 'Đang tóm tắt, chưa đọc được'
+                    : 'Nghe tóm tắt'
+                }
               >
                 <Ionicons name={speaking ? 'stop' : 'volume-high'} size={16} color={speaking ? '#FFF' : C.hot} />
                 <Text style={[styles.speakBtnText, speaking && styles.speakBtnTextOn]}>
@@ -769,6 +705,10 @@ export default function ArticleScreen({ navigation, route }: any) {
               </TouchableOpacity>
             )}
           </View>
+
+          {!isVideoPage && <Text testID="summary-method" style={styles.summaryMethod}>
+            {summarySource === 'article' ? 'Chọn câu từ bài gốc · Không dùng AI' : 'Từ mô tả RSS · Chưa tải đủ bài · Không dùng AI'}
+          </Text>}
 
           {/* Thanh tiến trình đọc — chạy theo word đang được đọc */}
           {speaking && wordOffsets.length > 0 ? (
@@ -810,6 +750,7 @@ export default function ArticleScreen({ navigation, route }: any) {
             </View>
           ) : (
             <View style={styles.summaryBody}>
+              {audioBlock?.url ? <BlockAudio url={audioBlock.url} source={item.source} /> : null}
               {renderSummaryNodes()}
               {summarizing ? (
                 // Trạng thái "chưa tóm tắt xong" đặt DƯỚI thân bài — để cạnh
@@ -835,11 +776,13 @@ export default function ArticleScreen({ navigation, route }: any) {
           >
             <View style={styles.sourceTextRow}>
               <Ionicons name="link-outline" size={13} color={C.textMuted} />
-              <Text style={[styles.sourceName, { color: SOURCE_COLORS[item.source] || C.primary }]}>{item.source}</Text>
+              <Text style={styles.sourceName}>{item.source}</Text>
             </View>
             <Text style={styles.sourceDate}>{new Date(item.pubDate).toLocaleDateString('vi-VN')}</Text>
           </TouchableOpacity>
         </View>
+
+        {!isVideoPage && <View style={{ marginHorizontal: 16, marginBottom: 18, alignItems: 'flex-start' }}><Action label="Góp ý bản tóm tắt" icon="flag-outline" onPress={() => navigation.navigate('Feedback', { url: item.link })} /></View>}
 
         {/* Related articles — section header cùng ngôn ngữ với Home (vạch màu + title + line) */}
         {related.length > 0 && (
@@ -949,12 +892,12 @@ export default function ArticleScreen({ navigation, route }: any) {
           onPress={isVideoPage ? () => Linking.openURL(item.link) : summarize}
           activeOpacity={0.7}
           disabled={summarizing && !isVideoPage}
-          accessibilityLabel={isVideoPage ? 'Mở video tại nguồn' : undefined}
+          accessibilityLabel={isVideoPage ? 'Mở video tại nguồn' : 'Tóm tắt lại'}
         >
           <Ionicons
             name={isVideoPage ? 'open-outline' : summarizing ? 'sync' : 'refresh'}
             size={21}
-            color={C.primary}
+            color={C.hot}
           />
         </TouchableOpacity>
 
@@ -962,6 +905,7 @@ export default function ArticleScreen({ navigation, route }: any) {
           style={[styles.fabRound, isSaved && styles.fabRoundOn]}
           onPress={handleBookmark}
           activeOpacity={0.7}
+          accessibilityLabel={isSaved ? 'Bỏ lưu bài' : 'Lưu bài'}
         >
           <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={21} color={isSaved ? C.danger : C.textSecondary} />
         </TouchableOpacity>
@@ -994,6 +938,216 @@ const BlockVideo = memo(function BlockVideo({ block }: { block: ArticleBlock }) 
     </TouchableOpacity>
   );
 });
+
+// Trạng thái phát, gom 2 nền tảng về MỘT API: web điều khiển thẻ <audio> ẩn,
+// native điều khiển expo-video. Nhờ vậy phần UI bên dưới chỉ viết một lần — và
+// web KHÔNG còn dùng <audio controls> mặc định của trình duyệt (thanh xám, cao
+// 36px, lệch hẳn tông app; đó là lý do bản trước trông xấu).
+function usePaperAudio(url: string) {
+  const isWeb = Platform.OS === 'web';
+  // Callback ref CHỈ GHI, không bao giờ xoá. Lúc unmount React gỡ ref của host
+  // component trước khi chạy cleanup của effect, nên nếu để React quản lý thì
+  // ref.current = null và lệnh pause() cuối cùng thành vô hiệu — thẻ <audio> đã
+  // tách khỏi DOM vẫn phát tiếp (bỏ phần tử khỏi DOM KHÔNG tự dừng phát).
+  const elRef = useRef<any>(null);
+  const setEl = useCallback((el: any) => { if (el) elRef.current = el; }, []);
+  const player = useVideoPlayer(isWeb ? null : url, (p) => { p.loop = false; });
+  const [playing, setPlaying] = useState(false);
+  const [pos, setPos] = useState(0);
+  const [dur, setDur] = useState(0);
+
+  // Dừng khi RỜI màn hình. Không thể chỉ dựa vào cleanup lúc unmount:
+  // navigation.push('Article') (bấm bài liên quan, ArticleScreen:321) đẩy màn hình
+  // mới lên và GIỮ màn hình cũ trong stack — nó chỉ blur, không unmount, nên thẻ
+  // <audio> vẫn nằm trong DOM và trình duyệt phát tiếp. Đúng lỗi "đang nghe rồi mở
+  // bài khác vẫn còn tiếng". Cùng cách xử lý với stopSpeaking cho giọng đọc tóm tắt.
+  const navigation = useNavigation<any>();
+  useEffect(() => {
+    const stop = () => {
+      if (isWeb) elRef.current?.pause(); else player.pause();
+      setPlaying(false);
+    };
+    const unsub = navigation.addListener('blur', stop);
+    return () => { unsub(); stop(); };
+    // stop chỉ đọc ref + player (đều ổn định) nên closure của lần render đầu vẫn đúng
+  }, [navigation, isWeb, player]);
+
+  // Web: thẻ <audio> tự bắn timeupdate/loadedmetadata/ended → nghe thẳng, khỏi poll.
+  useEffect(() => {
+    if (!isWeb) return;
+    const el = elRef.current;
+    if (!el) return;
+    const onTime = () => { setPos(el.currentTime || 0); setDur(el.duration || 0); };
+    const onEnd = () => setPlaying(false);
+    el.addEventListener('timeupdate', onTime);
+    el.addEventListener('loadedmetadata', onTime);
+    el.addEventListener('ended', onEnd);
+    return () => {
+      el.removeEventListener('timeupdate', onTime);
+      el.removeEventListener('loadedmetadata', onTime);
+      el.removeEventListener('ended', onEnd);
+    };
+  }, [isWeb, url]);
+
+  // Native: expo-video không bắn event tiến trình → poll 500ms, chỉ lúc đang phát.
+  // Tự phát hiện hết bài, nếu không nút kẹt ở "đang phát" và interval chạy mãi.
+  useEffect(() => {
+    if (isWeb || !playing) return;
+    const id = setInterval(() => {
+      const d = player.duration || 0;
+      const c = player.currentTime || 0;
+      setPos(c);
+      setDur(d);
+      if (d > 0 && c >= d - 0.3) { player.pause(); setPlaying(false); }
+    }, 500);
+    return () => clearInterval(id);
+  }, [isWeb, playing, player]);
+
+  const ended = dur > 0 && pos >= dur - 0.3;
+  const toggle = () => {
+    if (playing) {
+      if (isWeb) elRef.current?.pause(); else player.pause();
+      setPlaying(false);
+      return;
+    }
+    if (ended) { // nghe lại từ đầu
+      if (isWeb) { if (elRef.current) elRef.current.currentTime = 0; } else player.currentTime = 0;
+      setPos(0);
+    }
+    if (isWeb) elRef.current?.play().catch(() => {}); else player.play();
+    setPlaying(true);
+  };
+  const seek = (ratio: number) => {
+    if (!dur || !isFinite(ratio)) return;
+    const t = Math.max(0, Math.min(1, ratio)) * dur;
+    if (isWeb) { if (elRef.current) elRef.current.currentTime = t; } else player.currentTime = t;
+    setPos(t);
+  };
+
+  return { setEl, playing, pos, dur, toggle, seek };
+}
+
+// Bản đọc toàn bài của TÒA SOẠN (Tiền Phong…) — KHÁC nút "Nghe" ở header: nút đó
+// đọc bản TÓM TẮT bằng expo-speech, thanh này phát file mp3 của chính báo. Có
+// thanh này thì nút "Nghe" bị khoá (xem hasPaperAudio ở phần header).
+const BlockAudio = memo(function BlockAudio({ url, source }: { url: string; source: string }) {
+  const C = useTheme();
+  const s = useMemo(() => makeAudioStyles(C), [C]);
+  const { setEl, playing, pos, dur, toggle, seek } = usePaperAudio(url);
+  const [trackW, setTrackW] = useState(0);
+  const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
+
+  // Tua bằng hệ RESPONDER, không dùng Pressable.onPress: onPress của
+  // react-native-web chỉ bắn ở sự kiện `click` (lúc NHẢ tay) nên kéo thanh không
+  // ăn. onResponderGrant = chạm xuống, onResponderMove = kéo → được cả hai.
+  // locationX tính theo currentTarget (chính View này) nên lớp vẽ bên trong phải
+  // pointerEvents="none"; không thì chạm trúng thanh đã tô sẽ lấy mốc theo thanh
+  // đó (rộng bằng pct) và nhảy về sai vị trí.
+  const seekAt = (e: any) => {
+    const x = e?.nativeEvent?.locationX;
+    if (!trackW || typeof x !== 'number') return;
+    seek(x / trackW);
+  };
+
+  return (
+    <LinearGradient
+      colors={[C.brandSurface, C.brandSurface]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={s.card}
+    >
+      <View style={s.head}>
+        <Ionicons name="headset" size={13} color="#FFFFFF" />
+        <Text style={s.title} numberOfLines={1}>BẢN ĐỌC CỦA {source.toUpperCase()}</Text>
+      </View>
+      <View style={s.row}>
+        <TouchableOpacity
+          onPress={toggle}
+          style={[s.btn, playing && s.btnOn]}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={playing ? 'Dừng bản đọc của báo' : 'Phát bản đọc của báo'}
+        >
+          <Ionicons name={playing ? 'pause' : 'play'} size={20} color={C.hot} />
+        </TouchableOpacity>
+        <View style={s.right}>
+          <View
+            style={s.trackHit}
+            onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={seekAt}
+            onResponderMove={seekAt}
+            accessibilityRole="adjustable"
+            accessibilityLabel="Tua bản đọc"
+          >
+            <View style={s.trackWrap} pointerEvents="none">
+              <View style={s.trackBg} />
+              <View style={[s.trackFill, { width: `${pct}%` }]} />
+              {/* Núm kéo — đặt theo px (đã đo được trackW) chứ không theo %, để
+                  không phụ thuộc hỗ trợ `left: %` của từng nền tảng. */}
+              <View
+                style={[s.knob, { left: (pct / 100) * trackW - 5.5, opacity: trackW ? 1 : 0 }]}
+              />
+            </View>
+          </View>
+          <Text style={s.time}>
+            {fmtClock(pos)} <Text style={s.timeDim}>/ {fmtClock(dur)}</Text>
+          </Text>
+        </View>
+      </View>
+      {/* Thẻ <audio> ẩn — chỉ để phát, UI do app vẽ */}
+      {Platform.OS === 'web' ? <audio ref={setEl} preload="metadata" src={url} style={{ display: 'none' }} /> : null}
+    </LinearGradient>
+  );
+});
+
+function fmtClock(sec: number): string {
+  if (!sec || !isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const ss = Math.floor(sec % 60);
+  return `${m}:${ss < 10 ? '0' : ''}${ss}`;
+}
+
+// Bảng màu riêng theo theme: BlockVideo dùng `styles` cấp module (chỉ có palette
+// SÁNG) nên thanh video bị lệch màu ở dark mode — không lặp lại lỗi đó ở đây.
+//
+// Bản trước là một ô viền xám trên nền C.bg — nhìn ra ngay một ô form, không ra
+// một trình phát. Bản này dùng dải GRADIENT màu thương hiệu, cùng tông với badge
+// Nhãn tóm tắt và header: nó tự nói "của app", và tách hẳn khỏi khối tóm tắt (nền
+// trắng) — đúng vì đây là bản đọc của BÁO, không phải bản tóm tắt của app.
+function makeAudioStyles(C: Palette) {
+  return StyleSheet.create({
+    card: {
+      marginBottom: 14,
+      borderRadius: Radius.md,
+      overflow: 'hidden', // để gradient cắt theo bo góc
+      paddingHorizontal: 13,
+      paddingVertical: 12,
+    },
+    head: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 12 },
+    title: { flex: 1, fontSize: Font.tiny, fontFamily: Sans.bold, fontWeight: '700', letterSpacing: 0.6, color: '#FFFFFF' },
+    row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    btn: {
+      width: 46, height: 46, borderRadius: 23,
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: '#FFFFFF',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+      elevation: 3,
+    },
+    btnOn: { backgroundColor: 'rgba(255,255,255,0.86)' },
+    right: { flex: 1 },
+    trackHit: { paddingVertical: 10 }, // vùng chạm dày cho ngón tay
+    // trackWrap cao 12 = đủ chỗ cho núm 11px; thanh 4px canh giữa trong đó.
+    // KHÔNG đặt overflow:hidden ở đây — sẽ cắt mất núm.
+    trackWrap: { height: 12, justifyContent: 'center' },
+    trackBg: { position: 'absolute', left: 0, right: 0, top: 4, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.35)' },
+    trackFill: { position: 'absolute', left: 0, top: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF' },
+    knob: { position: 'absolute', top: 0.5, width: 11, height: 11, borderRadius: 5.5, backgroundColor: '#FFFFFF', boxShadow: '0 1px 4px rgba(0,0,0,0.25)' },
+    time: { marginTop: 3, fontSize: Font.tiny, fontFamily: Sans.medium, fontWeight: '600', color: '#FFFFFF', fontVariant: ['tabular-nums'] },
+    timeDim: { color: 'rgba(255,255,255,0.72)', fontWeight: '400' },
+  });
+}
 
 const HLS_RE = /\.m3u8(\?|#|$)/i;
 
@@ -1063,46 +1217,50 @@ const SafeImg = memo(function SafeImg({ url, caption, onPress }: { url: string; 
 // Palette truyền vào làm shadow biến `Color` cục bộ → styles tự nhận màu dark/light
 type Palette = typeof Color;
 const makeStyles = (Color: Palette) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: Color.card },
+  container: { flex: 1, backgroundColor: Color.bg },
   // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingBottom: 10,
-    backgroundColor: Color.card,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: Color.bg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
   },
-  hBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  hTitle: { flex: 1, fontSize: Font.body, fontWeight: '700', color: Color.text, textAlign: 'center' },
+  hBtn: { width: 42, height: 42, borderRadius: 14, justifyContent: 'center', alignItems: 'center', backgroundColor: Color.card, borderWidth: 1, borderColor: Color.border },
+  hTitle: { flex: 1, fontSize: Font.caption, fontFamily: Sans.bold, fontWeight: '700', color: Color.textSecondary, textAlign: 'center' },
   // Body
   body: { flex: 1 },
-  bodyBottom: {},
+  bodyBottom: { width: '100%', maxWidth: 760, alignSelf: 'center', paddingTop: 12 },
+  articleCategory: { paddingHorizontal: 20, paddingTop: 10, fontSize: 11, fontFamily: Sans.bold, color: Color.hot, letterSpacing: 1.1 },
   title: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 31,
+    fontFamily: Sans.bold, fontWeight: '800',
     color: Color.text,
-    lineHeight: 30,
-    padding: 16,
-    paddingBottom: 8,
+    lineHeight: 42,
+    letterSpacing: -0.7,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
   meta: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    paddingHorizontal: 16,
-    marginBottom: 16,
+    paddingHorizontal: 20,
+    marginBottom: 20,
   },
-  metaSource: { fontSize: Font.tiny, color: Color.primary, fontWeight: '700' },
-  metaDot: { fontSize: Font.tiny, color: Color.textMuted },
-  metaTime: { fontSize: Font.tiny, color: Color.textMuted },
-  // Summary — card phủ kiểu mới: nền surface, radius md, ảnh full-bleed, badge gradient
+  metaSource: { fontSize: Font.tiny, fontFamily: Sans.regular, color: Color.hot, fontWeight: '700' },
+  metaDot: { fontSize: Font.tiny, fontFamily: Sans.regular, color: Color.textMuted },
+  metaTime: { fontSize: Font.tiny, fontFamily: Sans.regular, color: Color.textMuted },
+  // Summary — dùng cùng một grid 18px cho header / method / body / source.
+  // Card trung tính giúp phần tóm tắt bớt "nghiêng" sang một bên và TL;DR nổi rõ hơn.
   summaryCard: {
-    marginHorizontal: 16,
-    marginBottom: 16,
+    marginHorizontal: 20,
+    marginBottom: 20,
     backgroundColor: Color.card,
-    borderRadius: Radius.md,
+    borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Color.border,
     overflow: 'hidden',
@@ -1111,12 +1269,12 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   summaryLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap', // màn rất hẹp → badge/chips xuống dòng, không nuốt nút Nghe
-    rowGap: 6,
-    gap: 8,
-    marginHorizontal: 14,
-    marginTop: 12,
-    marginBottom: 12,
+    flexWrap: 'wrap', // màn rất hẹp → badge/nút Nghe xuống dòng thay vì tràn card
+    rowGap: 8,
+    gap: 10,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 8,
   },
   aiBadge: {
     flexDirection: 'row',
@@ -1126,8 +1284,16 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     paddingVertical: 5,
     borderRadius: Radius.sm,
   },
-  summaryLabel: { fontSize: 11, fontWeight: '800', color: '#FFF', letterSpacing: 0.6 },
-  // Chip "OFFLINE" — summary do fallback extractive tạo khi không tới được AI
+  summaryLabel: { fontSize: 11, fontFamily: Sans.bold, fontWeight: '800', color: '#FFF', letterSpacing: 0.7 },
+  summaryMethod: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    fontFamily: Sans.regular,
+    fontSize: 12,
+    lineHeight: 19,
+    color: Color.textMuted,
+  },
+  // Chip "OFFLINE" — summary do fallback extractive tạo khi chưa tải được bài
   offlineChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1141,7 +1307,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   },
   offlineChipText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: Sans.bold, fontWeight: '800',
     letterSpacing: 0.5,
     color: Color.textMuted,
   },
@@ -1160,26 +1326,26 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   speakBtnOn: { backgroundColor: Color.hot, borderColor: Color.hot },
   // Chưa summarize xong → nút Nghe_DISABLED (vẫn thấy vị trí nút, không mất layout)
   speakBtnDisabled: { opacity: 0.45 },
-  speakBtnText: { fontSize: Font.tiny, fontWeight: '700', color: Color.hot },
+  speakBtnText: { fontSize: Font.tiny, fontFamily: Sans.bold, fontWeight: '700', color: Color.hot },
   speakBtnTextOn: { color: '#FFF' },
   // Thanh tiến trình đọc (hiện khi đang Nghe) — mảnh, nằm ngay dưới hàng badge
   speakProgress: {
     height: 3,
-    marginHorizontal: 16,
-    marginBottom: 12,
+    marginHorizontal: 20,
+    marginBottom: 16,
     borderRadius: 2,
     backgroundColor: Color.hotSoft,
     overflow: 'hidden',
   },
   speakProgressFill: { height: '100%', backgroundColor: Color.hot },
-  cardImg: { height: 200, backgroundColor: Color.skeleton },
-  summaryBody: { marginHorizontal: 14 },
-  summaryLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginHorizontal: 14, marginBottom: 14 },
-  summaryLoadingText: { fontSize: Font.body, color: Color.textMuted },
+  cardImg: { height: 260, backgroundColor: Color.skeleton },
+  summaryBody: { marginHorizontal: 20 },
+  summaryLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, marginHorizontal: 18, marginBottom: 16 },
+  summaryLoadingText: { fontSize: Font.body, fontFamily: Sans.regular, color: Color.textMuted },
   // Hàng trạng thái "đang hoàn thiện" DƯỚI thân bài — đứng cạnh badge trên
   // hàng summaryLabelRow sẽ chen mất chỗ của nút Nghe
   summarizingFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -6, marginBottom: 14 },
-  summarizingFootText: { fontSize: Font.caption, color: Color.textMuted, fontStyle: 'italic' },
+  summarizingFootText: { fontSize: Font.caption, fontFamily: Sans.regular, color: Color.textMuted, fontStyle: 'italic' },
   summaryErr: {
     backgroundColor: Color.dangerSoft,
     padding: 12,
@@ -1187,33 +1353,35 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginHorizontal: 14,
-    marginBottom: 14,
+    marginHorizontal: 18,
+    marginBottom: 16,
   },
-  summaryErrText: { fontSize: Font.body, color: Color.danger, flex: 1 },
-  retryLink: { fontSize: Font.body, fontWeight: '700', color: Color.hot, marginLeft: 12 },
-  summaryText: { fontSize: 15, lineHeight: 26, color: Color.text, marginBottom: 14 },
+  summaryErrText: { fontSize: Font.body, fontFamily: Sans.regular, color: Color.danger, flex: 1 },
+  retryLink: { fontSize: Font.body, fontFamily: Sans.bold, fontWeight: '700', color: Color.hot, marginLeft: 12 },
+  summaryText: { fontFamily: Sans.regular, fontSize: 15, lineHeight: 26, color: Color.text, marginBottom: 16 },
   // TL;DR — dòng đầu của summary có cấu trúc: nền tint nổi bật, đậm hơn thân bài
   tldrPara: {
+    fontFamily: Sans.bold,
     fontSize: 16,
     lineHeight: 25,
     fontWeight: '700',
     color: Color.text,
     backgroundColor: Color.hotSoft,
     borderRadius: Radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    marginBottom: 16,
   },
   // Đoạn mở đầu (lead) — đậm hơn, vạch cam bên trái kiểu báo giấy
   summaryLead: {
-    fontSize: 17,
+    fontFamily: Sans.medium,
+    fontSize: 16,
     lineHeight: 27,
     fontWeight: '600',
     color: Color.text,
     borderLeftWidth: 3,
     borderLeftColor: Color.hot,
-    paddingLeft: 10,
+    paddingLeft: 12,
     paddingVertical: 2,
   },
   // Điểm nhấn gạch đầu dòng — dot màu thay vì ô nền, thoáng và sạch hơn
@@ -1233,15 +1401,17 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    minHeight: 36,
     paddingVertical: 7,
     paddingHorizontal: 14,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: Color.border,
     backgroundColor: Color.surfaceAlt,
-    marginBottom: 14,
+    marginTop: 2,
+    marginBottom: 16,
   },
-  copyInlineText: { fontSize: Font.caption, fontWeight: '600', color: Color.textSecondary },
+  copyInlineText: { fontSize: Font.caption, fontFamily: Sans.medium, fontWeight: '600', color: Color.textSecondary },
   // Ảnh/video đan xen trong khung tóm tắt — tỉ lệ 16:9 theo ảnh báo gốc
   imgWrap: { marginBottom: 14 },
   blockImg: {
@@ -1268,13 +1438,13 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   videoPlayRow: { flexDirection: 'row', alignItems: 'center', gap: 6, margin: 9 },
   videoPlay: {
     fontSize: Font.caption,
-    fontWeight: '600',
+    fontFamily: Sans.medium, fontWeight: '600',
     color: Color.accent,
   },
   sourceRow: {
-    marginHorizontal: 14,
-    marginBottom: 14,
-    paddingTop: 10,
+    marginHorizontal: 20,
+    marginBottom: 18,
+    paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: Color.border,
     flexDirection: 'row',
@@ -1282,8 +1452,8 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     alignItems: 'center',
   },
   sourceTextRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, marginRight: 8 },
-  sourceName: { fontSize: Font.caption, fontWeight: '700', color: Color.primary },
-  sourceDate: { fontSize: Font.caption, color: Color.textMuted },
+  sourceName: { fontSize: Font.caption, fontFamily: Sans.bold, fontWeight: '700', color: Color.hot },
+  sourceDate: { fontSize: Font.caption, fontFamily: Sans.regular, color: Color.textMuted },
   // Related — section header cùng ngôn ngữ Home
   relatedSection: {
     borderTopWidth: 1,
@@ -1292,13 +1462,14 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   },
   sectionRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10 },
   sectionBar: { width: 4, height: 16, borderRadius: 2, marginRight: 8 },
-  sectionTitle: { fontSize: 13, fontWeight: '800', letterSpacing: 0.6 },
+  sectionTitle: { fontSize: 13, fontFamily: Sans.bold, fontWeight: '800', letterSpacing: 0.6 },
   sectionLine: { flex: 1, height: 1, backgroundColor: Color.border, marginLeft: 10 },
   // Floating bar
   floatBar: {
     position: 'absolute',
-    left: 16,
-    right: 16,
+    width: '92%',
+    maxWidth: 720,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 6,
@@ -1319,7 +1490,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     backgroundColor: Color.accent,
     gap: 6,
   },
-  fabLabel: { fontSize: Font.caption, fontWeight: '700', color: '#FFF' },
+  fabLabel: { fontSize: Font.caption, fontFamily: Sans.bold, fontWeight: '700', color: '#FFF' },
   fabRound: {
     width: 44,
     height: 44,
@@ -1351,7 +1522,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
     flex: 1,
     color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: Sans.bold, fontWeight: '700',
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
@@ -1419,7 +1590,7 @@ const makeStyles = (Color: Palette) => StyleSheet.create({
   imageModalActionText: {
     color: '#FFF',
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: Sans.medium, fontWeight: '600',
   },
 });
 

@@ -1,35 +1,16 @@
-// Helpers + mock network cho E2E.
-//
-// App web gọi mạng qua proxy localhost:3001 (feeds, videos, jina, llm)
-// và provider AI (openrouter/google đi thẳng). Route TẤT CẢ về mock để test
-// không phụ thuộc mạng thật — muốn test mạng thật thì bỏ comment các dòng
-// route() tương ứng.
-//
-// LƯU Ý: KHÔNG mock AsyncStorage — app tự persist qua localStorage, test đọc
-// localStorage để kiểm chứng (đó mới là hành vi thật).
+// Feed, article and media fixtures. Summary content is selected locally.
+// Storage uses the real browser persistence mechanism.
 
 import { expect, type Page } from '@playwright/test';
 
-export const SECRET_CODE = '016527';
-
 // ---- Storage keys (phải khớp src/services/storage.ts) ----
 export const KEYS = {
-  provider: '@llm_provider',
-  apiKey: '@nim_key',
-  openaiKey: '@openai_key',
-  anthropicKey: '@anthropic_key',
-  googleKey: '@google_key',
-  openrouterKey: '@openrouter_key',
-  customKey: '@custom_key',
-  customBaseUrl: '@custom_base_url',
-  model: '@nim_model',
   saved: '@saved_articles',
   history: '@summary_history',
   feedsCache: '@feeds_cache',
   feedsCacheTime: '@feeds_cache_time',
   pitch: '@voice_pitch',
   rate: '@voice_rate',
-  aiUnlocked: '@ai_unlocked',
   themeMode: '@theme_mode',
   notifEnabled: '@notif_enabled',
   notifTimes: '@notif_times',
@@ -93,7 +74,38 @@ export const FEED_ITEMS = [
     source: 'VietNamNet',
     category: 'Việt Nam',
   },
+  // Video — nuôi dải VIDEO. Thêm vào CUỐI để chỉ số FEED_ITEMS[0..5] mà các test
+  // khác đang dùng không xê dịch.
+  {
+    title: 'Toàn cảnh vụ cháy lớn ở trung tâm thành phố',
+    link: 'https://video.vnexpress.net/tin-tuc/toan-canh-vu-chay-1001.html',
+    description: 'Hiện trường vụ cháy nhìn từ trên cao.',
+    pubDate: new Date().toISOString(),
+    image: 'https://placehold.co/600x400/1D4ED8/FFFFFF?text=Video+1',
+    source: 'VNExpress',
+    category: 'Video',
+  },
+  {
+    title: 'Khoảnh khắc bàn thắng phút bù giờ',
+    link: 'https://video.vnexpress.net/the-thao/khoanh-khac-ban-thang-1002.html',
+    description: 'Pha lập công ở phút thứ 94.',
+    pubDate: new Date().toISOString(),
+    image: 'https://placehold.co/600x400/0891B2/FFFFFF?text=Video+2',
+    source: 'VNExpress',
+    category: 'Video',
+  },
+  {
+    title: 'Hướng dẫn sơ cứu khi bị bỏng',
+    link: 'https://video.vnexpress.net/suc-khoe/huong-dan-so-cuu-1003.html',
+    description: 'Các bước sơ cứu đúng cách tại nhà.',
+    pubDate: new Date().toISOString(),
+    image: 'https://placehold.co/600x400/16A34A/FFFFFF?text=Video+3',
+    source: 'VNExpress',
+    category: 'Video',
+  },
 ];
+
+export const VIDEO_ITEMS = FEED_ITEMS.filter((i) => i.category === 'Video');
 
 export const JINA_MARKDOWN = `Title: Bài báo mẫu
 URL Source: https://example.com/bai-1
@@ -107,7 +119,7 @@ Markdown Content:
 
 Đoạn kết luận tóm tắt lại ý nghĩa của sự kiện và triển vọng trong thời gian tới cho người đọc.`;
 
-export const SUMMARY_TEXT = 'Tóm tắt AI giả lập: giá vàng tăng mạnh do nhu cầu trú ẩn an toàn.';
+export const SUMMARY_TEXT = 'Đoạn mở đầu của bài báo mẫu dùng cho test E2E.';
 
 // ---- Mock network ----
 export async function mockNetwork(page: Page) {
@@ -127,6 +139,14 @@ export async function mockNetwork(page: Page) {
     return route.continue();
   });
 
+  // Supabase Auth: mock lỗi đăng nhập để test form + thông báo tiếng Việt mà không
+  // tạo tài khoản thật hoặc phụ thuộc mạng ngoài trong E2E.
+  await page.route('**/auth/v1/token**', (route) => route.fulfill({
+    status: 400,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 'invalid_credentials', message: 'Invalid login credentials' }),
+  }));
+
   // RSS qua proxy: /api/fetch?url=... — app gán source/category theo feed được yêu
   // cầu, nên mock phải trả item khác nhau theo category của feed (URL RSS chứa
   // keyword). Nếu không, dedup theo link sẽ dồn mọi item về feed đầu tiên.
@@ -134,6 +154,13 @@ export async function mockNetwork(page: Page) {
   const feedSeq = new Map<string, number>();
   await page.route('**/api/fetch?url=**', async (route) => {
     const reqUrl = decodeURIComponent(route.request().url());
+    const target = new URL(route.request().url()).searchParams.get('url') || '';
+    if (/^https:\/\/example\.com\/bai-/.test(target)) {
+      const body = '<html><body><div class="article-body"><p>Đoạn mở đầu của bài báo mẫu dùng cho test E2E. Nội dung đủ dài để vượt ngưỡng tối thiểu hai trăm ký tự mà hàm fetchArticleContent yêu cầu, nhờ đó khối nội dung được parse thành công.</p><p>Số liệu tăng trưởng đạt 12 phần trăm trong quý vừa qua theo báo cáo của cơ quan chức năng.</p><p>Chuyên gia cho biết số liệu còn cần được kiểm chứng trước khi công bố kết luận chính thức.</p></div></body></html>';
+      await route.fulfill({status: 200, contentType: 'text/html', body});
+      return;
+    }
+
     // Keyword trong URL RSS → category của feed
     let cat: string = 'Việt Nam';
     if (/so-hoa|cong-nghe|genk/i.test(reqUrl)) cat = 'Công nghệ';
@@ -141,6 +168,9 @@ export async function mockNetwork(page: Page) {
     else if (/the-thao|bongda/i.test(reqUrl)) cat = 'Thể thao';
     else if (/giai-tri|kenh14/i.test(reqUrl)) cat = 'Giải trí';
     else if (/suc-khoe|hellobacsi|suckhoedoisong/i.test(reqUrl)) cat = 'Sức khỏe';
+    // Đặt SAU cùng: URL feed video là video.vnexpress.net/rss/tin-moi-nhat.rss,
+    // không đụng các nhánh trên, nhưng để cuối cho chắc.
+    else if (/video/i.test(reqUrl)) cat = 'Video';
 
     // Feed "nổi bật" (noi-bat): trả bài featured để hero/ticker nhận item0
     let items = /noi-bat/i.test(reqUrl)
@@ -160,9 +190,13 @@ export async function mockNetwork(page: Page) {
     const feedNo = feedSeq.get(rssUrl) ?? feedSeq.size;
     feedSeq.set(rssUrl, feedNo);
     const pick = items[feedNo % items.length];
-    const perFeed = /noi-bat/i.test(reqUrl)
-      ? items
-      : [{ ...pick, link: `${pick.link}?f=${feedNo}` }];
+    // Feed Video trả HẾT item như feed nổi bật — có vậy dải VIDEO mới có nhiều
+    // thẻ để test. Các feed khác vẫn 1 item/feed (xem comment MỖI FEED NHẬN MỘT
+    // ITEM RIÊNG ở trên).
+    const perFeed =
+      /noi-bat/i.test(reqUrl) || cat === 'Video'
+        ? items
+        : [{ ...pick, link: `${pick.link}?f=${feedNo}` }];
     const xml = `<?xml version="1.0"?><rss><channel>${perFeed.map((i) => `
       <item>
         <title><![CDATA[${i.title}]]></title>
@@ -178,31 +212,6 @@ export async function mockNetwork(page: Page) {
   // Nội dung bài viết: /api/jina?url=...
   await page.route('**/api/jina**', (route) =>
     route.fulfill({ status: 200, contentType: 'text/markdown', body: JINA_MARKDOWN }),
-  );
-
-  // LLM qua proxy (nvidia/openai/anthropic/custom): POST /api/llm
-  await page.route('**/api/llm', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
-    }),
-  );
-
-  // Provider đi thẳng (openrouter/google có CORS native)
-  await page.route('**/openrouter.ai/**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
-    }),
-  );
-  await page.route('**/generativelanguage.googleapis.com/**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ choices: [{ message: { content: SUMMARY_TEXT } }] }),
-    }),
   );
 
   // HLS segment (nếu video stream được phát) — chặn nhẹ, tránh treo
@@ -228,7 +237,10 @@ export async function clearAppStorage(page: Page) {
 // Dùng text trong tablist thay vì role=button: trên màn stack (Article) các nút
 // tab mất role button nên getByRole('button') không khớp.
 export async function gotoTab(page: Page, label: 'Trang chủ' | 'Lịch sử' | 'Đã lưu' | 'Cài đặt') {
-  await page.getByRole('tablist').getByText(label).first().click();
+  const tab = label === 'Trang chủ' ? 'Hôm nay' : (label === 'Đã lưu' || label === 'Lịch sử') ? 'Thư viện' : label;
+  await page.getByRole('tablist').getByText(tab, { exact: true }).first().click();
+  if (label === 'Lịch sử') await page.getByTestId('savedScreen').getByText('Lịch sử', { exact: true }).click();
+  if (label === 'Đã lưu' && await page.getByTestId('historyScreen').isVisible()) await page.getByTestId('historyScreen').getByText('Bài đã lưu', { exact: true }).click();
 }
 
 // ---- Mở modal tìm kiếm + nhập mã/từ khóa ----
@@ -242,20 +254,31 @@ export async function typeSearch(page: Page, text: string) {
 }
 
 // Nhập mã bí mật: fill rồi chờ custom alert (Modal), bấm OK, trả về message.
-export async function enterSecretCode(page: Page, code: string = SECRET_CODE) {
-  await typeSearch(page, code);
-  // Custom alert hiện message
-  const unlock = page.getByText('Đã mở khóa cấu hình AI trong Cài đặt');
-  const hide = page.getByText('Đã ẩn cấu hình AI trong Cài đặt');
-  await expect(unlock.or(hide)).toBeVisible({ timeout: 5000 });
-  const msg = (await unlock.isVisible()) ? 'Đã mở khóa cấu hình AI trong Cài đặt' : 'Đã ẩn cấu hình AI trong Cài đặt';
-  // Bấm OK để đóng alert
-  await page.getByText('OK', { exact: true }).click();
-  await expect(unlock.or(hide)).toBeHidden();
-  return msg;
+// Cuộn list cho tới khi thấy text rồi trả về locator.
+// FlatList ảo hoá: row ngoài viewport KHÔNG có trong DOM, nên getByText(...).click()
+// thẳng sẽ timeout dù bài có trong dữ liệu — chỉ phụ thuộc chiều cao dòng/độ dài feed.
+export async function scrollToText(page: Page, text: string, maxTries = 12) {
+  const loc = page.getByText(text).first();
+  for (let i = 0; i < maxTries; i++) {
+    if (await loc.isVisible().catch(() => false)) return loc;
+    await page.mouse.move(400, 500);
+    await page.mouse.wheel(0, 1200);
+    await page.waitForTimeout(250);
+  }
+  await expect(loc).toBeVisible(); // hết lượt → để Playwright báo lỗi rõ ràng
+  return loc;
 }
 
-// Chờ app load xong: skeleton biến mất, có bài hoặc empty state
-export async function waitForFeedLoaded(page: Page) {
+// Chờ app load xong: skeleton biến mất, có bài hoặc empty state.
+// App CHỈ fetch khi user bấm Làm mới (mount chỉ đọc cache) → helper bấm luôn
+// để có dữ liệu, rồi chờ dấu hiệu thật: một trendCard hoặc empty state.
+// refresh:false cho test mà ĐỐI TƯỢNG là "reload không được gọi mạng" — bấm Làm
+// mới ở đó sẽ tự tay tạo ra request mà test đang kiểm là không có.
+export async function waitForFeedLoaded(page: Page, opts: { refresh?: boolean } = {}) {
   await expect(page.getByLabel('Đang tải')).toBeHidden({ timeout: 30_000 });
+  if (opts.refresh === false) return; // caller tự chờ nội dung cache của nó
+  await page.getByLabel('Làm mới').click();
+  await expect(
+    page.getByTestId('feedCard').first().or(page.getByLabel('Không có bài báo')),
+  ).toBeVisible({ timeout: 30_000 });
 }

@@ -11,4 +11,4 @@ http.createServer((req, res) => {
   const ext = path.extname(file).toLowerCase();
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
   fs.createReadStream(file).pipe(res);
-}).listen(8087, () => console.log('static dist on 8087'));
+}).listen(8088, () => console.log('static dist on 8088'));

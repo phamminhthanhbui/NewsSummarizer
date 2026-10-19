@@ -9,64 +9,66 @@ process.on('uncaughtException', (err) => {
   throw err;
 });
 
+// anninhthudo.vn chỉ gửi leaf cert, thiếu GlobalSign intermediate.
+// Bổ sung CA công khai (hết hạn 6/2029); vẫn xác minh chain và hostname.
+const fs = require('fs');
+const path = require('path');
+const undici = require('undici');
+const extraCa = fs.readFileSync(path.join(__dirname, 'tls-extra-ca.pem'), 'utf8');
+// `ca:` thay thế root bundle mặc định, nên phải giữ lại các root của Node.
+const chainFixAgent = new undici.Agent({
+  connect: { ca: [extraCa, ...require('tls').rootCertificates] },
+});
+
+async function fetchTolerantChain(url, opts) {
+  try {
+    return await fetch(url, opts);
+  } catch (e) {
+    if (e?.cause?.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+      return undici.fetch(url, { ...opts, dispatcher: chainFixAgent });
+    }
+    throw e;
+  }
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-app.post('/api/llm', async (req, res) => {
-  const { url, headers, body, method } = req.body;
-
-  if (!url || !headers || !body) {
-    return res.status(400).json({ error: 'Missing required fields: url, headers, body' });
-  }
-
-  try {
-    const response = await fetch(url, {
-      method: method || 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    const ct = response.headers.get('content-type') || '';
-    // Stream (SSE): bơm thẳng từng chunk về client — chữ chạy dần thay vì chờ
-    // model sinh xong hết (giảm cảm giác chờ 2-5s xuống ~0.5s tới token đầu).
-    if (response.ok && body && body.stream && ct.includes('event-stream')) {
-      res.status(response.status);
-      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('X-Accel-Buffering', 'no');
-      const reader = response.body.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(Buffer.from(value));
-        }
-      } catch (e) { /* client đóng sớm */ }
-      return res.end();
-    }
-
-    const data = await response.text();
-
-    // Forward response headers
-    response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
-    });
-
-    // Log lỗi upstream (400/403/429...) kèm model + message để chẩn đoán
-    // "POST /api/llm 400" trong console client không nói lên model nào bị từ chối.
-    if (!response.ok) {
-      let upstreamModel = '';
-      try { upstreamModel = JSON.parse(req.body.body)?.model || ''; } catch { /* body không phải JSON */ }
-      console.warn(`/api/llm upstream ${response.status} model=${upstreamModel}: ${data.slice(0, 300)}`);
-    }
-
-    res.status(response.status).send(data);
-  } catch (error) {
-    console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Proxy request failed', message: error.message });
-  }
+// Public store/legal pages are served by the same HTTPS service as the proxy.
+// site-config.js is generated at request time so Render environment values are
+// available without baking local .env files into the Docker image.
+const publicDir = path.join(__dirname, '..', 'public');
+app.get('/site-config.js', (_req, res) => {
+  const config = {
+    supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL || '',
+    supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '',
+    supportEmail: process.env.EXPO_PUBLIC_SUPPORT_EMAIL || '',
+  };
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('application/javascript').send(`window.NS_PUBLIC_CONFIG = ${JSON.stringify(config)};\n`);
 });
+app.use(express.static(publicDir, { extensions: ['html'] }));
+
+// Production safety: every URL-taking endpoint is limited to publishers the app supports.
+// This prevents a public deployment from becoming a generic SSRF/open-proxy service.
+const NEWS_HOSTS = [
+  'vnexpress.net', 'tuoitre.vn', 'thanhnien.vn', 'vietnamnet.vn', 'dantri.com.vn',
+  'nld.com.vn', 'tienphong.vn', 'sggp.org.vn', 'cand.com.vn', 'anninhthudo.vn',
+  'baochinhphu.vn', 'baogiaothong.vn', 'genk.vn', 'cafebiz.vn', 'bongdaplus.vn',
+  'suckhoedoisong.vn', 'nhandan.vn', 'vtv.vn', 'vietnamplus.vn', 'congluan.vn',
+  'giaoducthoidai.vn', 'kenh14.vn', 'hellobacsi.com', 'soha.vn', 'znews.vn',
+  'kienthuc.net.vn', 'saostar.vn',
+];
+function isAllowedNewsUrl(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return NEWS_HOSTS.some((allowed) => host === allowed || host.endsWith('.' + allowed));
+  } catch { return false; }
+}
+app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // Generic fetch proxy — RSS feeds etc. Fetch phía server nên không dính CORS
 // của trình duyệt, thay proxy Vercel (api-proxy-liart-ten) hay 502.
@@ -77,8 +79,8 @@ const fetchCache = new Map(); // url -> { t, ct, body }
 
 app.get('/api/fetch', async (req, res) => {
   const url = req.query.url;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'Missing required query param: url' });
+  if (!url || typeof url !== 'string' || !isAllowedNewsUrl(url)) {
+    return res.status(400).json({ error: 'Missing or disallowed url' });
   }
   const hit = fetchCache.get(url);
   if (hit && Date.now() - hit.t < FETCH_CACHE_TTL) {
@@ -88,7 +90,7 @@ app.get('/api/fetch', async (req, res) => {
   try {
     // Upstream timeout 8s: RSS host treo/crawl chậm không được giữ request client
     // lâu — client đã tự fallback sang gọi thẳng nếu proxy không kịp trả.
-    const response = await fetch(url, {
+    const response = await fetchTolerantChain(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsSummarizer RSS reader)' },
       signal: AbortSignal.timeout(8000),
     });
@@ -202,8 +204,8 @@ function jinaFetchOnce(url) {
 
 app.get('/api/jina', async (req, res) => {
   const url = req.query.url;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'Missing required query param: url' });
+  if (!url || typeof url !== 'string' || !isAllowedNewsUrl(url)) {
+    return res.status(400).json({ error: 'Missing or disallowed url' });
   }
 
   const hit = jinaCache.get(url);
@@ -256,11 +258,11 @@ function extractStream(html) {
 
 app.get('/api/article-stream', async (req, res) => {
   const url = req.query.url;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'Missing required query param: url' });
+  if (!url || typeof url !== 'string' || !isAllowedNewsUrl(url)) {
+    return res.status(400).json({ error: 'Missing or disallowed url' });
   }
   try {
-    const response = await fetch(url, {
+    const response = await fetchTolerantChain(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36' },
       signal: AbortSignal.timeout(10000),
     });
@@ -270,7 +272,7 @@ app.get('/api/article-stream', async (req, res) => {
   }
 });
 
-const PORT = process.env.PROXY_PORT || 3001;
+const PORT = process.env.PORT || process.env.PROXY_PORT || 3001;
 app.listen(PORT, () => {
   console.log(`CORS Proxy running on http://localhost:${PORT}`);
 });
