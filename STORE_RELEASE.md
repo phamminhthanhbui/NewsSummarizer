@@ -6,7 +6,7 @@
 - Đăng ký, đăng nhập, quên mật khẩu, đặt lại mật khẩu, đăng xuất.
 - Google sign-in trên web (Firebase popup) và native Android/iOS (`@react-native-google-signin/google-signin`).
 - Apple sign-in đang tắt; có thể bật lại theo `FIREBASE_AUTH_SETUP.md` nếu cần cho App Store.
-- Xóa tài khoản trong app và trang web `public/delete-account.html`.
+- Xóa tài khoản qua trang web `public/delete-account.html` (nút xóa tài khoản trong app đã gỡ).
 - RevenueCat cho entitlement `plus`, mua/khôi phục/quản lý thuê bao.
 - Gắn RevenueCat App User ID với Firebase UID sau khi đăng nhập.
 - Gating mẫu: bản tin 10/15 phút dành cho Plus.

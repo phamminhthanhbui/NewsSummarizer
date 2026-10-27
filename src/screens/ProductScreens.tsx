@@ -310,10 +310,9 @@ function periodLabel(period: string | null) {
 
 export function AccountScreen({ navigation }: any) {
   const C = useTheme();
-  const { user, configured, signOut, deleteAccount, subscription, subscriptionLoading, subscriptionError, refreshSubscription } = useAuth();
+  const { user, configured, signOut, subscription, subscriptionLoading, subscriptionError, refreshSubscription } = useAuth();
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useFocusEffect(useCallback(() => { void refreshSubscription(); }, [refreshSubscription]));
 
@@ -322,14 +321,6 @@ export function AccountScreen({ navigation }: any) {
     try { await signOut(); }
     catch (e) { setError(authErrorMessage(e, 'Không thể đăng xuất.')); }
     finally { setBusy(''); }
-  };
-
-  const removeAccount = async () => {
-    if (!confirmDelete) { setConfirmDelete(true); return; }
-    setBusy('delete'); setError('');
-    try { await deleteAccount(); navigation.goBack(); }
-    catch (e) { setError(authErrorMessage(e, 'Không thể xóa tài khoản.')); }
-    finally { setBusy(''); setConfirmDelete(false); }
   };
 
   const plus = Boolean(user && !subscriptionLoading && subscription.active);
@@ -376,13 +367,6 @@ export function AccountScreen({ navigation }: any) {
 
       {user ? <Panel style={{ marginTop: 18 }}>
         <AccountRow icon="log-out-outline" title={busy === 'logout' ? 'Đang đăng xuất...' : 'Đăng xuất'} subtitle="Giữ tài khoản, thoát khỏi thiết bị này" onPress={busy ? undefined : logout} />
-        <View style={{ height: 1, backgroundColor: C.border }} />
-        <AccountRow danger icon="trash-outline" title={busy === 'delete' ? 'Đang xóa...' : confirmDelete ? 'Bấm lần nữa để xác nhận xóa' : 'Xóa tài khoản'} subtitle={confirmDelete ? 'Thao tác này không thể hoàn tác' : 'Xóa tài khoản đăng nhập; thuê bao cửa hàng cần hủy riêng'} onPress={busy ? undefined : removeAccount} />
-        {confirmDelete && plus ? <View style={{ marginTop: 12, padding: 13, borderRadius: Radius.sm, backgroundColor: C.dangerSoft }}>
-          <Text style={{ fontFamily: Sans.bold, color: C.danger, fontSize: 12, lineHeight: 19 }}>Plus vẫn có thể tiếp tục gia hạn sau khi xóa tài khoản.</Text>
-          <Text style={{ fontFamily: Sans.regular, color: C.textSecondary, fontSize: 11, lineHeight: 18, marginTop: 5 }}>Nếu bạn không muốn bị Apple/Google tính phí kỳ tiếp theo, hãy hủy thuê bao trong cửa hàng trước. Sau đó quay lại và bấm “Xóa tài khoản” lần nữa. Bạn vẫn có thể xóa ngay nếu muốn.</Text>
-          {subscription.managementURL ? <View style={{ marginTop: 10 }}><Action label="Quản lý thuê bao trước" icon="open-outline" onPress={() => Linking.openURL(subscription.managementURL!)} /></View> : null}
-        </View> : null}
       </Panel> : null}
       {error ? <Text style={{ fontFamily: Sans.regular, color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
     </Page>

@@ -4,7 +4,8 @@
 
 - **Firebase là provider mặc định** (`EXPO_PUBLIC_AUTH_PROVIDER=firebase`).
 - Đã có đầy đủ: đăng ký, đăng nhập email/mật khẩu, xác minh email, gửi lại xác minh,
-  quên mật khẩu, đăng xuất và xóa tài khoản trong app.
+  quên mật khẩu và đăng xuất trong app. Nút xóa tài khoản trong app đã gỡ; luồng xóa
+  tài khoản nằm ở trang web `public/delete-account.html`.
 - **Google web:** hoạt động qua popup của Firebase sau khi bật Google provider.
 - **Google native:** đã tích hợp `@react-native-google-signin/google-signin` cho
   Android/iOS. Nút Google chỉ hiện trên native khi đã điền OAuth client ID.
