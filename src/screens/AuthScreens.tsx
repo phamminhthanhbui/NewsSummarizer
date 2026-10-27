@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Linking, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Page, Heading, Action, Panel } from '../components/PremiumUI';
@@ -274,7 +274,7 @@ export function RegisterScreen({ navigation }: any) {
   const C = useTheme();
   const {
     configured, signUp, resendVerification, signInWithGoogle, signInWithApple,
-    googleSignInAvailable, appleSignInAvailable,
+    googleSignInAvailable, appleSignInAvailable, session,
   } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -284,9 +284,14 @@ export function RegisterScreen({ navigation }: any) {
   const [resending, setResending] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (awaitingVerification && session) leaveAuthScreen(navigation);
+  }, [awaitingVerification, session, navigation]);
 
   const clearFeedback = () => {
     if (error) setError('');
@@ -333,7 +338,10 @@ export function RegisterScreen({ navigation }: any) {
     try {
       const result = await signUp(normalizeEmail(email), password, name);
       if (result.session) leaveAuthScreen(navigation);
-      else setMessage(`Đã gửi liên kết xác minh tới ${normalizeEmail(email)}. Mở email để kích hoạt, sau đó quay lại đăng nhập. Nếu chưa thấy, hãy kiểm tra Spam hoặc bấm Gửi lại email xác minh bên dưới.`);
+      else {
+        setAwaitingVerification(true);
+        setMessage(`Đã gửi liên kết xác minh tới ${normalizeEmail(email)}. Mở liên kết trong email để kích hoạt — ứng dụng sẽ tự đăng nhập lại và mở khóa tài khoản ngay. Bạn vẫn có thể đọc tin ở chế độ khách trong lúc chờ. Nếu chưa thấy email, hãy kiểm tra Spam hoặc bấm Gửi lại email xác minh bên dưới.`);
+      }
     } catch (e) {
       setError(authErrorMessage(e, 'Không thể tạo tài khoản.'));
     } finally {

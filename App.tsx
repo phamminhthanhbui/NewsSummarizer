@@ -200,7 +200,7 @@ function Tabs() {
 
 function Root() {
   const C = useTheme();
-  const { consumeAuthUrl } = useAuth();
+  const { consumeAuthUrl, refreshSession } = useAuth();
   const { showAlert } = useAlert();
 
   useEffect(() => {
@@ -224,12 +224,15 @@ function Root() {
         const result = await consumeAuthUrl(url);
         if (!alive) return;
         if (result.verified) {
+          const next = await refreshSession();
           showAlert({
             type: 'success',
             title: 'Đã xác minh email',
-            message: 'Địa chỉ email đã được xác minh. Bạn có thể đăng nhập bằng email và mật khẩu vừa đặt.',
+            message: next
+              ? 'Địa chỉ email đã được xác minh. Chào mừng bạn trở lại NewsSummarizer.'
+              : 'Địa chỉ email đã được xác minh. Bạn có thể đăng nhập bằng email và mật khẩu vừa đặt.',
           });
-          if (ref.isReady()) ref.navigate('Login');
+          if (ref.isReady()) ref.navigate(next ? 'Main' : 'Login');
           return;
         }
         if (!result.recovery) return;
@@ -245,7 +248,7 @@ function Root() {
     void Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', ({ url }) => { void handle(url); });
     return () => { alive = false; sub.remove(); };
-  }, [consumeAuthUrl, showAlert]);
+  }, [consumeAuthUrl, refreshSession, showAlert]);
   return (
     <>
       <StatusBar style={C.bg === '#0D1420' ? 'light' : 'dark'} />

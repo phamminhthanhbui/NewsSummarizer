@@ -149,13 +149,8 @@ export function onAuthChange(callback: (session: FirebaseSession | null) => void
 export async function signUp(email: string, password: string, name: string) {
   const auth = client();
   const credential = await createUserWithEmailAndPassword(auth, normalizeEmail(email), password);
-  try {
-    if (name.trim()) await updateProfile(credential.user, { displayName: name.trim() });
-    await sendEmailVerification(credential.user, actionCodeSettings('verify'));
-  } finally {
-    // Keep accounts pending until the user confirms their address.
-    await firebaseSignOut(auth);
-  }
+  if (name.trim()) await updateProfile(credential.user, { displayName: name.trim() });
+  await sendEmailVerification(credential.user, actionCodeSettings('verify'));
   return { session: null, user: convert(credential.user)?.user || null };
 }
 

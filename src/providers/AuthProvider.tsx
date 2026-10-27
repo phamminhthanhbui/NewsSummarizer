@@ -45,6 +45,7 @@ type AuthContextValue = {
   subscriptionLoading: boolean;
   subscriptionError: string;
   refreshSubscription: () => Promise<void>;
+  refreshSession: typeof refreshSession;
   googleSignInAvailable: boolean;
   appleSignInAvailable: boolean;
   signIn: typeof signIn;
@@ -158,6 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     subscriptionLoading: membershipLoading,
     subscriptionError,
     refreshSubscription,
+    refreshSession,
     googleSignInAvailable,
     appleSignInAvailable,
     signIn, signInWithGoogle, signInWithApple, signUp, signOut,
