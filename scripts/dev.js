@@ -35,7 +35,15 @@ const startExpo = () => {
   // lạnh lại từ đầu — máy kết nối khi đang build, bundle mới xong CLI đẩy
   // xuống → app tự reload ngay sau khi render xong lần đầu. Khi cần clear
   // cache (sửa native/config/dep) thì chạy tay: npx expo start --clear
-  const expo = spawn('npx', ['expo', 'start', '--port', '8088'], { stdio: 'inherit', shell: true });
+  // EXPO_OFFLINE=1: bỏ check version qua api.expo.dev khi start — response
+  // đôi lúc bị lỗi (SyntaxError JSON) làm chết dev server. Muốn validate
+  // dependency version thì chạy tay: npx expo start (không EXPO_OFFLINE).
+  // Lệnh 1 chuỗi (không truyền mảng args + shell:true) để tránh DEP0190.
+  const expo = spawn('npx expo start --port 8088', {
+    stdio: 'inherit',
+    shell: true,
+    env: { ...process.env, EXPO_OFFLINE: '1' },
+  });
   expo.on('exit', stop);
   });
 };

@@ -22,16 +22,16 @@ const platform = platformArg ? platformArg.split('=')[1] : 'all';
 if (!['all', 'ios', 'android'].includes(platform)) problems.push(`Unknown platform: ${platform}`);
 const required = [
   'EXPO_PUBLIC_PROXY_URL',
-  'EXPO_PUBLIC_SUPABASE_URL',
-  'EXPO_PUBLIC_SUPABASE_ANON_KEY',
-  'EXPO_PUBLIC_AUTH_REDIRECT_URL',
-  'EXPO_PUBLIC_PASSWORD_RESET_URL',
   'EXPO_PUBLIC_PRIVACY_URL',
   'EXPO_PUBLIC_TERMS_URL',
   'EXPO_PUBLIC_SUPPORT_URL',
   'EXPO_PUBLIC_SUPPORT_EMAIL',
   'EXPO_PUBLIC_DELETE_ACCOUNT_URL',
 ];
+const authProvider = (env.EXPO_PUBLIC_AUTH_PROVIDER || 'firebase').trim().toLowerCase();
+if (authProvider === 'supabase') required.push('EXPO_PUBLIC_SUPABASE_URL','EXPO_PUBLIC_SUPABASE_ANON_KEY','EXPO_PUBLIC_AUTH_REDIRECT_URL','EXPO_PUBLIC_PASSWORD_RESET_URL');
+else if (authProvider === 'firebase') required.push('EXPO_PUBLIC_FIREBASE_API_KEY','EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN','EXPO_PUBLIC_FIREBASE_PROJECT_ID','EXPO_PUBLIC_FIREBASE_APP_ID');
+else problems.push('EXPO_PUBLIC_AUTH_PROVIDER must be firebase or supabase');
 if (platform !== 'android') required.push('EXPO_PUBLIC_REVENUECAT_IOS_KEY');
 if (platform !== 'ios') required.push('EXPO_PUBLIC_REVENUECAT_ANDROID_KEY');
 for (const key of required) if (!env[key]) problems.push(`${key} is missing in .env`);
@@ -41,7 +41,7 @@ if (env.EXPO_PUBLIC_SUPABASE_URL && !env.EXPO_PUBLIC_SUPABASE_URL.startsWith('ht
 if (env.EXPO_PUBLIC_REVENUECAT_IOS_KEY && !env.EXPO_PUBLIC_REVENUECAT_IOS_KEY.startsWith('appl_')) problems.push('EXPO_PUBLIC_REVENUECAT_IOS_KEY does not look like an iOS public SDK key');
 if (env.EXPO_PUBLIC_REVENUECAT_ANDROID_KEY && !env.EXPO_PUBLIC_REVENUECAT_ANDROID_KEY.startsWith('goog_')) problems.push('EXPO_PUBLIC_REVENUECAT_ANDROID_KEY does not look like an Android public SDK key');
 for (const [key, value] of Object.entries(env)) {
-  if (key.startsWith('EXPO_PUBLIC_') && /YOUR_PROJECT|XXXXXXXX|api\.example\.com|app\.example\.com|you@example\.com/i.test(String(value || ''))) problems.push(`${key} still contains a placeholder value`);
+  if (key.startsWith('EXPO_PUBLIC_') && /YOUR_|YOUR_PROJECT|XXXXXXXX|api\.example\.com|app\.example\.com|you@example\.com/i.test(String(value || ''))) problems.push(`${key} still contains a placeholder value`);
 }
 
 if (!app.ios?.bundleIdentifier) problems.push('expo.ios.bundleIdentifier is missing');
@@ -54,6 +54,9 @@ for (const key of ['EXPO_PUBLIC_PRIVACY_URL', 'EXPO_PUBLIC_TERMS_URL', 'EXPO_PUB
 }
 if (env.EXPO_PUBLIC_AUTH_REDIRECT_URL && !env.EXPO_PUBLIC_AUTH_REDIRECT_URL.startsWith('newssummarizer://') && !env.EXPO_PUBLIC_AUTH_REDIRECT_URL.startsWith('https://')) problems.push('EXPO_PUBLIC_AUTH_REDIRECT_URL must use the app scheme or HTTPS');
 if (env.EXPO_PUBLIC_PASSWORD_RESET_URL && !env.EXPO_PUBLIC_PASSWORD_RESET_URL.startsWith('newssummarizer://') && !env.EXPO_PUBLIC_PASSWORD_RESET_URL.startsWith('https://')) problems.push('EXPO_PUBLIC_PASSWORD_RESET_URL must use the app scheme or HTTPS');
+if (authProvider === 'firebase' && env.EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED === 'true' && !app.ios?.usesAppleSignIn) problems.push('expo.ios.usesAppleSignIn must be true when Sign in with Apple is enabled');
+if (env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID && !env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID.endsWith('.apps.googleusercontent.com')) problems.push('EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID must end with .apps.googleusercontent.com');
+if (env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID && !env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID.endsWith('.apps.googleusercontent.com')) problems.push('EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID must end with .apps.googleusercontent.com');
 if (env.EXPO_PUBLIC_SUPPORT_EMAIL && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(env.EXPO_PUBLIC_SUPPORT_EMAIL)) problems.push('EXPO_PUBLIC_SUPPORT_EMAIL must be a valid email address');
 if (app.ios?.bundleIdentifier && app.ios.bundleIdentifier !== app.ios.bundleIdentifier.toLowerCase()) problems.push('iOS bundleIdentifier should be lowercase');
 if (app.android?.package && app.android.package !== app.android.package.toLowerCase()) problems.push('Android package should be lowercase');

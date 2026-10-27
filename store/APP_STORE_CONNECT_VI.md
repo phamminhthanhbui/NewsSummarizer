@@ -15,13 +15,13 @@
 - Account deletion: `https://<render-domain>/delete-account.html`
 
 ## App Review notes
-Ứng dụng có thể dùng ở chế độ khách. Tài khoản email/password dùng Supabase để giữ quyền lợi Plus giữa các thiết bị. Nếu reviewer cần kiểm tra tài khoản, tạo một tài khoản test riêng trong Supabase và điền credential chỉ trong App Store Connect. Không đưa credential test vào source code.
+Ứng dụng có thể dùng ở chế độ khách. Tài khoản email/password dùng Firebase để giữ quyền lợi Plus giữa các thiết bị. Nếu reviewer cần kiểm tra tài khoản, tạo một tài khoản test riêng trong Firebase và điền credential chỉ trong App Store Connect. Không đưa credential test vào source code.
 
 Vị trí là tùy chọn và chỉ dùng để hiển thị thời tiết/khu vực. Thông báo là tùy chọn và dùng cho bản tin theo giờ người dùng chọn. Ứng dụng không dùng quảng cáo hoặc tracking trong phiên bản hiện tại.
 
 ## App Privacy — dữ liệu cần rà soát khi khai báo
 - Contact Info: email; tên hiển thị nếu người dùng cung cấp.
-- Identifiers: Supabase user ID / RevenueCat App User ID.
+- Identifiers: Firebase UID / RevenueCat App User ID.
 - Purchases: trạng thái thuê bao Plus được Apple/RevenueCat xử lý.
 - Location: chỉ khi người dùng cấp quyền để lấy thời tiết/khu vực.
 - User Content / Usage Data: bài lưu, lịch sử đọc và lựa chọn chủ đề hiện chủ yếu lưu cục bộ; xác minh lại trước khi khai báo nếu logic thay đổi.

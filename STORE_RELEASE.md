@@ -2,12 +2,13 @@
 
 ## Đã chuẩn bị trong source
 
-- Email/password auth bằng Supabase, session persist trên thiết bị.
+- Email/password auth bằng Firebase, session persist trên thiết bị.
 - Đăng ký, đăng nhập, quên mật khẩu, đặt lại mật khẩu, đăng xuất.
+- Google sign-in trên web (Firebase popup) và native Android/iOS (`@react-native-google-signin/google-signin`).
+- Apple sign-in đang tắt; có thể bật lại theo `FIREBASE_AUTH_SETUP.md` nếu cần cho App Store.
 - Xóa tài khoản trong app và trang web `public/delete-account.html`.
-- Deep link `newssummarizer://auth/...` cho xác nhận/khôi phục tài khoản.
 - RevenueCat cho entitlement `plus`, mua/khôi phục/quản lý thuê bao.
-- Gắn RevenueCat App User ID với Supabase user id sau khi đăng nhập.
+- Gắn RevenueCat App User ID với Firebase UID sau khi đăng nhập.
 - Gating mẫu: bản tin 10/15 phút dành cho Plus.
 - Privacy Policy, Terms, Support và Account Deletion pages trong `public/`.
 - Proxy production phục vụ luôn các trang public/legal trên cùng một HTTPS domain.
@@ -22,18 +23,19 @@
 ## Cần thông tin/tài khoản thật trước khi có thể submit
 
 1. Đăng nhập Render và deploy Blueprint `render.yaml`; sau deploy lấy domain HTTPS thật rồi điền `EXPO_PUBLIC_PROXY_URL`, Privacy/Terms/Support/Delete URLs.
-2. Supabase Auth đã nối bằng public URL/publishable key. Còn deploy Edge Function `delete-account` (máy hiện chưa có `SUPABASE_ACCESS_TOKEN`).
-3. Trong Supabase Auth URL Configuration, xác nhận có `newssummarizer://auth/callback` và `newssummarizer://auth/reset`.
-4. Tạo app iOS trong RevenueCat, entitlement `plus`, Offering mặc định và package tháng/năm; điền `EXPO_PUBLIC_REVENUECAT_IOS_KEY`.
-5. Tạo Auto-Renewable Subscription tương ứng trong App Store Connect rồi liên kết RevenueCat.
-6. Điền email hỗ trợ thật vào Render/EAS environment; các trang Privacy/Terms/Support/Delete đã được server phục vụ sẵn.
-7. Đăng nhập EAS (`npx eas-cli login`); máy hiện chưa đăng nhập EAS.
-8. Apple: cần Apple Developer + App Store Connect app record cho bundle ID `com.autoship.newssummarizer`.
-9. Khi làm Google Play sau này: tạo Android RevenueCat key + Play Console app record.
+2. Firebase Auth đã nối bằng public Web App config; bật Email/Password và Google trong Firebase Console.
+3. Tạo Google OAuth clients (Web, Android với SHA-1, iOS) và điền `EXPO_PUBLIC_GOOGLE_*` theo `FIREBASE_AUTH_SETUP.md`. Apple đang tắt; chỉ bật lại nếu có Apple Developer account.
+4. (Chỉ khi dùng Supabase dự phòng) thay URL/key còn sống và deploy Edge Function `delete-account`.
+5. Tạo app iOS trong RevenueCat, entitlement `plus`, Offering mặc định và package tháng/năm; điền `EXPO_PUBLIC_REVENUECAT_IOS_KEY`.
+6. Tạo Auto-Renewable Subscription tương ứng trong App Store Connect rồi liên kết RevenueCat.
+7. Điền email hỗ trợ thật vào Render/EAS environment; các trang Privacy/Terms/Support/Delete đã được server phục vụ sẵn.
+8. Đăng nhập EAS (`npx eas-cli login`); máy hiện chưa đăng nhập EAS.
+9. Apple: cần Apple Developer + App Store Connect app record cho bundle ID `com.autoship.newssummarizer`.
+10. Khi làm Google Play sau này: tạo Android RevenueCat key + Play Console app record.
 
 ## Biến môi trường production
 
-Sao chép `.env.example` thành `.env` hoặc cấu hình EAS environment secrets/public vars tương ứng. Không đưa Supabase service-role key hay RevenueCat secret key vào app.
+Sao chép `.env.example` thành `.env` hoặc cấu hình EAS environment secrets/public vars tương ứng. Không đưa Firebase service-account key, Supabase service-role key hay RevenueCat secret key vào app.
 
 ## Kiểm tra trước build
 

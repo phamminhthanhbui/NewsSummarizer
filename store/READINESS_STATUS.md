@@ -1,7 +1,7 @@
 # App Store readiness — 14/10/2026
 
 ## PASS
-- Supabase Email Auth endpoint hoạt động và app đã nối public URL/publishable key hiện có trên máy.
+- Firebase Email/Password Auth hoạt động; app đã nối public Web App config hiện có trên máy.
 - Login/Register mobile smoke test: pass ở viewport 360×780.
 - `npx expo install --check`: dependencies up to date.
 - `npx expo-doctor`: 18/18 checks passed.
@@ -15,8 +15,9 @@
 
 ## BLOCKED BY EXTERNAL ACCOUNT / REAL VALUES
 - Render chưa deploy: chưa có public HTTPS domain thật.
-- Supabase hiện dùng project đã có trên máy; trước production nên xác nhận dùng chung project này hay tạo project Free riêng cho NewsSummarizer.
-- Supabase Edge Function `delete-account` chưa deploy: máy chưa có `SUPABASE_ACCESS_TOKEN`/CLI login.
+- Firebase project `newssummarizer-8ccc5` đã dùng cho auth; cần bật Google provider trong Firebase Console.
+- Google native đã tích hợp sẵn; cần OAuth client IDs (Web/Android/iOS), SHA-1 và build native theo `FIREBASE_AUTH_SETUP.md`.
+- Apple sign-in đang tắt; muốn bật cần Apple Developer + Firebase Apple provider.
 - RevenueCat iOS public SDK key chưa có.
 - App Store Connect subscription chưa tạo/liên kết RevenueCat.
 - Support email production chưa được cung cấp.

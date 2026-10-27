@@ -588,11 +588,41 @@ async function fetchRawHtml(pageUrl: string): Promise<string> {
   }
 }
 
+// Chỉ lấy node thân bài thật (thường itemprop="articleBody" hoặc class article__body).
+// Trước đây chỉ cắt từ mốc mở đến marker "related" ở cấp toàn trang; với Tiền
+// Phong, vùng quét kéo tới carousel/"tin mới" phía sau và lấy ảnh BÀI KHÁC.
+// Cân bằng tag cùng loại để dừng đúng thẻ đóng của thân bài, thay vì quét cả DOM.
+function scopedArticleBody(html: string): string | null {
+  const opening = /<(div|section|article)\b[^>]*>/gi;
+  let start: RegExpExecArray | null;
+  while ((start = opening.exec(html)) !== null) {
+    const tag = start[0];
+    const editorial = /\bitemprop\s*=\s*["']articleBody["']/i.test(tag)
+      || /\bclass\s*=\s*["'][^"']*(?:article__body|zce-content-body|fck_detail|entry-content|post-content|article-content|article-body)[^"']*["']/i.test(tag);
+    if (!editorial) continue;
+    const matching = new RegExp(`<\\/?${start[1]}\\b[^>]*>`, 'gi');
+    matching.lastIndex = opening.lastIndex;
+    let depth = 1;
+    let found: RegExpExecArray | null;
+    while ((found = matching.exec(html)) !== null) {
+      depth += found[0].startsWith('</') ? -1 : 1;
+      if (depth === 0) {
+        const body = html.slice(start.index, matching.lastIndex);
+        if (body.length >= 150) return body;
+        break;
+      }
+    }
+  }
+  return null;
+}
+
 // Vùng nội dung chính của trang: cắt phần trước container bài viết và cắt đuôi
 // (comment/tin-liên-quan/footer) để lượt quét <img> khỏi nhặt ảnh sidebar,
 // banner QC và thumbnail của bài KHÁC — nguyên nhân chính khiến tóm tắt dính
 // ảnh không liên quan.
 function extractContentRegion(html: string): string {
+  const body = scopedArticleBody(html);
+  if (body) return body;
   // Tìm container bài viết + mốc kết thúc TRÊN HTML GỐC (không phải chuỗi đã
   // cắt) — nếu tính trên chuỗi đã cắt, trang ngắn làm mốc "related" rơi dưới
   // ngưỡng và ảnh sidebar/tin-liên-quan lọt vào vùng quét.
@@ -677,7 +707,9 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
   // pos = 0 (push -1) chứ KHÔNG dùng vị trí thật: thẻ <audio> nằm cuối DOM bài
   // gốc (đo trên bài Tiền Phong: 38343/39788 ký tự ≈ pos 0.96) nhưng thanh nghe
   // ở cuối tóm tắt thì không ai thấy — chính trang họ cũng đặt player ở đầu bài.
-  const audioUrl = pickAudioUrl(region, pageUrl);
+  // Audio player thường nằm trước <articleBody> (vd Tiền Phong); ảnh/video
+  // vẫn giới hạn trong thân bài, riêng audio tìm thêm trên HTML trang.
+  const audioUrl = pickAudioUrl(region, pageUrl) || pickAudioUrl(html, pageUrl);
   if (audioUrl) push(-1, { type: 'audio', url: audioUrl, kind: 'file' });
 
   // MỘT lượt quét cả ảnh lẫn video TRONG region, sort theo vị trí xuất hiện →
@@ -715,7 +747,7 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
       if (!/^https?:/i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
       // Video "tin liên quan" thường bọc trong <a href=bài khác> (widget xem
       // thêm) → kiểm tra link bọc giống ảnh: href trỏ bài KHÁC → bỏ.
-      const vbefore = region.slice(Math.max(0, m.index - 800), m.index);
+      const vbefore = region.slice(Math.max(0, m.index - 4000), m.index);
       const vopenA = vbefore.lastIndexOf('<a ');
       if (vopenA > vbefore.lastIndexOf('</a>')) {
         const vhrefM = vbefore.slice(vopenA).match(/\bhref=["']([^"']*)["']/i);
@@ -738,7 +770,7 @@ async function fetchMediaFromHtml(pageUrl: string): Promise<ArticleBlock[]> {
       // khác → nếu lọt, tóm tắt hiện ảnh + "caption" sai hoàn toàn). Ảnh nội
       // dung thật: không bọc link, bọc lightbox về CHÍNH ảnh, hoặc link trong
       // cùng trang (gallery ?page=2…).
-      const before = region.slice(Math.max(0, m.index - 800), m.index);
+      const before = region.slice(Math.max(0, m.index - 4000), m.index);
       const openA = before.lastIndexOf('<a ');
       if (openA > before.lastIndexOf('</a>')) {
         const hrefM = before.slice(openA).match(/\bhref=["']([^"']*)["']/i);

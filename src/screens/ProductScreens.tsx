@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Sans, Color, Radius } from '../constants/theme';
 import { Page, Heading, Panel, Action, Empty, Wave, SectionTitle } from '../components/PremiumUI';
+import MembershipComparison from '../components/MembershipComparison';
 import { readFeedsCache, fetchAllFeeds, FEEDS } from '../services/feeds';
 import { getPreferences, savePreferences } from '../services/preferences';
 import { KEYS } from '../services/storage';
@@ -15,7 +16,8 @@ import type { FeedItem, SummaryRecord } from '../types';
 import { isCurrentRuleSummary, buildRuleSummary } from '../services/ruleSummary';
 import { useAuth } from '../providers/AuthProvider';
 import { displayName } from '../services/auth';
-import { getStorePlans, getSubscriptionState, purchasePlan, purchaseWasCancelled, restorePurchases, type StorePlan, type SubscriptionState } from '../services/subscription';
+import { authErrorMessage } from '../services/authErrors';
+import { getStorePlans, purchasePlan, purchaseWasCancelled, restorePurchases, type StorePlan } from '../services/subscription';
 
 type Palette = typeof Color;
 
@@ -44,13 +46,8 @@ export function BriefingScreen({ navigation }: any) {
   const [summaries, setSummaries] = useState<SummaryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [minutes, setMinutes] = useState(5);
-  const [plus, setPlus] = useState(false);
-
-  useFocusEffect(useCallback(() => {
-    let alive = true;
-    getSubscriptionState().then((state) => { if (alive) setPlus(state.active); }).catch(() => {});
-    return () => { alive = false; };
-  }, []));
+  const { user, subscription, subscriptionLoading } = useAuth();
+  const plus = Boolean(user && !subscriptionLoading && subscription.active);
 
   useFocusEffect(useCallback(() => {
     let alive = true;
@@ -74,6 +71,8 @@ export function BriefingScreen({ navigation }: any) {
     return () => { alive = false; };
   }, []));
 
+  // Re-validate when a purchase expires or a user logs out while the screen is open.
+  useEffect(() => { if (!plus && !subscriptionLoading) setMinutes(5); }, [plus, subscriptionLoading]);
   const count = minutes === 5 ? 3 : minutes === 10 ? 5 : 8;
   const selected = items.slice(0, count);
   const queue = selected.map((item) => ({
@@ -108,7 +107,7 @@ export function BriefingScreen({ navigation }: any) {
           </View>
         </View>
         <Wave />
-        <Action label="Nghe bản tin" primary icon="play" disabled={!queue.length} onPress={() => navigation.navigate('Player', { queue })} />
+        <Action label="Nghe bản tin" primary icon="play" disabled={!queue.length} onPress={() => navigation.navigate('Player', { queue, minutes })} />
       </Panel>
 
       {loading ? <ActivityIndicator color={C.hot} style={{ marginVertical: 30 }} /> : selected.length ? (
@@ -139,7 +138,12 @@ export function BriefingScreen({ navigation }: any) {
 }
 
 export function PlayerScreen({ navigation, route }: any) {
-  const queue = route.params?.queue || [];
+  const { user, subscription, subscriptionLoading } = useAuth();
+  const plus = Boolean(user && !subscriptionLoading && subscription.active);
+  const requestedMinutes = route.params?.minutes === 10 || route.params?.minutes === 15 ? route.params.minutes : 5;
+  const locked = requestedMinutes > 5 && !plus;
+  const originalQueue = Array.isArray(route.params?.queue) ? route.params.queue : [];
+  const queue = plus ? originalQueue : originalQueue.slice(0, 3);
   const C = useTheme();
   const [playing, setPlaying] = useState(false);
   const [index, setIndex] = useState(0);
@@ -159,12 +163,16 @@ export function PlayerScreen({ navigation, route }: any) {
     setPlaying(false);
   };
 
+  // A subscription can expire or a user can log out while audio is playing.
+  useEffect(() => { if (locked && playing) stop(); }, [locked, playing]);
+
   const play = async () => {
     const id = ++session.current;
     clearVoiceHung();
     setPlaying(true);
     setError('');
     try {
+      if (locked) { setPlaying(false); navigation.navigate('Plans'); return; }
       const raw = await AsyncStorage.multiGet([KEYS.pitch, KEYS.rate]);
       const pitch = Number(raw[0][1] || 1);
       const rate = Number(raw[1][1] || 1);
@@ -188,6 +196,7 @@ export function PlayerScreen({ navigation, route }: any) {
 
   return (
     <Page title="Trình nghe" navigation={navigation} maxWidth={760}>
+      {locked ? <Panel><Text style={{ fontFamily: Sans.bold, color: C.text, fontSize: 15 }}>Bản tin {requestedMinutes} phút dành cho Plus</Text><Copy muted style={{ marginTop: 6, marginBottom: 14 }}>Bạn vẫn có thể nghe bản miễn phí 5 phút. Nâng cấp Plus để mở bản dài hơn.</Copy><Action label="Xem gói Plus" icon="sparkles-outline" primary onPress={() => navigation.navigate('Plans')} /></Panel> : null}
       <Panel dark style={{ padding: 26 }}>
         <Text style={{ fontFamily: Sans.bold, fontSize: 10, letterSpacing: 1.2, color: '#F59A70' }}>ĐANG NGHE · BẢN TIN</Text>
         <Text style={{ fontFamily: Sans.bold, fontSize: 24, lineHeight: 33, color: '#fff', marginTop: 14 }}>{queue[index]?.title || 'Chưa có nội dung nghe'}</Text>
@@ -202,7 +211,7 @@ export function PlayerScreen({ navigation, route }: any) {
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Tin trước" disabled={index === 0} onPress={() => { stop(); setIndex((value) => value - 1); }} style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: 'rgba(255,255,255,.08)', alignItems: 'center', justifyContent: 'center', opacity: index === 0 ? .35 : 1 }}>
             <Ionicons name="play-skip-back" size={19} color="#fff" />
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel={playing ? "Dừng đọc" : "Phát bản tin"} disabled={!queue.length} onPress={playing ? stop : play} style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: C.hot, alignItems: 'center', justifyContent: 'center', paddingLeft: playing ? 0 : 3 }}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={playing ? "Dừng đọc" : "Phát bản tin"} disabled={!queue.length || locked} onPress={playing ? stop : play} style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: C.hot, alignItems: 'center', justifyContent: 'center', paddingLeft: playing ? 0 : 3 }}>
             <Ionicons name={playing ? 'stop' : 'play'} size={27} color="#fff" />
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Tin sau" disabled={index >= queue.length - 1} onPress={() => { stop(); setIndex((value) => value + 1); }} style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: 'rgba(255,255,255,.08)', alignItems: 'center', justifyContent: 'center', opacity: index >= queue.length - 1 ? .35 : 1 }}>
@@ -290,7 +299,6 @@ function AccountRow({ icon, title, subtitle, onPress, danger = false }: any) {
   );
 }
 
-const EMPTY_SUBSCRIPTION: SubscriptionState = { configured: false, active: false, entitlement: 'plus', managementURL: null, expirationDate: null };
 const PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL?.trim() || '';
 const TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL?.trim() || '';
 
@@ -302,22 +310,17 @@ function periodLabel(period: string | null) {
 
 export function AccountScreen({ navigation }: any) {
   const C = useTheme();
-  const { user, configured, signOut, deleteAccount } = useAuth();
-  const [subscription, setSubscription] = useState<SubscriptionState>(EMPTY_SUBSCRIPTION);
+  const { user, configured, signOut, deleteAccount, subscription, subscriptionLoading, subscriptionError, refreshSubscription } = useAuth();
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  useFocusEffect(useCallback(() => {
-    let alive = true;
-    getSubscriptionState().then((value) => { if (alive) setSubscription(value); }).catch(() => {});
-    return () => { alive = false; };
-  }, []));
+  useFocusEffect(useCallback(() => { void refreshSubscription(); }, [refreshSubscription]));
 
   const logout = async () => {
     setBusy('logout'); setError('');
     try { await signOut(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Không thể đăng xuất.'); }
+    catch (e) { setError(authErrorMessage(e, 'Không thể đăng xuất.')); }
     finally { setBusy(''); }
   };
 
@@ -325,11 +328,12 @@ export function AccountScreen({ navigation }: any) {
     if (!confirmDelete) { setConfirmDelete(true); return; }
     setBusy('delete'); setError('');
     try { await deleteAccount(); navigation.goBack(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Không thể xóa tài khoản.'); }
+    catch (e) { setError(authErrorMessage(e, 'Không thể xóa tài khoản.')); }
     finally { setBusy(''); setConfirmDelete(false); }
   };
 
-  const planLabel = subscription.active ? 'PLUS' : 'FREE';
+  const plus = Boolean(user && !subscriptionLoading && subscription.active);
+  const planLabel = subscriptionLoading ? '...' : plus ? 'PLUS' : user ? 'FREE' : 'KHÁCH';
   return (
     <Page title="Tài khoản" navigation={navigation} maxWidth={760}>
       <Panel dark>
@@ -339,7 +343,7 @@ export function AccountScreen({ navigation }: any) {
             <Text numberOfLines={1} style={{ fontFamily: Sans.bold, color: '#fff', fontSize: 19 }}>{user ? displayName(user) : 'Bạn đọc'}</Text>
             <Text numberOfLines={1} style={{ fontFamily: Sans.regular, color: '#AEB8C8', fontSize: 11, marginTop: 4 }}>{user?.email || 'Chế độ khách · Đăng nhập để giữ quyền lợi Plus'}</Text>
           </View>
-          <View style={{ paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: subscription.active ? 'rgba(243,106,45,.22)' : 'rgba(255,255,255,.08)' }}><Text style={{ fontFamily: Sans.bold, color: subscription.active ? '#F7A47F' : '#DCE1E9', fontSize: 9 }}>{planLabel}</Text></View>
+          <View style={{ paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: plus ? 'rgba(243,106,45,.22)' : 'rgba(255,255,255,.08)' }}><Text style={{ fontFamily: Sans.bold, color: plus ? '#F7A47F' : '#DCE1E9', fontSize: 9 }}>{planLabel}</Text></View>
         </View>
       </Panel>
 
@@ -355,9 +359,9 @@ export function AccountScreen({ navigation }: any) {
         </Panel>
       ) : (
         <Panel>
-          <AccountRow icon="card-outline" title={subscription.active ? 'NewsSummarizer Plus đang hoạt động' : 'Gói miễn phí'} subtitle={subscription.active ? 'Quyền lợi được xác nhận từ cửa hàng ứng dụng' : 'Nâng cấp để mở bản tin dài và quyền lợi cao cấp'} onPress={() => navigation.navigate('Subscription')} />
+          <AccountRow icon="card-outline" title={plus ? 'NewsSummarizer Plus đang hoạt động' : subscriptionLoading ? 'Đang xác minh thuê bao...' : 'Gói miễn phí'} subtitle={plus ? 'Quyền lợi đã được xác minh qua RevenueCat' : 'Nâng cấp để mở bản tin dài 10–15 phút'} onPress={() => navigation.navigate('Subscription')} />
           <View style={{ height: 1, backgroundColor: C.border }} />
-          <AccountRow icon="cloud-done-outline" title="Tài khoản đã kết nối" subtitle="Quyền mua Plus được gắn với tài khoản này" />
+          <AccountRow icon="cloud-done-outline" title="Tài khoản đã kết nối" subtitle={subscription.configured ? 'Quyền lợi Plus được liên kết với tài khoản này' : 'Bạn có thể dùng Free; thuê bao Plus chưa được mở bán'} />
         </Panel>
       )}
 
@@ -367,13 +371,14 @@ export function AccountScreen({ navigation }: any) {
         <AccountRow icon="shield-checkmark-outline" title="Dữ liệu trên thiết bị" subtitle="Bài lưu và lịch sử hiện vẫn được lưu cục bộ" />
       </Panel>
 
-      <Action label={subscription.active ? 'Quản lý gói Plus' : 'Khám phá NewsSummarizer Plus'} icon="sparkles-outline" primary onPress={() => navigation.navigate(subscription.active ? 'Subscription' : 'Plans')} />
+      <Action label={plus ? 'Quản lý gói Plus' : 'Khám phá NewsSummarizer Plus'} icon="sparkles-outline" primary onPress={() => navigation.navigate(plus ? 'Subscription' : 'Plans')} />
+      {subscriptionError ? <Copy muted style={{ marginTop: 10 }}>Không cập nhật được trạng thái Plus. Kết nối lại Internet và thử lại.</Copy> : null}
 
       {user ? <Panel style={{ marginTop: 18 }}>
         <AccountRow icon="log-out-outline" title={busy === 'logout' ? 'Đang đăng xuất...' : 'Đăng xuất'} subtitle="Giữ tài khoản, thoát khỏi thiết bị này" onPress={busy ? undefined : logout} />
         <View style={{ height: 1, backgroundColor: C.border }} />
         <AccountRow danger icon="trash-outline" title={busy === 'delete' ? 'Đang xóa...' : confirmDelete ? 'Bấm lần nữa để xác nhận xóa' : 'Xóa tài khoản'} subtitle={confirmDelete ? 'Thao tác này không thể hoàn tác' : 'Xóa tài khoản đăng nhập; thuê bao cửa hàng cần hủy riêng'} onPress={busy ? undefined : removeAccount} />
-        {confirmDelete && subscription.active ? <View style={{ marginTop: 12, padding: 13, borderRadius: Radius.sm, backgroundColor: C.dangerSoft }}>
+        {confirmDelete && plus ? <View style={{ marginTop: 12, padding: 13, borderRadius: Radius.sm, backgroundColor: C.dangerSoft }}>
           <Text style={{ fontFamily: Sans.bold, color: C.danger, fontSize: 12, lineHeight: 19 }}>Plus vẫn có thể tiếp tục gia hạn sau khi xóa tài khoản.</Text>
           <Text style={{ fontFamily: Sans.regular, color: C.textSecondary, fontSize: 11, lineHeight: 18, marginTop: 5 }}>Nếu bạn không muốn bị Apple/Google tính phí kỳ tiếp theo, hãy hủy thuê bao trong cửa hàng trước. Sau đó quay lại và bấm “Xóa tài khoản” lần nữa. Bạn vẫn có thể xóa ngay nếu muốn.</Text>
           {subscription.managementURL ? <View style={{ marginTop: 10 }}><Action label="Quản lý thuê bao trước" icon="open-outline" onPress={() => Linking.openURL(subscription.managementURL!)} /></View> : null}
@@ -399,29 +404,23 @@ function PlanOption({ plan, selected, onPress }: { plan: StorePlan; selected: bo
 
 export function PlansScreen({ navigation }: any) {
   const C = useTheme();
-  const { user } = useAuth();
+  const { user, subscription, subscriptionLoading, subscriptionError, refreshSubscription } = useAuth();
+  const legalReady = Boolean(PRIVACY_URL && TERMS_URL);
   const [plans, setPlans] = useState<StorePlan[]>([]);
   const [selected, setSelected] = useState('');
-  const [subscription, setSubscription] = useState<SubscriptionState>(EMPTY_SUBSCRIPTION);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const benefits = [
-    ['newspaper-outline', 'Bản tin dài 10–15 phút', 'Mở thêm lượng tin trong bản nghe cá nhân hóa.'],
-    ['headset-outline', 'Quyền lợi gắn với tài khoản', 'Khôi phục giao dịch khi đổi hoặc cài lại thiết bị.'],
-    ['options-outline', 'Nền tảng cho tính năng cao cấp', 'Các quyền lợi Plus mới sẽ dùng cùng một entitlement.'],
-  ];
-
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const [nextPlans, nextState] = await Promise.all([getStorePlans(), getSubscriptionState()]);
-      setPlans(nextPlans); setSubscription(nextState);
+      const nextPlans = await getStorePlans();
+      setPlans(nextPlans);
       setSelected((current) => nextPlans.some((plan) => plan.identifier === current) ? current : (nextPlans[0]?.identifier || ''));
     } catch (e) { setError(e instanceof Error ? e.message : 'Không tải được thông tin cửa hàng.'); }
     finally { setLoading(false); }
   }, []);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(useCallback(() => { void refreshSubscription(); void load(); }, [load, refreshSubscription]));
 
   const buy = async () => {
     if (!user) { navigation.navigate('Login'); return; }
@@ -429,26 +428,34 @@ export function PlansScreen({ navigation }: any) {
     setBusy(true); setError('');
     try {
       const state = await purchasePlan(selected);
-      setSubscription(state);
+      await refreshSubscription();
       if (state.active) navigation.navigate('Subscription');
+      else setError('Thanh toán chưa xác nhận quyền lợi Plus. Vui lòng thử khôi phục giao dịch.');
     } catch (e) {
       if (!purchaseWasCancelled(e)) setError(e instanceof Error ? e.message : 'Thanh toán không thành công.');
     } finally { setBusy(false); }
   };
 
   const restore = async () => {
+    if (!user) { navigation.navigate('Login'); return; }
     setBusy(true); setError('');
-    try { setSubscription(await restorePurchases()); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Không khôi phục được giao dịch.'); }
+    try {
+      const state = await restorePurchases();
+      await refreshSubscription();
+      if (state.active) navigation.navigate('Subscription');
+      else setError('Chưa tìm thấy gói Plus đang hoạt động cho tài khoản này.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Không khôi phục được giao dịch.'); }
     finally { setBusy(false); }
   };
 
   return (
     <Page title="NewsSummarizer Plus" navigation={navigation} maxWidth={900}>
-      <Heading eyebrow="PLUS" title="Ít nhiễu hơn. Nhiều điều đáng biết hơn." subtitle="Thanh toán Plus dùng hệ thống mua hàng của Apple App Store hoặc Google Play. NewsSummarizer không tự lưu thông tin thẻ." />
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
-        {benefits.map(([icon, title, subtitle]) => <View key={title} style={{ minWidth: 220, flex: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: Radius.md, padding: 18 }}><View style={{ width: 40, height: 40, borderRadius: 13, backgroundColor: C.hotSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}><Ionicons name={icon as any} size={19} color={C.hot} /></View><Text style={{ fontFamily: Sans.bold, color: C.text, fontSize: 15 }}>{title}</Text><Text style={{ fontFamily: Sans.regular, color: C.textMuted, fontSize: 11, lineHeight: 18, marginTop: 7 }}>{subtitle}</Text></View>)}
-      </View>
+      <Heading eyebrow="GÓI THÀNH VIÊN" title="Chọn Free hoặc nâng cấp Plus." subtitle="Sử dụng miễn phí hoặc nâng cấp lên Plus để nghe bản tin 10–15 phút. Mọi khoản thanh toán do Apple App Store hoặc Google Play xử lý." />
+      <MembershipComparison
+        plusActive={Boolean(user && !subscriptionLoading && subscription.active)}
+        signedIn={Boolean(user)}
+        onFreePress={!user ? () => navigation.navigate('Register') : undefined}
+      />
 
       <Panel dark>
         <Text style={{ fontFamily: Sans.bold, color: '#F59A70', fontSize: 10, letterSpacing: 1 }}>NEWS SUMMARIZER PLUS</Text>
@@ -456,20 +463,21 @@ export function PlansScreen({ navigation }: any) {
         <Text style={{ fontFamily: Sans.regular, color: '#AEB8C8', lineHeight: 22, fontSize: 12, marginVertical: 14 }}>{subscription.active ? 'Tài khoản này đã có entitlement Plus đang hoạt động.' : user ? 'Giá bên dưới được lấy trực tiếp từ cửa hàng trên thiết bị.' : 'Đăng nhập trước khi mua để quyền lợi gắn với tài khoản và dễ khôi phục.'}</Text>
       </Panel>
 
-      {loading ? <ActivityIndicator color={C.hot} style={{ marginVertical: 22 }} /> : subscription.active ? (
+      {loading || subscriptionLoading ? <ActivityIndicator color={C.hot} style={{ marginVertical: 22 }} /> : subscription.active && user ? (
         <Action label="Xem trạng thái thuê bao" icon="checkmark-circle-outline" primary onPress={() => navigation.navigate('Subscription')} />
       ) : !subscription.configured ? (
-        <Panel><Text style={{ fontFamily: Sans.bold, color: C.text, fontSize: 15 }}>Chưa kết nối cửa hàng</Text><Copy muted style={{ marginTop: 7 }}>Thêm RevenueCat iOS/Android public SDK key vào .env và cấu hình Offering để bật mua thật. Trên web, thanh toán App Store/Google Play không được hiển thị.</Copy></Panel>
+        <Panel><Text style={{ fontFamily: Sans.bold, color: C.text, fontSize: 15 }}>Chưa kết nối cửa hàng</Text><Copy muted style={{ marginTop: 7 }}>Thanh toán Plus chưa mở trong phiên bản này. Bạn vẫn có thể dùng Free và đăng ký tài khoản miễn phí. Khi Plus được phát hành, giá và nút mua sẽ xuất hiện từ App Store hoặc Google Play trên thiết bị hỗ trợ.</Copy></Panel>
       ) : plans.length ? (
         <Panel>
           {plans.map((plan) => <PlanOption key={plan.identifier} plan={plan} selected={selected === plan.identifier} onPress={() => setSelected(plan.identifier)} />)}
-          {error ? <Text style={{ color: C.danger, fontFamily: Sans.regular, fontSize: 12, marginBottom: 10 }}>{error}</Text> : null}
-          <Action label={!user ? 'Đăng nhập để mua' : busy ? 'Đang xử lý...' : 'Tiếp tục với cửa hàng'} icon="card-outline" primary disabled={busy} onPress={buy} />
+          {!legalReady ? <Copy muted style={{ marginBottom: 12 }}>Chưa cấu hình link Điều khoản sử dụng và Chính sách quyền riêng tư để mở bán Plus.</Copy> : null}
+          <Action label={!user ? 'Đăng nhập để mua' : busy ? 'Đang xử lý...' : 'Tiếp tục với cửa hàng'} icon="card-outline" primary disabled={busy || subscriptionLoading || !legalReady} onPress={buy} />
         </Panel>
       ) : <Panel><Copy muted>RevenueCat đã kết nối nhưng chưa có Offering/package khả dụng cho ứng dụng này.</Copy></Panel>}
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 }}>
-        {subscription.configured ? <Action label={busy ? 'Đang khôi phục...' : 'Khôi phục giao dịch'} icon="refresh-outline" disabled={busy} onPress={restore} /> : null}
+        {subscription.configured ? <Action label={!user ? 'Đăng nhập để khôi phục' : busy ? 'Đang khôi phục...' : 'Khôi phục giao dịch'} icon="refresh-outline" disabled={busy} onPress={restore} /> : null}
+        {error || subscriptionError ? <Text style={{ color: C.danger, fontFamily: Sans.regular, fontSize: 12, marginTop: 4 }}>{error || 'Không thể xác minh thuê bao, vui lòng thử lại khi có mạng.'}</Text> : null}
         <Action label="Trạng thái gói" onPress={() => navigation.navigate('Subscription')} />
       </View>
       <Text style={{ fontFamily: Sans.regular, color: C.textMuted, fontSize: 10, lineHeight: 17, marginTop: 18 }}>Thuê bao tự động gia hạn theo chu kỳ hiển thị trừ khi bạn hủy trong tài khoản Apple/Google. Giá và đơn vị tiền tệ được lấy trực tiếp từ cửa hàng trên thiết bị.</Text>
@@ -483,27 +491,33 @@ export function PlansScreen({ navigation }: any) {
 
 export function SubscriptionScreen({ navigation }: any) {
   const C = useTheme();
-  const { user } = useAuth();
-  const [state, setState] = useState<SubscriptionState>(EMPTY_SUBSCRIPTION);
-  const [loading, setLoading] = useState(true);
+  const { user, subscription: state, subscriptionLoading: loading, subscriptionError, refreshSubscription } = useAuth();
   const [error, setError] = useState('');
-  useFocusEffect(useCallback(() => {
-    let alive = true; setLoading(true);
-    getSubscriptionState().then((value) => { if (alive) setState(value); }).catch((e) => { if (alive) setError(e instanceof Error ? e.message : 'Không đọc được trạng thái gói.'); }).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, []));
+  const [busy, setBusy] = useState(false);
+  useFocusEffect(useCallback(() => { void refreshSubscription(); }, [refreshSubscription]));
+  const plus = Boolean(user && !loading && state.active);
+  const restore = async () => {
+    if (!user) { navigation.navigate('Login'); return; }
+    setBusy(true); setError('');
+    try {
+      const restored = await restorePurchases();
+      await refreshSubscription();
+      if (!restored.active) setError('Không tìm thấy thuê bao Plus đang hoạt động.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Không thể khôi phục giao dịch.'); }
+    finally { setBusy(false); }
+  };
   return (
     <Page title="Gói của bạn" navigation={navigation} maxWidth={680}>
       {loading ? <ActivityIndicator color={C.hot} style={{ marginVertical: 40 }} /> : <Panel>
-        <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: state.active ? C.successSoft : C.hotSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}><Ionicons name={state.active ? 'checkmark-circle' : 'checkmark-circle-outline'} size={22} color={state.active ? C.success : C.hot} /></View>
-        <Text style={{ fontFamily: Sans.bold, fontSize: 22, color: C.text }}>{state.active ? 'NewsSummarizer Plus đang hoạt động.' : 'Bạn đang dùng gói miễn phí.'}</Text>
-        <Copy muted style={{ marginTop: 9 }}>{state.active ? `Quyền lợi được xác nhận bởi cửa hàng${state.expirationDate ? ` · hết hạn/gia hạn: ${new Date(state.expirationDate).toLocaleDateString('vi-VN')}` : ''}.` : state.configured ? 'Không có entitlement Plus đang hoạt động cho người dùng hiện tại.' : 'Cửa hàng chưa được cấu hình trên bản build này.'}</Copy>
+        <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: plus ? C.successSoft : C.hotSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}><Ionicons name={plus ? 'checkmark-circle' : 'checkmark-circle-outline'} size={22} color={plus ? C.success : C.hot} /></View>
+        <Text style={{ fontFamily: Sans.bold, fontSize: 22, color: C.text }}>{plus ? 'NewsSummarizer Plus đang hoạt động.' : user ? 'Bạn đang dùng gói miễn phí.' : 'Bạn đang sử dụng chế độ khách.'}</Text>
+        <Copy muted style={{ marginTop: 9 }}>{plus ? `Quyền lợi được xác nhận bởi cửa hàng${state.expirationDate ? ` · hết hạn/gia hạn: ${new Date(state.expirationDate).toLocaleDateString('vi-VN')}` : ''}.` : state.configured ? 'Không có quyền Plus đang hoạt động cho tài khoản hiện tại.' : 'Bạn có thể dùng Free. Cửa hàng chưa được kết nối để mua Plus.'}</Copy>
         {user ? <Copy muted style={{ marginTop: 5 }}>Tài khoản: {user.email}</Copy> : null}
       </Panel>}
-      {error ? <Text style={{ color: C.danger, fontFamily: Sans.regular, fontSize: 12, marginBottom: 12 }}>{error}</Text> : null}
+      {error || subscriptionError ? <Text style={{ color: C.danger, fontFamily: Sans.regular, fontSize: 12, marginBottom: 12 }}>{error || 'Không thể kết nối cửa hàng. Vui lòng thử lại.'}</Text> : null}
       <View style={{ gap: 10 }}>
         {state.managementURL ? <Action label="Quản lý thuê bao trên cửa hàng" icon="open-outline" primary onPress={() => Linking.openURL(state.managementURL!)} /> : <Action label="Xem gói Plus" icon="sparkles-outline" primary onPress={() => navigation.navigate('Plans')} />}
-        {state.configured ? <Action label="Khôi phục giao dịch" icon="refresh-outline" onPress={async () => { try { setState(await restorePurchases()); } catch (e) { setError(e instanceof Error ? e.message : 'Không khôi phục được giao dịch.'); } }} /> : null}
+        {state.configured ? <Action label={!user ? 'Đăng nhập để khôi phục' : busy ? 'Đang khôi phục...' : 'Khôi phục giao dịch'} icon="refresh-outline" disabled={busy} onPress={restore} /> : null}
       </View>
     </Page>
   );

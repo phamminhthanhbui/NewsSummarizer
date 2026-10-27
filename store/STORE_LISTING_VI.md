@@ -37,7 +37,7 @@ Entitlement: plus
 Quyền lợi hiện tại: bản tin 10–15 phút và nền tảng cho các tính năng Plus tiếp theo.
 
 ## Review notes
-Ứng dụng có thể dùng ở chế độ khách. Tài khoản chỉ cần cho quyền lợi gắn với người dùng và thuê bao Plus. Nếu tài khoản test được yêu cầu cho App Review, tạo một tài khoản email/password riêng trong Supabase và cung cấp ở App Store Connect, không ghi credential vào source.
+Ứng dụng có thể dùng ở chế độ khách. Tài khoản chỉ cần cho quyền lợi gắn với người dùng và thuê bao Plus. Nếu tài khoản test được yêu cầu cho App Review, tạo một tài khoản email/password riêng trong Firebase và cung cấp ở App Store Connect, không ghi credential vào source.
 
 ## Permissions
 - Location: chỉ dùng khi người dùng cho phép để hiển thị thời tiết/khu vực; không bắt buộc để đọc tin.

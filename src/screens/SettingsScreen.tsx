@@ -9,9 +9,9 @@ import { ensureSetup as ensureNotifSetup, getSettings as getNotifSettings, setEn
 import { useAlert } from '../components/AppAlert';
 import { Sans, Color, Font, Radius, getThemeMode, setThemeMode, useTheme, Layout } from '../constants/theme';
 import { ScreenHeader, Action } from '../components/PremiumUI';
+import MembershipComparison from '../components/MembershipComparison';
 import { useAuth } from '../providers/AuthProvider';
 import { displayName } from '../services/auth';
-import { getSubscriptionState } from '../services/subscription';
 
 const PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL?.trim() || '';
 const TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL?.trim() || '';
@@ -25,8 +25,8 @@ export default function SettingsScreen({ navigation }: any) {
   const C = useTheme();
   const styles = makeStyles(C);
   const { showAlert } = useAlert();
-  const { user } = useAuth();
-  const [plus, setPlus] = useState(false);
+  const { user, subscription, subscriptionLoading } = useAuth();
+  const plus = Boolean(user && !subscriptionLoading && subscription.active);
   const [saved, setSaved] = useState(false);
   const [pitch, setPitch] = useState(1);
   const [rate, setRate] = useState(1);
@@ -37,11 +37,6 @@ export default function SettingsScreen({ navigation }: any) {
   const [notifCustom, setNotifCustom] = useState('');
   const [notifSending, setNotifSending] = useState(false);
 
-  useFocusEffect(useCallback(() => {
-    let alive = true;
-    getSubscriptionState().then((state) => { if (alive) setPlus(state.active); }).catch(() => {});
-    return () => { alive = false; };
-  }, []));
 
   useEffect(() => {
     AsyncStorage.getItem(KEYS.pitch).then((value) => setPitch(parseFloat(value || '') || 1));
@@ -134,9 +129,18 @@ export default function SettingsScreen({ navigation }: any) {
             <Text numberOfLines={1} style={styles.profileTitle}>{user ? displayName(user) : 'Không gian của bạn'}</Text>
             <Text numberOfLines={1} style={styles.profileSub}>{user?.email || 'Chế độ khách · đăng nhập để giữ quyền lợi'}</Text>
           </View>
-          <View style={styles.planPill}><Text style={styles.planText}>{plus ? 'PLUS' : 'FREE'}</Text></View>
+          <View style={styles.planPill}><Text style={styles.planText}>{subscriptionLoading ? '...' : plus ? 'PLUS' : user ? 'FREE' : 'KHÁCH'}</Text></View>
           <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
         </TouchableOpacity>
+
+        <Text style={{ fontFamily: Sans.bold, fontSize: 12, color: C.textMuted, letterSpacing: .8, marginBottom: 11, marginLeft: 4 }}>GÓI DÀNH CHO BẠN</Text>
+        <MembershipComparison
+          compact
+          plusActive={plus}
+          signedIn={Boolean(user)}
+          onFreePress={() => navigation.navigate(user ? 'Account' : 'Register')}
+          onPlusPress={() => navigation.navigate(plus ? 'Subscription' : 'Plans')}
+        />
 
         <SettingGroup title="Trải nghiệm">
           <SettingRow icon="moon-outline" title="Chế độ tối" subtitle={darkMode ? 'Đang bật' : 'Đang tắt'} trailing={
@@ -180,7 +184,6 @@ export default function SettingsScreen({ navigation }: any) {
 
         <SettingGroup title="Nội dung & tài khoản">
           <SettingRow icon="options-outline" title="Nguồn tin & chủ đề" subtitle="Chọn những gì xuất hiện trong bản tin" onPress={() => navigation.navigate('Sources')} />
-          <SettingRow icon="sparkles-outline" title="NewsSummarizer Plus" subtitle={plus ? "Đang hoạt động trên tài khoản này" : "Xem gói và quyền lợi cao cấp"} onPress={() => navigation.navigate('Plans')} />
           <SettingRow icon="chatbox-ellipses-outline" title="Góp ý" subtitle="Phản hồi về trải nghiệm sản phẩm" onPress={() => navigation.navigate('Feedback')} />
           {SUPPORT_URL ? <SettingRow icon="help-circle-outline" title="Hỗ trợ" subtitle="Trợ giúp về tài khoản, nội dung và Plus" onPress={() => Linking.openURL(SUPPORT_URL)} /> : null}
           {PRIVACY_URL ? <SettingRow icon="shield-checkmark-outline" title="Chính sách quyền riêng tư" subtitle="Cách NewsSummarizer xử lý dữ liệu" onPress={() => Linking.openURL(PRIVACY_URL)} /> : null}

@@ -147,6 +147,21 @@ export async function mockNetwork(page: Page) {
     body: JSON.stringify({ code: 'invalid_credentials', message: 'Invalid login credentials' }),
   }));
 
+  // Firebase Auth (provider mặc định): cùng mục đích — trả lỗi đăng nhập đã được
+  // SDK ánh xạ thành auth/invalid-credential, không gọi mạng thật.
+  await page.route('**/v1/accounts:signInWithPassword**', (route) => route.fulfill({
+    status: 400,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      error: { code: 400, message: 'INVALID_LOGIN_CREDENTIALS', errors: [{ message: 'INVALID_LOGIN_CREDENTIALS', domain: 'global', reason: 'invalid' }] },
+    }),
+  }));
+  await page.route('**/v1/accounts:sendOobCode**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ email: 'test@example.com' }),
+  }));
+
   // RSS qua proxy: /api/fetch?url=... — app gán source/category theo feed được yêu
   // cầu, nên mock phải trả item khác nhau theo category của feed (URL RSS chứa
   // keyword). Nếu không, dedup theo link sẽ dồn mọi item về feed đầu tiên.

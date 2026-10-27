@@ -39,6 +39,9 @@ app.use(express.json({ limit: '10mb' }));
 // site-config.js is generated at request time so Render environment values are
 // available without baking local .env files into the Docker image.
 const publicDir = path.join(__dirname, '..', 'public');
+// Landing page for the standalone API server. Do not place it at public/index.html:
+// Expo Web needs to generate its own index.html containing <div id="root">.
+app.get('/', (_req, res) => res.sendFile(path.join(publicDir, 'landing.html')));
 app.get('/site-config.js', (_req, res) => {
   const config = {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL || '',

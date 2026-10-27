@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, useWindowDimensions, ActivityIndicator, StyleSheet, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions, ActivityIndicator, StyleSheet, Linking, Platform } from 'react-native';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -204,6 +204,18 @@ function Root() {
 
   useEffect(() => {
     let alive = true;
+    const looksLikeAuthUrl = (url: string) => /[?&#](code|access_token|error_description)=/.test(url)
+      || /auth=(callback|reset)/.test(url)
+      || /\/auth\/(callback|reset)/.test(url);
+    // Supabase PKCE links are single-use. Remove the code from the address bar
+    // so a reload does not try to exchange it again.
+    const cleanAuthUrl = (url: string) => {
+      if (Platform.OS !== 'web' || typeof window === 'undefined' || !looksLikeAuthUrl(url)) return;
+      try {
+        const parsed = new URL(url);
+        window.history.replaceState({}, document.title, `${parsed.origin}/`);
+      } catch { /* keep the current URL if it cannot be parsed */ }
+    };
     const handle = async (url: string | null) => {
       if (!url) return;
       try {
@@ -216,6 +228,7 @@ function Root() {
         };
         openReset();
       } catch {}
+      finally { cleanAuthUrl(url); }
     };
     void Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', ({ url }) => { void handle(url); });

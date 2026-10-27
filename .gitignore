@@ -47,6 +47,7 @@ test-results/
 design-review/
 dist-auth-store/
 dist-web-check/
+dist-web/
 dist-android-check/
 package.json.*
 !package.json
@@ -56,6 +57,10 @@ server/.tts-cache/
 
 # local env
 .env
+
+# firebase cli local state
+.firebase/
+firebase-debug.log
 
 # Kilo agent local state
 .kilo/

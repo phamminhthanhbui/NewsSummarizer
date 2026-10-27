@@ -129,9 +129,10 @@ test.describe('Các nút khác', () => {
     await expect(page.getByText('Hiểu hôm nay. Sẵn sàng ngày mai.')).toBeVisible({ timeout: 10_000 });
   });
 
-  test('bài viết liên quan hiển thị', async ({ page }) => {
+  test('không chèn tin không liên quan vào bài đang đọc', async ({ page }) => {
     await openFirstArticle(page);
-    await expect(page.getByText('Bài viết liên quan')).toBeVisible({ timeout: 15_000 });
+    // Bộ dữ liệu giả toàn bài khác chủ đề; không được hiển thị chỉ vì cùng báo.
+    await expect(page.getByText('BÀI VIẾT LIÊN QUAN', { exact: true })).toHaveCount(0);
   });
 
 });

@@ -31,6 +31,7 @@ import { fetchArticleContent, summarizeArticle, blocksToText, fetchArticleMedia,
 import { isCurrentRuleSummary, fingerprintSummaryInput } from '../services/ruleSummary';
 import type { ArticleBlock } from '../services/summarize';
 import { fetchAllFeeds, readFeedsCache, SOURCE_COLORS } from '../services/feeds';
+import { relatedArticles } from '../services/relatedArticles';
 import ArticleCard from '../components/ArticleCard';
 import { getGoodProxyBase, getProxyBase } from '../utils/proxy';
 import { speakSystem, stopSystem, clearVoiceHung } from '../services/edgeTts';
@@ -112,6 +113,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     let alive = true;
     let displayed = '';
     setBlocks([]);
+    setRelated([]);
     setContent('');
     setSummary('');
     setError('');
@@ -159,10 +161,7 @@ export default function ArticleScreen({ navigation, route }: any) {
     (async () => {
       let all = await readFeedsCache();
       if (!all.length) all = await fetchAllFeeds().catch(() => [] as FeedItem[]);
-      if (alive) setRelated([
-        ...all.filter(a => a.source === item.source && a.link !== item.link),
-        ...all.filter(a => a.source !== item.source && a.link !== item.link),
-      ].slice(0, LIMITS.relatedMax));
+      if (alive) setRelated(relatedArticles(item, all, LIMITS.relatedMax));
     })().catch(() => {});
 
     (async () => {
