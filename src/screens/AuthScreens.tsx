@@ -489,12 +489,13 @@ export function ForgotPasswordScreen({ navigation }: any) {
 
 export function ResetPasswordScreen({ navigation }: any) {
   const C = useTheme();
-  const { configured, session, updatePassword } = useAuth();
+  const { configured, session, updatePassword, resetPasswordWithCode, passwordResetReady } = useAuth();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const confirmRef = useRef<TextInput>(null);
+  const codeReady = passwordResetReady();
 
   const submit = async () => {
     const passwordIssue = validatePassword(password);
@@ -503,8 +504,13 @@ export function ResetPasswordScreen({ navigation }: any) {
     if (confirmIssue) return setError(confirmIssue);
     setBusy(true); setError('');
     try {
-      await updatePassword(password);
-      navigation.navigate('Account');
+      if (codeReady) {
+        await resetPasswordWithCode(password);
+        navigation.navigate('Login');
+      } else {
+        await updatePassword(password);
+        navigation.navigate('Account');
+      }
     } catch (e) {
       setError(authErrorMessage(e, 'Không thể đổi mật khẩu.'));
     } finally {
@@ -521,7 +527,7 @@ export function ResetPasswordScreen({ navigation }: any) {
     );
   }
 
-  if (!session) {
+  if (!session && !codeReady) {
     return (
       <Page title="Mật khẩu mới" navigation={navigation} maxWidth={560}>
         <Heading title="Liên kết đã hết hạn." subtitle="Liên kết đặt lại mật khẩu chỉ dùng được một lần và có thời hạn." />

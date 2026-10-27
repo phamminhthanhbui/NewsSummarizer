@@ -9,9 +9,11 @@ import {
   getSession,
   googleSignInAvailable,
   onAuthChange,
+  passwordResetReady,
   refreshSession,
   requestPasswordReset,
   resendVerification,
+  resetPasswordWithCode,
   signIn,
   signInWithApple,
   signInWithGoogle,
@@ -55,6 +57,8 @@ type AuthContextValue = {
   updatePassword: typeof updatePassword;
   deleteAccount: typeof deleteAccount;
   consumeAuthUrl: typeof consumeAuthUrl;
+  passwordResetReady: typeof passwordResetReady;
+  resetPasswordWithCode: typeof resetPasswordWithCode;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -159,6 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signIn, signInWithGoogle, signInWithApple, signUp, signOut,
     requestPasswordReset, resendVerification, updatePassword,
     deleteAccount, consumeAuthUrl,
+    passwordResetReady, resetPasswordWithCode,
   }), [loading, session, subscription, membershipLoading, subscriptionError, refreshSubscription]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

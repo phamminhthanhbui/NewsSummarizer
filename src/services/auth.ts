@@ -90,7 +90,18 @@ export async function deleteAccount() {
 }
 
 export async function consumeAuthUrl(url: string) {
-  return AUTH_PROVIDER === 'firebase' ? firebase.consumeAuthUrl(url) : supabase.consumeAuthUrl(url);
+  if (AUTH_PROVIDER === 'firebase') return firebase.consumeAuthUrl(url);
+  const result = await supabase.consumeAuthUrl(url);
+  return { ...result, verified: false };
+}
+
+export function passwordResetReady() {
+  return AUTH_PROVIDER === 'firebase' ? firebase.passwordResetReady() : false;
+}
+
+export async function resetPasswordWithCode(password: string) {
+  if (AUTH_PROVIDER !== 'firebase') throw new Error('auth/operation-not-allowed');
+  return firebase.resetPasswordWithCode(password);
 }
 
 export function displayName(user: AuthUser | SupabaseUser | null | undefined) {

@@ -189,8 +189,12 @@ Kiểm tra thủ công trên thiết bị:
 
 - Không tự đổi Supabase UID sang Firebase UID ngẫu nhiên: sẽ mất liên kết RevenueCat Plus.
 - Firebase/Google có quota, giới hạn email và chống lạm dụng.
-- Firebase password reset và xác minh email dùng trang do Firebase host; muốn deep-link
-  về app phải cấu hình thêm email action handler/deep links.
+- Firebase password reset và xác minh email dùng `actionCodeSettings` với
+  `handleCodeInApp: true` và deep link `newssummarizer://auth/callback` /
+  `newssummarizer://auth/reset` (native) hoặc origin của web app (web). App tự
+  đổi mã `oobCode` và báo thành công ngay trong app.
+- Trên Android, Firebase mở thẳng app khi đã đăng ký SHA-1 của bản build;
+  nếu chưa có SHA-1 thì người dùng phải bấm "Continue" trên trang Firebase.
 - `public/delete-account.html` hiện là luồng Supabase; cập nhật trước khi phát hành nếu
   chuyển hẳn sang Firebase.
 - Không đưa service-role key, Apple private key hay RevenueCat secret key vào app.

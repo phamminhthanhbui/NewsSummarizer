@@ -2,6 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { getApps, initializeApp } from 'firebase/app';
 import {
+  ActionCodeOperation,
+  applyActionCode,
+  checkActionCode,
+  confirmPasswordReset,
   createUserWithEmailAndPassword,
   deleteUser,
   getAuth,
@@ -18,6 +22,7 @@ import {
   signOut as firebaseSignOut,
   updatePassword as firebaseUpdatePassword,
   updateProfile,
+  type ActionCodeSettings,
   type Auth,
   type User,
 } from 'firebase/auth';
@@ -32,6 +37,27 @@ const config = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID?.trim() || '',
 };
 export const firebaseAuthConfigured = Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+
+const NATIVE_APP_ID = 'com.autoship.newssummarizer';
+const VERIFY_REDIRECT = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL?.trim() || 'newssummarizer://auth/callback';
+const RESET_REDIRECT = process.env.EXPO_PUBLIC_PASSWORD_RESET_URL?.trim() || 'newssummarizer://auth/reset';
+
+function actionUrl(kind: 'verify' | 'reset') {
+  const nativeUrl = kind === 'verify' ? VERIFY_REDIRECT : RESET_REDIRECT;
+  if (Platform.OS !== 'web') return nativeUrl;
+  if (typeof window !== 'undefined' && window.location?.origin) return `${window.location.origin}/`;
+  const fallback = /^https?:\/\/[^/]+/.exec(process.env.EXPO_PUBLIC_PRIVACY_URL?.trim() || '');
+  return fallback ? `${fallback[0]}/` : nativeUrl;
+}
+
+function actionCodeSettings(kind: 'verify' | 'reset'): ActionCodeSettings {
+  const settings: ActionCodeSettings = { url: actionUrl(kind), handleCodeInApp: true };
+  if (Platform.OS === 'android') {
+    settings.android = { packageName: NATIVE_APP_ID, installApp: true };
+  }
+  if (Platform.OS === 'ios') settings.iOS = { bundleId: NATIVE_APP_ID };
+  return settings;
+}
 
 // Web Google sign-in runs through Firebase's popup. Native Google uses the
 // dedicated Google Sign-In SDK and exchanges its ID token with Firebase.
@@ -125,7 +151,7 @@ export async function signUp(email: string, password: string, name: string) {
   const credential = await createUserWithEmailAndPassword(auth, normalizeEmail(email), password);
   try {
     if (name.trim()) await updateProfile(credential.user, { displayName: name.trim() });
-    await sendEmailVerification(credential.user);
+    await sendEmailVerification(credential.user, actionCodeSettings('verify'));
   } finally {
     // Keep accounts pending until the user confirms their address.
     await firebaseSignOut(auth);
@@ -149,7 +175,7 @@ export async function resendVerification(email: string, password: string) {
   const credential = await signInWithEmailAndPassword(auth, normalizeEmail(email), password);
   try {
     if (credential.user.emailVerified) throw new Error('auth/email-already-verified');
-    await sendEmailVerification(credential.user);
+    await sendEmailVerification(credential.user, actionCodeSettings('verify'));
   } finally {
     await firebaseSignOut(auth);
   }
@@ -161,8 +187,7 @@ export async function signOut() {
 }
 
 export async function requestPasswordReset(email: string) {
-  // Firebase's built-in reset flow opens its secure hosted reset page.
-  await sendPasswordResetEmail(client(), normalizeEmail(email));
+  await sendPasswordResetEmail(client(), normalizeEmail(email), actionCodeSettings('reset'));
 }
 
 export async function updatePassword(password: string) {
@@ -242,7 +267,47 @@ export async function signInWithApple() {
   throw new Error('auth/social-not-configured');
 }
 
-// Verification/reset emails use Firebase's hosted action pages, not Supabase deep links.
-export async function consumeAuthUrl(_url: string) {
-  return { handled: false, recovery: false };
+let pendingPasswordResetCode: string | null = null;
+
+function oobCodeFrom(url: string): string | null {
+  const match = /[?&#](?:oobCode|oob_code)=([^&#]+)/.exec(url);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+export function passwordResetReady() {
+  return Boolean(pendingPasswordResetCode);
+}
+
+export async function resetPasswordWithCode(password: string) {
+  const code = pendingPasswordResetCode;
+  if (!code) throw new Error('auth/reset-link-expired');
+  await confirmPasswordReset(client(), code, password);
+  pendingPasswordResetCode = null;
+}
+
+export async function consumeAuthUrl(url: string) {
+  const idle = { handled: false, recovery: false, verified: false };
+  if (!firebaseAuthConfigured) return idle;
+  const code = oobCodeFrom(url);
+  if (!code) return idle;
+  try {
+    const auth = client();
+    const info = await checkActionCode(auth, code);
+    if (info.operation === ActionCodeOperation.VERIFY_EMAIL) {
+      await applyActionCode(auth, code);
+      return { handled: true, recovery: false, verified: true };
+    }
+    if (info.operation === ActionCodeOperation.PASSWORD_RESET) {
+      pendingPasswordResetCode = code;
+      return { handled: true, recovery: true, verified: false };
+    }
+  } catch {
+    return idle;
+  }
+  return idle;
 }

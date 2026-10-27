@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { useTheme, Sans, Layout, Radius } from './src/constants/theme';
-import { AlertProvider } from './src/components/AppAlert';
+import { AlertProvider, useAlert } from './src/components/AppAlert';
 import { AuthProvider, useAuth } from './src/providers/AuthProvider';
 import { displayName } from './src/services/auth';
 import * as NotificationsService from './src/services/notifications';
@@ -201,10 +201,12 @@ function Tabs() {
 function Root() {
   const C = useTheme();
   const { consumeAuthUrl } = useAuth();
+  const { showAlert } = useAlert();
 
   useEffect(() => {
     let alive = true;
     const looksLikeAuthUrl = (url: string) => /[?&#](code|access_token|error_description)=/.test(url)
+      || /[?&#]oobCode=/.test(url)
       || /auth=(callback|reset)/.test(url)
       || /\/auth\/(callback|reset)/.test(url);
     // Supabase PKCE links are single-use. Remove the code from the address bar
@@ -220,7 +222,17 @@ function Root() {
       if (!url) return;
       try {
         const result = await consumeAuthUrl(url);
-        if (!alive || !result.recovery) return;
+        if (!alive) return;
+        if (result.verified) {
+          showAlert({
+            type: 'success',
+            title: 'Đã xác minh email',
+            message: 'Địa chỉ email đã được xác minh. Bạn có thể đăng nhập bằng email và mật khẩu vừa đặt.',
+          });
+          if (ref.isReady()) ref.navigate('Login');
+          return;
+        }
+        if (!result.recovery) return;
         const openReset = () => {
           if (!alive) return;
           if (ref.isReady()) ref.navigate('ResetPassword');
@@ -233,7 +245,7 @@ function Root() {
     void Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', ({ url }) => { void handle(url); });
     return () => { alive = false; sub.remove(); };
-  }, [consumeAuthUrl]);
+  }, [consumeAuthUrl, showAlert]);
   return (
     <>
       <StatusBar style={C.bg === '#0D1420' ? 'light' : 'dark'} />
