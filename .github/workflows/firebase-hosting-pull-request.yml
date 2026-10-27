@@ -28,7 +28,7 @@ jobs:
           EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '448365047445'
           EXPO_PUBLIC_FIREBASE_APP_ID: '1:448365047445:web:8c06154e3124d0dfd5f59c'
           EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID: G-CEK8LX36DR
-          EXPO_PUBLIC_SUPPORT_EMAIL: phamminhthanhbui@gmail.com
+          EXPO_PUBLIC_SUPPORT_EMAIL: ltvphuoctien@gmail.com
           EXPO_PUBLIC_SUPABASE_URL: https://odmszifdfqucfenbaigi.supabase.co
           EXPO_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_zACUiHCzY5zSacVmnNftNQ_VKUWuw2K
           EXPO_PUBLIC_PROXY_URL: ${{ vars.EXPO_PUBLIC_PROXY_URL }}
