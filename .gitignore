@@ -62,5 +62,10 @@ server/.tts-cache/
 .firebase/
 firebase-debug.log
 
+# firebase agent skills installed by firebase-tools
+.agents/
+.claude/skills/
+skills-lock.json
+
 # Kilo agent local state
 .kilo/
